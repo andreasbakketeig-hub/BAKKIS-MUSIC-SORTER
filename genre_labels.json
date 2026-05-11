@@ -1,0 +1,24 @@
+{
+  "labels": [
+    "House",
+    "Tech House",
+    "Deep House",
+    "Minimal",
+    "Afro House",
+    "Melodic",
+    "Techno",
+    "Garage",
+    "Other"
+  ],
+  "colors": [
+    "#00D6B4",
+    "#18A0FB",
+    "#7C5CFF",
+    "#8A8F98",
+    "#FF7A1A",
+    "#D65CFF",
+    "#FF2D55",
+    "#FFD400",
+    "#2A2F36"
+  ]
+}

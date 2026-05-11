@@ -1,0 +1,2 @@
+# Install only on the machine that builds the .app (not required for end users).
+pyinstaller>=6.3.0
