@@ -603,6 +603,9 @@ class App:
         self._is_playing = False
         self._audio_offset_in_source = 0.0
         self._play_started_monotonic = 0.0
+        self._mpv_clock_anchor_pos = 0.0
+        self._mpv_clock_anchor_mono = 0.0
+        self._mpv_progress_sync_counter = 0
 
         self._mpv_proc: Optional[subprocess.Popen] = None
         self._mpv_ipc_sock: Optional[socket.socket] = None
@@ -610,13 +613,14 @@ class App:
         self._mpv_ipc_lock = threading.Lock()
         self._mpv_reader_thread: Optional[threading.Thread] = None
         self._mpv_reader_stop = threading.Event()
+        self._mpv_spawn_lock = threading.Lock()
         self._mpv_reply_lock = threading.Lock()
         self._mpv_reply_wait: dict[int, threading.Event] = {}
         self._mpv_reply_payload: dict[int, dict] = {}
         self._mpv_request_id = itertools.count(1)
         self._mpv_loaded_audio_path: Optional[str] = None
         self._mpv_cached_time_pos = 0.0
-        self._mpv_playout_handled = False
+        self._playout_handled = False
 
         self._tiles_enabled = False
         self._jump_buttons: list[tk.Label] = []
@@ -743,51 +747,58 @@ class App:
             except tk.TclError:
                 pass
             return
-        if self._mpv_proc is not None and self._mpv_proc.poll() is None:
-            return
-        if self._mpv_proc is not None and self._mpv_proc.poll() is not None:
-            self._mpv_proc = None
-        self._mpv_sock_path = os.path.join(tempfile.gettempdir(), f"bakkis_mpv_{os.getpid()}.sock")
-        try:
-            if os.path.exists(self._mpv_sock_path):
-                os.unlink(self._mpv_sock_path)
-        except OSError:
-            pass
-        try:
-            self._mpv_proc = subprocess.Popen(
-                [
-                    exe,
-                    "--idle=yes",
-                    "--force-window=no",
-                    "--no-video",
-                    "--really-quiet",
-                    "--no-terminal",
-                    "--no-config",
-                    f"--input-ipc-server={self._mpv_sock_path}",
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as e:
-            self._perf_log(f"mpv_start_failed: {e}")
+        with self._mpv_spawn_lock:
+            if self._mpv_proc is not None and self._mpv_proc.poll() is None:
+                return
+            if self._mpv_proc is not None and self._mpv_proc.poll() is not None:
+                self._mpv_proc = None
+            # Predictable path under /tmp; unique per process so two app instances never share one socket.
+            self._mpv_sock_path = f"/tmp/bakkis_mpv_{os.getpid()}.sock"
             try:
-                self.lbl_seek_hint.configure(
-                    text="mpv is required for playback. Install with: brew install mpv",
-                )
-            except tk.TclError:
+                if os.path.exists(self._mpv_sock_path):
+                    os.unlink(self._mpv_sock_path)
+            except OSError:
                 pass
-            return
+            try:
+                self._mpv_proc = subprocess.Popen(
+                    [
+                        exe,
+                        "--idle=yes",
+                        "--force-window=no",
+                        "--no-video",
+                        "--really-quiet",
+                        "--no-terminal",
+                        "--no-config",
+                        # Low-latency local playback (single persistent process; all control via IPC).
+                        "--cache=no",
+                        "--demuxer-max-bytes=4MiB",
+                        "--audio-buffer=0.1",
+                        f"--input-ipc-server={self._mpv_sock_path}",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as e:
+                self._perf_log(f"mpv_start_failed: {e}")
+                try:
+                    self.lbl_seek_hint.configure(
+                        text="mpv is required for playback. Install with: brew install mpv",
+                    )
+                except tk.TclError:
+                    pass
+                return
 
-        self._mpv_reader_stop.clear()
-        self._mpv_reader_thread = threading.Thread(target=self._mpv_connect_and_read_loop, daemon=True)
-        self._mpv_reader_thread.start()
+            self._mpv_reader_stop.clear()
+            self._mpv_reader_thread = threading.Thread(target=self._mpv_connect_and_read_loop, daemon=True)
+            self._mpv_reader_thread.start()
 
     def _mpv_connect_and_read_loop(self) -> None:
         sock_path = self._mpv_sock_path
         if sock_path is None:
             return
         deadline = time.monotonic() + 8.0
+        n_try = 0
         while time.monotonic() < deadline and not self._mpv_reader_stop.is_set():
             try:
                 if os.path.exists(sock_path):
@@ -797,7 +808,8 @@ class App:
                         self._mpv_ipc_sock = s
                     break
             except OSError:
-                time.sleep(0.04)
+                n_try += 1
+                time.sleep(0.012 if n_try < 25 else 0.04)
         else:
             self._perf_log("mpv_ipc_connect_failed")
             return
@@ -880,15 +892,15 @@ class App:
         with self._mpv_reply_lock:
             return self._mpv_reply_payload.pop(rid, None)
 
-    def _mpv_command_ok(self, cmd: list) -> bool:
-        rep = self._mpv_request(cmd)
+    def _mpv_command_ok(self, cmd: list, *, timeout: float = 1.25) -> bool:
+        rep = self._mpv_request(cmd, timeout=timeout)
         if rep is None:
             return False
         err = rep.get("error")
         return err in (None, "success")
 
-    def _mpv_get_property(self, name: str) -> Optional[object]:
-        rep = self._mpv_request(["get_property", name])
+    def _mpv_get_property(self, name: str, *, timeout: float = 1.25) -> Optional[object]:
+        rep = self._mpv_request(["get_property", name], timeout=timeout)
         if rep is None:
             return None
         if rep.get("error") not in (None, "success"):
@@ -896,7 +908,7 @@ class App:
         return rep.get("data")
 
     def _mpv_get_time_pos(self) -> Optional[float]:
-        v = self._mpv_get_property("time-pos")
+        v = self._mpv_get_property("time-pos", timeout=0.45)
         if v is None:
             return None
         try:
@@ -904,14 +916,23 @@ class App:
         except (TypeError, ValueError):
             return None
 
+    def _mpv_set_playback_clock_anchor(self, pos_sec: float) -> None:
+        """Monotonic anchor so the UI can advance time without polling mpv every tick."""
+        self._mpv_clock_anchor_pos = max(0.0, pos_sec)
+        self._mpv_clock_anchor_mono = time.monotonic()
+        self._mpv_cached_time_pos = self._mpv_clock_anchor_pos
+
     def _mpv_set_pause(self, paused: bool) -> bool:
-        return self._mpv_command_ok(["set_property", "pause", paused])
+        return self._mpv_command_ok(["set_property", "pause", paused], timeout=0.35)
 
     def _mpv_seek_absolute(self, sec: float) -> bool:
-        return self._mpv_command_ok(["seek", sec, "absolute"])
+        t0 = time.perf_counter()
+        ok = self._mpv_command_ok(["seek", sec, "absolute"], timeout=0.35)
+        self._perf_log(f"mpv_jump_seek_ipc_ms={(time.perf_counter() - t0) * 1000.0:.2f} target={sec:.3f}s ok={ok}")
+        return ok
 
     def _mpv_stop_media(self) -> None:
-        self._mpv_command_ok(["stop"])
+        self._mpv_command_ok(["stop"], timeout=0.35)
         self._mpv_loaded_audio_path = None
 
     def _on_mpv_end_file_event(self, reason: str, _error: object) -> None:
@@ -924,7 +945,7 @@ class App:
         self._set_play_button_text("Play")
         end_pos = self._duration_sec if self._duration_sec > 0 else self._audio_offset_in_source
         self._audio_offset_in_source = end_pos
-        self._mpv_cached_time_pos = end_pos
+        self._mpv_set_playback_clock_anchor(end_pos)
         self._set_elapsed_seconds(end_pos)
         self._draw_progress_bar(end_pos)
         if (
@@ -970,7 +991,7 @@ class App:
 
     def _mark_playback_started(self, source_offset_sec: float) -> None:
         self._audio_offset_in_source = source_offset_sec
-        self._mpv_cached_time_pos = source_offset_sec
+        self._mpv_set_playback_clock_anchor(source_offset_sec)
         self._play_started_monotonic = time.monotonic()
         self._is_playing = True
         self._set_play_button_text("Pause")
@@ -3255,17 +3276,20 @@ class App:
 
     def _current_position_in_source(self) -> float:
         if self._is_playing:
-            return self._mpv_cached_time_pos
+            est = self._mpv_clock_anchor_pos + (time.monotonic() - self._mpv_clock_anchor_mono)
+            if self._duration_sec > 0:
+                return min(self._duration_sec, max(0.0, est))
+            return max(0.0, est)
         return self._audio_offset_in_source
 
     def _stop_playback(self) -> None:
         if _which_mpv() and self._mpv_ipc_sock is not None:
-            self._mpv_set_pause(True)
             self._mpv_stop_media()
         self._cleanup_temp_audio()
         self._is_playing = False
         self._audio_offset_in_source = 0.0
         self._mpv_cached_time_pos = 0.0
+        self._mpv_set_playback_clock_anchor(0.0)
         self._set_play_button_text("Play")
 
     def _skip_track_after_playback_error(self, detail: str) -> None:
@@ -3302,11 +3326,16 @@ class App:
         opts = f"start={pos_sec:.6f}"
         if start_paused:
             opts += ",pause=yes"
-        ok = self._mpv_command_ok(["loadfile", str(path), "replace", opts])
+        t0 = time.perf_counter()
+        ok = self._mpv_command_ok(["loadfile", str(path), "replace", opts], timeout=3.5)
+        self._perf_log(
+            f"mpv_track_load_ipc_ms={(time.perf_counter() - t0) * 1000.0:.2f} "
+            f"file={path.name!r} start={pos_sec:.3f}s paused={start_paused} ok={ok}",
+        )
         if ok:
             self._mpv_loaded_audio_path = str(path.resolve())
             self._audio_offset_in_source = pos_sec
-            self._mpv_cached_time_pos = pos_sec
+            self._mpv_set_playback_clock_anchor(pos_sec)
             self._playout_handled = False
             if start_paused:
                 self._is_playing = False
@@ -3332,7 +3361,7 @@ class App:
                 self._mpv_play_retry_count += 1
                 if self._mpv_proc is None:
                     self._mpv_start_idle()
-                self.root.after(120, lambda p=path, s=pos_sec: self._play_from_position(p, s))
+                self.root.after(50, lambda p=path, s=pos_sec: self._play_from_position(p, s))
             else:
                 self._perf_log("mpv_ipc_unavailable_giving_up")
                 self._mpv_play_retry_count = 0
@@ -3398,6 +3427,7 @@ class App:
             return
 
         self._playout_handled = False
+        self._mpv_progress_sync_counter = 0
         t_load0 = time.perf_counter()
         self.lbl_track.configure(text=f"Track {self._display_index} / {self._session_total}")
         src_line = ""
@@ -3453,7 +3483,7 @@ class App:
             self._set_buttons_enabled(True)
 
         if autoplay:
-            self._autoplay_after_id = self.root.after(12, self._run_scheduled_autoplay)
+            self._autoplay_after_id = self.root.after(8, self._run_scheduled_autoplay)
 
         self._refresh_all_widget_chrome()
 
@@ -3490,7 +3520,7 @@ class App:
                 if self._duration_sec > 0:
                     pos = min(pos, self._duration_sec)
                 self._audio_offset_in_source = pos
-                self._mpv_cached_time_pos = pos
+                self._mpv_set_playback_clock_anchor(pos)
             else:
                 pos = self._audio_offset_in_source
             self._mpv_set_pause(True)
@@ -3515,9 +3545,6 @@ class App:
             self._mpv_seek_absolute(pos)
             self._mpv_set_pause(False)
             self._mark_playback_started(pos)
-            tp2 = self._mpv_get_time_pos()
-            if tp2 is not None:
-                self._mpv_cached_time_pos = tp2
             self._draw_progress_bar(self._current_position_in_source())
             return
         self._play_from_position(path, pos)
@@ -3559,23 +3586,17 @@ class App:
         )
 
         if same_file:
-            t_j = time.perf_counter()
             self._mpv_seek_absolute(sec)
             self._audio_offset_in_source = sec
-            self._mpv_cached_time_pos = sec
             self._set_elapsed_seconds(sec)
             if should_resume:
                 self._mpv_set_pause(False)
-                self._is_playing = True
-                self._set_play_button_text("Pause")
+                self._mark_playback_started(sec)
             else:
                 self._mpv_set_pause(True)
                 self._is_playing = False
+                self._mpv_set_playback_clock_anchor(sec)
                 self._set_play_button_text("Play")
-            self._perf_log(
-                f"jump_seek: target={sec:.2f}s was_playing={was_playing} "
-                f"dispatch_ms={(time.perf_counter() - t_j) * 1000.0:.2f}",
-            )
         else:
             self._audio_offset_in_source = sec
             self._set_elapsed_seconds(sec)
@@ -3673,10 +3694,14 @@ class App:
             return
 
         if self._is_playing and self._mpv_ipc_sock is not None:
-            tp = self._mpv_get_time_pos()
-            if tp is not None:
-                self._mpv_cached_time_pos = tp
-                self._audio_offset_in_source = tp
+            self._mpv_progress_sync_counter += 1
+            est = self._mpv_clock_anchor_pos + (time.monotonic() - self._mpv_clock_anchor_mono)
+            near_end = self._duration_sec > 0 and est >= self._duration_sec - 1.25
+            if (self._mpv_progress_sync_counter % 5 == 0) or near_end:
+                tp = self._mpv_get_time_pos()
+                if tp is not None:
+                    self._mpv_set_playback_clock_anchor(tp)
+                    self._audio_offset_in_source = tp
 
         pos = self._current_position_in_source()
         if self._duration_sec > 0:
