@@ -922,13 +922,17 @@ class App:
         self._mpv_clock_anchor_mono = time.monotonic()
         self._mpv_cached_time_pos = self._mpv_clock_anchor_pos
 
-    def _mpv_set_pause(self, paused: bool) -> bool:
-        return self._mpv_command_ok(["set_property", "pause", paused], timeout=0.35)
+    def _mpv_set_pause(self, paused: bool, *, timeout: float = 0.35) -> bool:
+        return self._mpv_command_ok(["set_property", "pause", paused], timeout=timeout)
 
-    def _mpv_seek_absolute(self, sec: float) -> bool:
+    def _mpv_seek_absolute(self, sec: float, *, timeout: float = 0.35, perf_log: bool = True) -> bool:
         t0 = time.perf_counter()
-        ok = self._mpv_command_ok(["seek", sec, "absolute"], timeout=0.35)
-        self._perf_log(f"mpv_jump_seek_ipc_ms={(time.perf_counter() - t0) * 1000.0:.2f} target={sec:.3f}s ok={ok}")
+        ok = self._mpv_command_ok(["seek", sec, "absolute"], timeout=timeout)
+        if perf_log:
+            self._perf_log(
+                f"mpv_jump_seek_ipc_ms={(time.perf_counter() - t0) * 1000.0:.2f} "
+                f"target={sec:.3f}s ok={ok} tmo={timeout}",
+            )
         return ok
 
     def _mpv_stop_media(self) -> None:
@@ -3323,17 +3327,48 @@ class App:
         pos_sec = max(0.0, pos_sec)
         if self._duration_sec > 0:
             pos_sec = min(pos_sec, max(0.0, self._duration_sec - 0.05))
-        opts = f"start={pos_sec:.6f}"
-        if start_paused:
-            opts += ",pause=yes"
+        # JSON IPC loadfile rejects the legacy 4th-arg "start=...,pause=..." string ("invalid parameter"
+        # on mpv 0.41+). Load, poll until time-pos exists, seek, then pause if requested.
         t0 = time.perf_counter()
-        ok = self._mpv_command_ok(["loadfile", str(path), "replace", opts], timeout=3.5)
+        file_key = str(path.resolve())
+        ok = self._mpv_command_ok(["loadfile", file_key, "replace"], timeout=3.5)
+        if ok and pos_sec > 1e-4:
+            # Decoder must accept seek; right after loadfile, mpv may still be busy (events burst),
+            # so short IPC timeouts here falsely fail while playback still starts — then we warn/skip.
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if self._mpv_get_property("time-pos", timeout=0.15) is not None:
+                    break
+                time.sleep(0.02)
+            else:
+                self._perf_log("mpv_loadfile_decoder_ready_timeout")
+                ok = False
+            if ok:
+                seek_ok = False
+                for attempt in range(1, 4):
+                    seek_ok = self._mpv_seek_absolute(
+                        pos_sec,
+                        timeout=2.5,
+                        perf_log=(attempt == 1),
+                    )
+                    if seek_ok:
+                        break
+                    time.sleep(0.05 * attempt)
+                ok = seek_ok
+        if ok and start_paused:
+            pause_ok = False
+            for attempt in range(1, 4):
+                pause_ok = self._mpv_set_pause(True, timeout=1.25)
+                if pause_ok:
+                    break
+                time.sleep(0.05 * attempt)
+            ok = pause_ok
         self._perf_log(
             f"mpv_track_load_ipc_ms={(time.perf_counter() - t0) * 1000.0:.2f} "
             f"file={path.name!r} start={pos_sec:.3f}s paused={start_paused} ok={ok}",
         )
         if ok:
-            self._mpv_loaded_audio_path = str(path.resolve())
+            self._mpv_loaded_audio_path = file_key
             self._audio_offset_in_source = pos_sec
             self._mpv_set_playback_clock_anchor(pos_sec)
             self._playout_handled = False
