@@ -1,0 +1,11 @@
+{
+  "default_folder_path": "/Users/andreasbakketeig/Desktop/MUSIC SORTER TEST",
+  "auto_load_default_folder": true,
+  "playback_start_seconds": 30.0,
+  "default_mode_on_startup": "cleanup",
+  "track_order_mode": "random",
+  "track_order": "random",
+  "include_subfolders": true,
+  "show_help_guide_on_startup": true,
+  "show_queue_panel_on_startup": false
+}
