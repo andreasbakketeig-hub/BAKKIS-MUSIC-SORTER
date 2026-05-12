@@ -37,6 +37,8 @@ _DEFAULT_WIN_W = 1180
 _DEFAULT_WIN_H = 1300
 _WIN_MIN_W = 1000
 _WIN_MIN_H = 820
+# Horizontal reserve when queue sidebar is visible (panel width + outer padding); avoids clip vs. wide shortcut guide.
+_QUEUE_PANEL_WIDTH_RESERVE = 268
 
 # Lowercase extensions including leading dot — single source of truth for scan / validation / playback checks.
 SUPPORTED_AUDIO_FORMATS = frozenset(
@@ -636,6 +638,14 @@ class App:
         self._shortcut_panel_visible = True
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
+        self._body: Optional[tk.Frame] = None
+        self._main_column: Optional[tk.Frame] = None
+        self._queue_sidebar_outer: Optional[tk.Frame] = None
+        self._lbl_queue_now: Optional[tk.Label] = None
+        self._lbl_queue_up: list[tk.Label] = []
+        self._lbl_queue_recent: list[tk.Label] = []
+        self._queue_panel_visible = False
+        self.btn_toggle_queue: Optional[tk.Button] = None
         self._footer_logo_photo: Optional[object] = None
         self._load_folder_ring: Optional[tk.Frame] = None
         self._flash_after_ids: dict[int, str] = {}
@@ -688,7 +698,10 @@ class App:
             rw = int(self.root.winfo_width())
         except tk.TclError:
             return
-        inner = max(420, rw - 80)
+        sidebar_reserve = (
+            _QUEUE_PANEL_WIDTH_RESERVE if getattr(self, "_queue_panel_visible", False) else 0
+        )
+        inner = max(420, rw - 80 - sidebar_reserve)
         try:
             self.lbl_title.configure(wraplength=inner)
             self.lbl_path.configure(wraplength=inner)
@@ -915,6 +928,23 @@ class App:
             return float(v)
         except (TypeError, ValueError):
             return None
+
+    def _mpv_poll_until_decoder_ready(self, max_wait_sec: float = 25.0) -> bool:
+        """True once mpv reports something loadable (time-pos or positive duration)."""
+        deadline = time.monotonic() + max_wait_sec
+        while time.monotonic() < deadline:
+            tp = self._mpv_get_property("time-pos", timeout=1.0)
+            if tp is not None:
+                return True
+            dur = self._mpv_get_property("duration", timeout=1.0)
+            if dur is not None:
+                try:
+                    if float(dur) > 0.0:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            time.sleep(0.04)
+        return False
 
     def _mpv_set_playback_clock_anchor(self, pos_sec: float) -> None:
         """Monotonic anchor so the UI can advance time without polling mpv every tick."""
@@ -2257,7 +2287,12 @@ class App:
         return "break"
 
     def _build_ui(self) -> None:
-        top = tk.Frame(self.root, bg=self.bg)
+        self._body = tk.Frame(self.root, bg=self.bg)
+        self._body.pack(fill="both", expand=True)
+        self._main_column = tk.Frame(self._body, bg=self.bg)
+        self._main_column.pack(side="left", fill="both", expand=True)
+
+        top = tk.Frame(self._main_column, bg=self.bg)
         top.pack(fill="x", padx=24, pady=(18, 10))
         # Equal side columns keep the title in the true horizontal center while resizing.
         top.columnconfigure(0, weight=1, uniform="top_hdr")
@@ -2369,6 +2404,17 @@ class App:
 
         self._apply_mode_switch_chrome()
 
+        self.btn_toggle_queue = tk.Button(
+            right_stack,
+            text="Show Queue",
+            command=self._toggle_queue_panel_visibility,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(self.btn_toggle_queue)
+        self.btn_toggle_queue.pack(anchor="e", pady=(10, 0))
+
         self.lbl_session_stats = tk.Label(
             right_stack,
             text="",
@@ -2381,7 +2427,7 @@ class App:
         )
         self.lbl_session_stats.pack(anchor="e", pady=(8, 0), fill="x")
 
-        status_above_progress = tk.Frame(self.root, bg=self.bg)
+        status_above_progress = tk.Frame(self._main_column, bg=self.bg)
         status_above_progress.pack(fill="x", padx=24, pady=(2, 6))
         self.lbl_mode_header = tk.Label(
             status_above_progress,
@@ -2405,7 +2451,7 @@ class App:
         )
         self.lbl_stats.pack(fill="x", pady=(4, 0))
 
-        progress_row = tk.Frame(self.root, bg=self.bg)
+        progress_row = tk.Frame(self._main_column, bg=self.bg)
         progress_row.pack(fill="x", padx=24, pady=(0, 6))
 
         self.lbl_elapsed = self._readonly_time_label(
@@ -2439,7 +2485,7 @@ class App:
         self.lbl_total.pack(side="left", padx=(12, 0))
 
         self.lbl_playback_start = self._readonly_time_label(
-            self.root,
+            self._main_column,
             text="Playback start: 0:00",
             font=("Helvetica", 12, "bold"),
             width=None,
@@ -2450,7 +2496,7 @@ class App:
         self.root.after_idle(self._raise_time_text_above_scrubber)
 
         self.lbl_title = tk.Label(
-            self.root,
+            self._main_column,
             text="Load a folder to begin",
             bg=self.bg,
             fg=self.fg,
@@ -2462,7 +2508,7 @@ class App:
         self.lbl_title.pack(fill="x", pady=(0, 4))
 
         self.lbl_track = self._readonly_time_label(
-            self.root,
+            self._main_column,
             text="",
             font=("Helvetica", 12, "bold"),
             width=None,
@@ -2471,7 +2517,7 @@ class App:
         self.lbl_track.pack(fill="x", pady=(0, 2))
 
         self.lbl_source_folder = tk.Label(
-            self.root,
+            self._main_column,
             text="",
             bg=self.bg,
             fg=self.muted,
@@ -2483,7 +2529,7 @@ class App:
         self.lbl_source_folder.pack(fill="x", pady=(0, 2))
 
         self.lbl_path = tk.Label(
-            self.root,
+            self._main_column,
             text="",
             bg=self.bg,
             fg=self.muted,
@@ -2493,7 +2539,7 @@ class App:
         )
         self.lbl_path.pack(fill="x", padx=24, pady=(0, 8))
 
-        jump = tk.Frame(self.root, bg=self.bg)
+        jump = tk.Frame(self._main_column, bg=self.bg)
         jump.pack(fill="x", padx=24, pady=(0, 6))
         jl = tk.Label(jump, text="Jump to", bg=self.bg, fg=self.muted, font=("Helvetica", 10, "bold"))
         jl.pack(anchor="w", pady=(0, 6))
@@ -2569,7 +2615,7 @@ class App:
         )
         self.lbl_seek_hint.pack(anchor="w", pady=(8, 0))
 
-        transport = tk.Frame(self.root, bg=self.bg)
+        transport = tk.Frame(self._main_column, bg=self.bg)
         transport.pack(fill="x", padx=24, pady=(8, 10))
         self.btn_play = self._dj_button(transport, "Play", self.toggle_play, kind="transport", width=12, padx=14, pady=10)
         self.btn_play.pack(side="left")
@@ -2584,7 +2630,7 @@ class App:
         )
         self.btn_replay.pack(side="left", padx=(10, 0))
 
-        self.cleanup_outer = tk.Frame(self.root, bg=self.bg)
+        self.cleanup_outer = tk.Frame(self._main_column, bg=self.bg)
         self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 10))
         self.cleanup_actions = tk.Frame(self.cleanup_outer, bg=self.bg)
         self.cleanup_actions.pack(fill="x")
@@ -2650,7 +2696,7 @@ class App:
         self.btn_skip = self._tile_skip_inner  # type: ignore[assignment]
         self.btn_undo = self._tile_undo_inner  # type: ignore[assignment]
 
-        self.genre_actions = tk.Frame(self.root, bg=self.bg)
+        self.genre_actions = tk.Frame(self._main_column, bg=self.bg)
         genre_row_top = tk.Frame(self.genre_actions, bg=self.bg)
         genre_row_top.pack(fill="x")
         genre_row_bot = tk.Frame(self.genre_actions, bg=self.bg)
@@ -2722,12 +2768,202 @@ class App:
         self.btn_edit_genres.pack(side="right")
         self.genre_actions.pack_forget()
 
-        self.shortcut_frame = self._build_shortcut_guide_panel(self.root)
-        self.footer_outer = tk.Frame(self.root, bg=self.bg)
+        self.shortcut_frame = self._build_shortcut_guide_panel(self._main_column)
+        self.footer_outer = tk.Frame(self._main_column, bg=self.bg)
         self.footer_outer.pack(fill="x", padx=0, pady=(0, 6))
         self._build_branding_footer(self.footer_outer)
         if self._shortcut_panel_visible:
             self.shortcut_frame.pack(fill="x", padx=24, pady=(12, 8), before=self.footer_outer)
+
+        self._build_queue_sidebar()
+
+    def _queue_ellipsis(self, text: str, max_chars: int = 36) -> str:
+        s = text.strip()
+        if len(s) <= max_chars:
+            return s
+        if max_chars <= 1:
+            return "…"
+        return s[: max_chars - 1].rstrip() + "…"
+
+    def _describe_undo_for_recent_panel(self, item: dict) -> str:
+        kind = item.get("kind")
+        if kind == "skip":
+            raw = item.get("path")
+            p = raw if isinstance(raw, Path) else Path(str(raw))
+            return f"↷ Skip · {self._queue_ellipsis(p.name)}"
+        if kind == "move":
+            raw = item.get("from")
+            p = raw if isinstance(raw, Path) else Path(str(raw))
+            name = self._queue_ellipsis(p.name)
+            sb = item.get("session_bucket")
+            if sb == "keep":
+                return f"✓ Keep · {name}"
+            if sb == "archive":
+                return f"✕ Archive · {name}"
+            if sb == "favorites":
+                return f"★ Favorite · {name}"
+            if sb == "genre":
+                g = self._queue_ellipsis(p.parent.name if p.parent else "")
+                return f"{g} · {name}"
+            return name
+        return ""
+
+    def _refresh_queue_panel(self) -> None:
+        if self._lbl_queue_now is None:
+            return
+        try:
+            title = self.lbl_title.cget("text")
+        except tk.TclError:
+            title = ""
+        now_t = self._queue_ellipsis(title, 42) if title else "—"
+        try:
+            self._lbl_queue_now.configure(text=now_t)
+        except tk.TclError:
+            pass
+
+        q = self._queue
+        for i, lb in enumerate(self._lbl_queue_up):
+            try:
+                slot = i + 1
+                if slot < len(q):
+                    line = f"{i + 1}. {self._queue_ellipsis(q[slot].name)}"
+                    lb.configure(text=line, fg=self.fg)
+                else:
+                    lb.configure(text="", fg=self.fg)
+            except tk.TclError:
+                pass
+
+        chunk = self._undo_stack[-5:]
+        recent_lines = list(reversed(chunk))
+        for i, lb in enumerate(self._lbl_queue_recent):
+            try:
+                if i < len(recent_lines):
+                    lb.configure(text=self._describe_undo_for_recent_panel(recent_lines[i]), fg=self.muted)
+                else:
+                    lb.configure(text="", fg=self.muted)
+            except tk.TclError:
+                pass
+
+    def _apply_queue_panel_visibility(self, visible: bool) -> None:
+        self._queue_panel_visible = visible
+        outer = self._queue_sidebar_outer
+        mc = self._main_column
+        if outer is None or mc is None:
+            return
+        try:
+            if visible:
+                # Pack fixed-width sidebar before the expanding column so Tk never assigns it 0 width
+                # when the shortcut guide forces a large main minimum width.
+                mc.pack_forget()
+                outer.pack(side="right", fill="y", padx=(0, 16), pady=(18, 24))
+                mc.pack(side="left", fill="both", expand=True)
+                try:
+                    outer.lift(mc)
+                except tk.TclError:
+                    pass
+                if self.btn_toggle_queue is not None:
+                    self.btn_toggle_queue.configure(text="Hide Queue")
+                try:
+                    self.root.minsize(_WIN_MIN_W + _QUEUE_PANEL_WIDTH_RESERVE, _WIN_MIN_H)
+                except tk.TclError:
+                    pass
+            else:
+                outer.pack_forget()
+                if self.btn_toggle_queue is not None:
+                    self.btn_toggle_queue.configure(text="Show Queue")
+                try:
+                    self.root.minsize(_WIN_MIN_W, _WIN_MIN_H)
+                except tk.TclError:
+                    pass
+        except tk.TclError:
+            pass
+        self._refresh_queue_panel()
+        self._update_content_wraplengths()
+
+    def _toggle_queue_panel_visibility(self) -> None:
+        self._apply_queue_panel_visibility(not self._queue_panel_visible)
+
+    def _kbd_toggle_queue_panel(self, _e: object) -> Optional[str]:
+        if not self._shortcuts_active():
+            return None
+        self._toggle_queue_panel_visibility()
+        return "break"
+
+    def _build_queue_sidebar(self) -> None:
+        if self._body is None:
+            return
+        outer = tk.Frame(self._body, bg=self.bg, width=236)
+        outer.pack_propagate(False)
+        self._queue_sidebar_outer = outer
+
+        inner = tk.Frame(outer, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
+        inner.pack(fill="both", expand=True, padx=(0, 4), pady=(18, 24))
+
+        hdr_small = ("Helvetica", 8, "bold")
+        tk.Label(inner, text="QUEUE", bg=self.panel, fg=self.accent, font=("Helvetica", 10, "bold"), anchor="w").pack(
+            fill="x", padx=10, pady=(10, 8)
+        )
+
+        tk.Label(inner, text="NOW PLAYING", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+            fill="x", padx=10, pady=(0, 4)
+        )
+        now_box = tk.Frame(inner, bg=self.panel, highlightthickness=1, highlightbackground=self.accent)
+        now_box.pack(fill="x", padx=10, pady=(0, 10))
+        self._lbl_queue_now = tk.Label(
+            now_box,
+            text="—",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 10, "bold"),
+            anchor="w",
+            justify="left",
+            wraplength=198,
+        )
+        self._lbl_queue_now.pack(fill="x", padx=8, pady=8)
+
+        tk.Label(inner, text="UP NEXT", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+            fill="x", padx=10, pady=(0, 4)
+        )
+        up_wrap = tk.Frame(inner, bg=self.panel)
+        up_wrap.pack(fill="x", padx=10, pady=(0, 10))
+        self._lbl_queue_up.clear()
+        for _ in range(5):
+            lb = tk.Label(
+                up_wrap,
+                text="",
+                bg=self.panel,
+                fg=self.fg,
+                font=("Helvetica", 9),
+                anchor="w",
+                justify="left",
+                wraplength=198,
+            )
+            lb.pack(fill="x", pady=(0, 3))
+            self._lbl_queue_up.append(lb)
+
+        tk.Frame(inner, height=1, bg=self.panel_border).pack(fill="x", padx=10, pady=(4, 8))
+
+        tk.Label(inner, text="RECENTLY SORTED", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+            fill="x", padx=10, pady=(0, 4)
+        )
+        rec_wrap = tk.Frame(inner, bg=self.panel)
+        rec_wrap.pack(fill="x", padx=10, pady=(0, 12))
+        self._lbl_queue_recent.clear()
+        for _ in range(5):
+            lb = tk.Label(
+                rec_wrap,
+                text="",
+                bg=self.panel,
+                fg=self.muted,
+                font=("Helvetica", 9),
+                anchor="w",
+                justify="left",
+                wraplength=198,
+            )
+            lb.pack(fill="x", pady=(0, 4))
+            self._lbl_queue_recent.append(lb)
+
+        self._refresh_queue_panel()
 
     def _build_shortcut_guide_panel(self, parent: tk.Misc) -> tk.Frame:
         outer = tk.Frame(parent, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
@@ -2756,6 +2992,7 @@ class App:
                     "Space  Play / Pause",
                     "↓  Replay from playback start",
                     "R  Replay active jump (preset / Outro / default start)",
+                    "Q  Show / hide queue panel",
                 ],
             ),
             (
@@ -3124,6 +3361,8 @@ class App:
         b("<KeyPress-D>", self._kbd_delta_plus_30("D"))
         b("<KeyPress-h>", self._on_help_key)
         b("<KeyPress-H>", self._on_help_key)
+        b("<KeyPress-q>", self._kbd_toggle_queue_panel)
+        b("<KeyPress-Q>", self._kbd_toggle_queue_panel)
         self.root.bind_all("<Command-f>", self._toggle_fullscreen)
         self.root.bind_all("<Command-F>", self._toggle_fullscreen)
         # Escape on main window only: leaves Toplevel dialogs so Cancel keeps default Escape behavior when focused there.
@@ -3333,28 +3572,22 @@ class App:
         file_key = str(path.resolve())
         ok = self._mpv_command_ok(["loadfile", file_key, "replace"], timeout=3.5)
         if ok and pos_sec > 1e-4:
-            # Decoder must accept seek; right after loadfile, mpv may still be busy (events burst),
-            # so short IPC timeouts here falsely fail while playback still starts — then we warn/skip.
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                if self._mpv_get_property("time-pos", timeout=0.15) is not None:
+            # After loadfile, seek only works once the demuxer is ready; slow disks / MP3 open can
+            # exceed a few seconds — do not fail on poll alone; outcome is seek success or not.
+            ready = self._mpv_poll_until_decoder_ready(25.0)
+            if not ready:
+                self._perf_log("mpv_loadfile_decoder_ready_slow")
+            seek_ok = False
+            for attempt in range(1, 6):
+                seek_ok = self._mpv_seek_absolute(
+                    pos_sec,
+                    timeout=2.5,
+                    perf_log=(attempt == 1),
+                )
+                if seek_ok:
                     break
-                time.sleep(0.02)
-            else:
-                self._perf_log("mpv_loadfile_decoder_ready_timeout")
-                ok = False
-            if ok:
-                seek_ok = False
-                for attempt in range(1, 4):
-                    seek_ok = self._mpv_seek_absolute(
-                        pos_sec,
-                        timeout=2.5,
-                        perf_log=(attempt == 1),
-                    )
-                    if seek_ok:
-                        break
-                    time.sleep(0.05 * attempt)
-                ok = seek_ok
+                time.sleep(0.08 * attempt)
+            ok = seek_ok
         if ok and start_paused:
             pause_ok = False
             for attempt in range(1, 4):
@@ -3412,6 +3645,26 @@ class App:
         pos_sec = max(0.0, pos_sec)
         if self._duration_sec > 0:
             pos_sec = min(pos_sec, max(0.0, self._duration_sec - 0.05))
+        cur_key = str(path.resolve())
+        if self._mpv_loaded_audio_path == cur_key and self._mpv_ipc_sock is not None:
+            # Replay / jump on the already-loaded file: seek only. Full loadfile+seek reload is slow
+            # and can hit decoder-ready timeouts on long starts (e.g. 2:00 on long tracks).
+            self._perf_log(f"mpv_reuse_loaded_seek_only pos={pos_sec:.3f}s")
+            seek_ok = False
+            for attempt in range(1, 6):
+                seek_ok = self._mpv_seek_absolute(
+                    pos_sec,
+                    timeout=2.5,
+                    perf_log=(attempt == 1),
+                )
+                if seek_ok:
+                    break
+                time.sleep(0.08 * attempt)
+            if seek_ok:
+                self._mpv_set_pause(False, timeout=1.25)
+                self._mark_playback_started(pos_sec)
+                return True
+            self._perf_log("mpv_reuse_seek_failed_fallback_loadfile")
         if not self._mpv_loadfile(path, pos_sec, start_paused=False):
             self._perf_log("mpv_loadfile_failed")
             self._skip_track_after_playback_error(
@@ -3451,6 +3704,7 @@ class App:
             self._set_buttons_enabled(False)
             self._refresh_stats()
             self._draw_progress_bar(0.0)
+            self._refresh_queue_panel()
             return
 
         if not path_has_supported_audio_format(path):
@@ -3521,6 +3775,7 @@ class App:
             self._autoplay_after_id = self.root.after(8, self._run_scheduled_autoplay)
 
         self._refresh_all_widget_chrome()
+        self._refresh_queue_panel()
 
     def _run_scheduled_autoplay(self) -> None:
         self._autoplay_after_id = None
