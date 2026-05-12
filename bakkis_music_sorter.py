@@ -27,7 +27,7 @@ from typing import Callable, Literal, Optional, Union
 import tkinter as tk
 
 ButtonKind = Literal["panel", "accent", "archive", "favorite", "transport"]
-JumpUiKey = Union[int, Literal["outro"]]
+JumpUiKey = Union[int, Literal["outro", "pb_start"]]
 SortingMode = Literal["swipe", "grid"]
 TrackOrder = Literal["random", "in_order"]
 from mutagen import File as MutagenFile
@@ -40,6 +40,11 @@ _WIN_MIN_W = 1200
 _WIN_MIN_H = 860
 # Shared horizontal inset for main-column blocks (header, progress, jump, transport, sort shells, footer).
 _CONTENT_GUTTER = 24
+# Fixed height for Swipe vs Grid swap zone — avoids vertical jump when switching modes (inner content fills).
+_ACTION_ZONE_FIXED_HEIGHT_PX = 392
+# Vertical rhythm between major blocks in the main column.
+_SECTION_GAP_Y_TIGHT = 4
+_SECTION_GAP_Y = 8
 # Sidebar reservations (queue/right · guide/left): used so main column wraplengths stay correct.
 _QUEUE_PANEL_WIDTH_RESERVE = 268
 _GUIDE_PANEL_WIDTH_RESERVE = 268
@@ -1151,6 +1156,9 @@ class App:
         self._apply_track_labels_from_preset_store()
         self._genre_title_labels: list[tk.Label] = []
         self._genre_tile_inners: list[tk.Frame] = []
+        self._grid_kaf_keep_inner: Optional[tk.Frame] = None
+        self._grid_kaf_archive_inner: Optional[tk.Frame] = None
+        self._grid_kaf_favorite_inner: Optional[tk.Frame] = None
         self.cleanup_actions: Optional[tk.Frame] = None
         self.cleanup_outer: Optional[tk.Frame] = None
         self.genre_actions: Optional[tk.Frame] = None
@@ -1158,6 +1166,10 @@ class App:
         self._tile_mode_genre_inner: Optional[tk.Frame] = None
         self._tile_order_random_inner: Optional[tk.Frame] = None
         self._tile_order_in_order_inner: Optional[tk.Frame] = None
+        self._tile_guide_inner: Optional[tk.Frame] = None
+        self._tile_settings_inner: Optional[tk.Frame] = None
+        self._tile_queue_inner: Optional[tk.Frame] = None
+        self._hidden_chrome_host: Optional[tk.Frame] = None
         self._swipe_skip_inner: Optional[tk.Frame] = None
         self._swipe_undo_inner: Optional[tk.Frame] = None
         self._grid_skip_inner: Optional[tk.Frame] = None
@@ -1211,6 +1223,7 @@ class App:
         self._jump_btn_outro: Optional[tk.Label] = None
         self._jump_btn_minus: Optional[tk.Label] = None
         self._jump_btn_plus: Optional[tk.Label] = None
+        self._jump_btn_pb_start: Optional[tk.Label] = None
         self._jump_mouse_error_lbl: Optional[tk.Label] = None
         self._tinder_kb_jump_error_digit: Optional[int] = None
         self._tinder_kb_jump_error_plus30: bool = False
@@ -1218,7 +1231,6 @@ class App:
         self._jump_highlight_key: JumpUiKey = 0
         self._shortcut_panel_visible = load_show_help_guide_on_startup()
         self._settings_top: Optional[tk.Toplevel] = None
-        self.btn_settings: Optional[tk.Button] = None
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
@@ -1236,10 +1248,8 @@ class App:
         self._lbl_queue_up: list[tk.Label] = []
         self._lbl_queue_recent: list[tk.Label] = []
         self._queue_panel_visible = False
-        self.btn_toggle_queue: Optional[tk.Button] = None
         self._guide_sidebar_outer: Optional[tk.Frame] = None
         self._guide_sidebar_inner: Optional[tk.Frame] = None
-        self.btn_toggle_guide: Optional[tk.Button] = None
         self._footer_logo_photo: Optional[object] = None
         self._load_folder_ring: Optional[tk.Frame] = None
         self.btn_load_default_folder: Optional[tk.Button] = None
@@ -1326,8 +1336,8 @@ class App:
     def _refresh_shortcut_guide_swipe_lines(self) -> None:
         lines = [
             f"{self._swipe_labels[0]} (→)",
-            f"{self._swipe_labels[1]} (←)",
-            f"{self._swipe_labels[2]} (↑)",
+            f"{self._swipe_labels[1]} (↑)",
+            f"{self._swipe_labels[2]} (←)",
             "Enter  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
@@ -1392,7 +1402,7 @@ class App:
         labels_e: list[tk.Entry] = []
         colors_e: list[tk.Entry] = []
         folders_e: list[tk.Entry] = []
-        row_titles = ("Right → keep", "Left ← archive", "Up ↑ favorites")
+        row_titles = ("Right → keep", "Up ↑ archive", "Left ← favorites")
         for i in range(3):
             row = tk.Frame(top, bg=self.bg)
             row.pack(fill="x", padx=14, pady=4)
@@ -2208,7 +2218,7 @@ class App:
         )
 
     def _mode_status_text(self, mode: SortingMode) -> str:
-        label = "TINDER MODE" if mode == "swipe" else "GENRE MODE"
+        label = "SWIPE MODE" if mode == "swipe" else "GRID MODE"
         return " ".join(label)
 
     def _mode_status_fg(self, mode: SortingMode) -> str:
@@ -2227,6 +2237,8 @@ class App:
 
     def _is_active_jump_label(self, lbl: tk.Label) -> bool:
         sel = self._jump_highlight_key
+        if lbl is self._jump_btn_pb_start and sel == "pb_start":
+            return True
         if lbl is self._jump_btn_outro and sel == "outro":
             return True
         for sec, btn in self._preset_jump_buttons.items():
@@ -2249,11 +2261,15 @@ class App:
         used_config_start = self._duration_sec > 0.0 and self._duration_sec >= want + 30.0
         if self._duration_sec >= 3.0 and abs(ds - outro_sec) <= 0.75:
             if used_config_start and abs(ds - want) <= 0.75:
-                self._jump_highlight_key = int(round(ds))
+                self._jump_highlight_key = "pb_start"
             else:
                 self._jump_highlight_key = "outro"
         else:
-            self._jump_highlight_key = int(round(ds))
+            if used_config_start and abs(ds - want) <= 0.75:
+                self._jump_highlight_key = "pb_start"
+            else:
+                self._jump_highlight_key = int(round(ds))
+        self._sync_pb_start_jump_button_label()
 
     def _apply_user_playback_start_change(self, new_sec: float) -> None:
         new_sec = float(new_sec)
@@ -2419,12 +2435,6 @@ class App:
             self._style_tk_button_load_inner(self.btn_load)
             if self.btn_load_default_folder is not None:
                 self._style_tk_button_transport_grey(self.btn_load_default_folder)
-            if self.btn_settings is not None:
-                self._style_tk_button_transport_grey(self.btn_settings)
-            if self.btn_toggle_queue is not None:
-                self._style_tk_button_transport_grey(self.btn_toggle_queue)
-            if self.btn_toggle_guide is not None:
-                self._style_tk_button_transport_grey(self.btn_toggle_guide)
         except tk.TclError:
             pass
         try:
@@ -2444,6 +2454,11 @@ class App:
                     continue
                 if b is self._jump_btn_minus or b is self._jump_btn_plus:
                     self._style_jump_label_idle(b)
+                elif b is self._jump_btn_pb_start:
+                    if sel == "pb_start":
+                        self._style_jump_label_active(b)
+                    else:
+                        self._style_jump_label_idle(b)
                 elif b is self._jump_btn_outro:
                     if sel == "outro":
                         self._style_jump_label_active(b)
@@ -2463,6 +2478,12 @@ class App:
             self._apply_mode_switch_chrome()
         except tk.TclError:
             pass
+        try:
+            for _hdr in (self._tile_guide_inner, self._tile_settings_inner, self._tile_queue_inner):
+                if _hdr is not None:
+                    self._restore_static_header_action_tile(_hdr)
+        except tk.TclError:
+            pass
 
     def _reapply_action_tiles(self) -> None:
         """Reassert Keep/Archive/Favorite + genre grid colors (Frames + Labels, not affected by *Button option_db)."""
@@ -2471,6 +2492,9 @@ class App:
             self._tile_keep_inner,
             self._tile_archive_inner,
             self._tile_favorite_inner,
+            self._grid_kaf_keep_inner,
+            self._grid_kaf_archive_inner,
+            self._grid_kaf_favorite_inner,
             *genre_inners,
         ):
             if inner is None:
@@ -2560,14 +2584,50 @@ class App:
     def jump_to_outro(self) -> None:
         self.jump_to(self._outro_jump_seconds(), jump_ui_key="outro")
 
+    def _jump_to_playback_start_slot(self) -> None:
+        if not self._tiles_enabled:
+            return
+        ds = float(self._desired_start_sec)
+        if self._absolute_jump_past_track_end(ds):
+            if self._jump_btn_pb_start is not None:
+                self._style_jump_label_error_hold(self._jump_btn_pb_start)
+            return
+        self.jump_to(ds, jump_ui_key="pb_start")
+
+    def _sync_pb_start_jump_button_label(self) -> None:
+        lb = self._jump_btn_pb_start
+        if lb is None:
+            return
+        part = str(self._playback_start_label)
+        base = f"START\n{part}"
+        lb._jump_base_text = base  # type: ignore[attr-defined]
+        lb._jump_time_only = part  # type: ignore[attr-defined]
+        if self._is_active_jump_label(lb):
+            return
+        idle_font = getattr(lb, "_jump_idle_font", ("Helvetica", 13, "bold"))
+        try:
+            lb.configure(text=base, font=idle_font)
+        except tk.TclError:
+            pass
+
     def _set_play_button_text(self, text: str) -> None:
-        """Sync play/pause glyph on the transport tile icon; re-chrome the app."""
+        """Sync play/pause glyph + title on the transport tile; re-chrome the app."""
+        is_pause = text.strip().lower().startswith("pause")
+        glyph = "❚❚" if is_pause else "▶"
+        title = "PAUSE" if is_pause else "PLAY"
         if self._transport_play_icon_label is not None:
-            glyph = "❚❚" if text.strip().lower().startswith("pause") else "▶"
             try:
                 self._transport_play_icon_label.configure(text=glyph)
             except tk.TclError:
                 pass
+        bp = getattr(self, "btn_play", None)
+        if bp is not None:
+            tl = getattr(bp, "_utility_title", None)
+            if isinstance(tl, tk.Label):
+                try:
+                    tl.configure(text=title)
+                except tk.TclError:
+                    pass
         self._refresh_all_widget_chrome()
 
     def _dj_button(
@@ -2830,13 +2890,14 @@ class App:
         self,
         parent: tk.Misc,
         icon: str,
+        title: str,
         shortcut: str,
         command: Callable[[], None],
         *,
         role: str,
         clickable_when_tiles_disabled: bool = False,
     ) -> tuple[tk.Frame, tk.Frame]:
-        """Two-line transport control: large icon + shortcut caption (not a tk.Button)."""
+        """Transport control: icon + title + shortcut (same information density as action tiles)."""
         outer = tk.Frame(parent, bg=self.bg, cursor="")
         outer._utility_transport_cell = True  # type: ignore[attr-defined]
         outer._utility_role = role  # type: ignore[attr-defined]
@@ -2860,7 +2921,18 @@ class App:
             text=icon,
             bg=self.skip_bg,
             fg=self.fg,
-            font=("Helvetica Neue", 24, "bold"),
+            font=("Helvetica Neue", 28),
+            anchor="center",
+            justify="center",
+            highlightthickness=0,
+            cursor="",
+        )
+        title_lab = tk.Label(
+            inner,
+            text=title.upper(),
+            bg=self.skip_bg,
+            fg=self.fg,
+            font=("Helvetica Neue", 12, "bold"),
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2871,23 +2943,23 @@ class App:
             text=sc_text,
             bg=self.skip_bg,
             fg=self.muted,
-            font=("Helvetica", 10, "bold"),
+            font=("Menlo", 10),
             anchor="center",
             justify="center",
             highlightthickness=0,
             cursor="",
         )
         outer._utility_icon = icon_lab  # type: ignore[attr-defined]
+        outer._utility_title = title_lab  # type: ignore[attr-defined]
         outer._utility_sub = sub  # type: ignore[attr-defined]
-
         inner.columnconfigure(0, weight=1)
         inner.rowconfigure(0, weight=1)
-        inner.rowconfigure(3, weight=1)
-        gap = _ACTION_TILE_ROW_GAP_PX
+        inner.rowconfigure(4, weight=1)
         icon_lab.grid(row=1, column=0, sticky="")
-        sub.grid(row=2, column=0, sticky="", pady=(gap, 0))
+        title_lab.grid(row=2, column=0, sticky="", pady=(5, 0))
+        sub.grid(row=3, column=0, sticky="", pady=(2, 0))
 
-        for w in (outer, inner, icon_lab, sub):
+        for w in (outer, inner, icon_lab, title_lab, sub):
             w.bind("<Button-1>", lambda e, o=outer: self._on_transport_utility_cell_press(o, e))
             w.bind("<Enter>", lambda _e, o=outer: self._on_transport_utility_cell_enter(o))
             w.bind("<Leave>", lambda _e, o=outer: self._on_transport_utility_cell_leave(o))
@@ -2916,16 +2988,35 @@ class App:
         if inner is None or bool(getattr(inner, "_utility_hovering", False)):
             return
         icon_lab = getattr(outer, "_utility_icon", None)
+        title_lab = getattr(outer, "_utility_title", None)
         sub = getattr(outer, "_utility_sub", None)
         if not isinstance(icon_lab, tk.Label) or not isinstance(sub, tk.Label):
             return
         inner._utility_hovering = True  # type: ignore[attr-defined]
-        hover_bg = _mix_hex_toward_white(self.skip_bg, _ACTION_TILE_HOVER_MIX)
         hb = self.action_tile_border_hover
         try:
+            base_inner_bg = str(inner.cget("bg"))
+        except tk.TclError:
+            base_inner_bg = self.skip_bg
+        hover_bg = _mix_hex_toward_white(base_inner_bg, _ACTION_TILE_HOVER_MIX)
+        try:
             inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor="hand2")
-            icon_lab.configure(bg=hover_bg, fg=self.fg, cursor="hand2")
-            sub.configure(bg=hover_bg, fg=self.muted, cursor="hand2")
+            icon_lab.configure(
+                bg=hover_bg,
+                fg=self.teal_on_fg if role == "play" else self.fg,
+                cursor="hand2",
+            )
+            if isinstance(title_lab, tk.Label):
+                title_lab.configure(
+                    bg=hover_bg,
+                    fg=self.teal_on_fg if role == "play" else self.fg,
+                    cursor="hand2",
+                )
+            sub.configure(
+                bg=hover_bg,
+                fg="#1A1A1A" if role == "play" else self.muted,
+                cursor="hand2",
+            )
             outer.configure(cursor="hand2")
         except tk.TclError:
             pass
@@ -2943,6 +3034,7 @@ class App:
     def _apply_transport_utility_cell_chrome(self, outer: tk.Frame) -> None:
         inner = getattr(outer, "_utility_inner", None)
         icon_lab = getattr(outer, "_utility_icon", None)
+        title_lab = getattr(outer, "_utility_title", None)
         sub = getattr(outer, "_utility_sub", None)
         if inner is None or not isinstance(icon_lab, tk.Label) or not isinstance(sub, tk.Label):
             return
@@ -2954,8 +3046,19 @@ class App:
             on = self._tiles_enabled
         inner._utility_hovering = False  # type: ignore[attr-defined]
         hlb = self.panel_border if on else self.trough
+        title_l = title_lab if isinstance(title_lab, tk.Label) else None
         if on:
-            bg_n = self.skip_bg
+            if role == "play":
+                bg_n = self.accent
+                fg_i = self.teal_on_fg
+                fg_t = self.teal_on_fg
+                fg_s = "#1A1A1A"
+                hlb = self.accent
+            else:
+                bg_n = self.skip_bg
+                fg_i = self.fg
+                fg_t = self.fg
+                fg_s = self.muted
             try:
                 inner.configure(
                     bg=bg_n,
@@ -2964,8 +3067,10 @@ class App:
                     highlightcolor=hlb,
                     cursor="hand2",
                 )
-                icon_lab.configure(bg=bg_n, fg=self.fg, cursor="hand2")
-                sub.configure(bg=bg_n, fg=self.muted, cursor="hand2")
+                icon_lab.configure(bg=bg_n, fg=fg_i, cursor="hand2")
+                if title_l is not None:
+                    title_l.configure(bg=bg_n, fg=fg_t, cursor="hand2")
+                sub.configure(bg=bg_n, fg=fg_s, cursor="hand2")
             except tk.TclError:
                 pass
         else:
@@ -2978,6 +3083,8 @@ class App:
                     cursor="",
                 )
                 icon_lab.configure(bg=self.trough, fg=self.disabled_fg, cursor="")
+                if title_l is not None:
+                    title_l.configure(bg=self.trough, fg=self.disabled_fg, cursor="")
                 sub.configure(bg=self.trough, fg=self.disabled_fg, cursor="")
             except tk.TclError:
                 pass
@@ -2996,6 +3103,7 @@ class App:
             return
         inner = getattr(outer, "_utility_inner", None)
         icon_lab = getattr(outer, "_utility_icon", None)
+        title_lab = getattr(outer, "_utility_title", None)
         sub = getattr(outer, "_utility_sub", None)
         if inner is None or not isinstance(icon_lab, tk.Label) or not isinstance(sub, tk.Label):
             return
@@ -3014,6 +3122,8 @@ class App:
         try:
             inner.configure(bg=self.accent_active, highlightbackground=self.accent_active, highlightcolor=self.accent_active)
             icon_lab.configure(bg=self.accent_active, fg=self.fg)
+            if isinstance(title_lab, tk.Label):
+                title_lab.configure(bg=self.accent_active, fg=self.fg)
             sub.configure(bg=self.accent_active, fg=self.fg)
         except tk.TclError:
             pass
@@ -3118,9 +3228,39 @@ class App:
             self._tile_mode_genre_inner,
             self._tile_order_random_inner,
             self._tile_order_in_order_inner,
+            self._tile_guide_inner,
+            self._tile_settings_inner,
+            self._tile_queue_inner,
         ):
             return True
         return self._tiles_enabled
+
+    def _restore_static_header_action_tile(self, inner: tk.Frame) -> None:
+        """Guide / Settings / Queue: idle skip-style tile (always available, not tied to queue loaded)."""
+        inner._tile_hovering = False  # type: ignore[attr-defined]
+        bg = self.skip_bg
+        hlb = self.panel_border
+        fg_t = self.fg
+        fg_sc = self.muted
+        try:
+            inner.configure(
+                bg=bg,
+                highlightthickness=1,
+                highlightbackground=hlb,
+                highlightcolor=hlb,
+                cursor="",
+            )
+        except tk.TclError:
+            return
+        widgets: tuple[tk.Label, ...] = getattr(inner, "_tile_widgets", ())
+        if not widgets:
+            return
+        shortcut_w = widgets[-1]
+        for w in widgets:
+            try:
+                w.configure(bg=bg, fg=fg_sc if w is shortcut_w else fg_t, cursor="")
+            except tk.TclError:
+                pass
 
     def _restore_unified_action_tile_surface(self, inner: tk.Frame) -> None:
         inner._tile_hovering = False  # type: ignore[attr-defined]
@@ -3129,6 +3269,9 @@ class App:
             return
         if inner in (self._tile_mode_cleanup_inner, self._tile_mode_genre_inner):
             self._apply_mode_switch_chrome()
+            return
+        if inner in (self._tile_guide_inner, self._tile_settings_inner, self._tile_queue_inner):
+            self._restore_static_header_action_tile(inner)
             return
         if inner in (self._tile_order_random_inner, self._tile_order_in_order_inner):
             self._apply_order_toggle_chrome()
@@ -3211,6 +3354,8 @@ class App:
         if not self._shortcuts_active():
             return None
         self._toggle_guide_panel_visibility()
+        if self._tile_guide_inner is not None:
+            self._flash_tile_widget(self._tile_guide_inner)
         return "break"
 
     def _apply_dual_tile_selection_chrome(
@@ -3335,16 +3480,17 @@ class App:
         self._tinder_kb_jump_error_digit = None
         self._tinder_kb_jump_error_plus30 = False
         self._reset_jump_time_button_captions()
+        self._sync_pb_start_jump_button_label()
         if self.lbl_mode_header is not None:
             self._refresh_mode_status_label()
         self._apply_mode_switch_chrome()
         if self.cleanup_outer is not None and self.genre_actions is not None:
             if mode == "swipe":
                 self.genre_actions.pack_forget()
-                self.cleanup_outer.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
+                self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
             else:
                 self.cleanup_outer.pack_forget()
-                self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 6))
+                self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
         self._refresh_stats()
         self._refresh_session_stats()
         self._refresh_all_widget_chrome()
@@ -3688,13 +3834,21 @@ class App:
         self._main_column.pack(fill="both", expand=True)
         self._main_column.columnconfigure(0, weight=1)
         self._main_column.rowconfigure(0, weight=1)
+        self._main_column.rowconfigure(1, weight=0, minsize=_ACTION_ZONE_FIXED_HEIGHT_PX)
         self._main_upper = tk.Frame(self._main_column, bg=self.bg)
         self._main_upper.grid(row=0, column=0, sticky="nsew")
-        self._main_action_shell = tk.Frame(self._main_column, bg=self.bg)
-        self._main_action_shell.grid(row=1, column=0, sticky="ew")
+        self._main_action_shell = tk.Frame(
+            self._main_column,
+            bg=self.bg,
+            height=_ACTION_ZONE_FIXED_HEIGHT_PX,
+        )
+        self._main_action_shell.grid(row=1, column=0, sticky="nsew")
+        self._main_action_shell.grid_propagate(False)
+        self._action_swap_host = tk.Frame(self._main_action_shell, bg=self.bg)
+        self._action_swap_host.pack(fill="both", expand=True)
 
         top = tk.Frame(self._main_upper, bg=self.bg)
-        top.pack(fill="x", padx=_CONTENT_GUTTER, pady=(18, 10))
+        top.pack(fill="x", padx=_CONTENT_GUTTER, pady=(10, 4))
         # Equal side columns keep the title in the true horizontal center while resizing.
         top.columnconfigure(0, weight=1, uniform="top_hdr")
         top.columnconfigure(1, weight=0)
@@ -3703,12 +3857,46 @@ class App:
         top_left_col = tk.Frame(top, bg=self.bg)
         top_left_col.grid(row=0, column=0, sticky="nw")
 
+        hdr_util = tk.Frame(top_left_col, bg=self.bg)
+        hdr_util.pack(anchor="w", fill="x")
+        for hu in range(2):
+            hdr_util.columnconfigure(hu, weight=1, uniform="hdr_util_col")
+        _o_gd, self._tile_guide_inner = self._action_tile(
+            hdr_util,
+            "📖",
+            "Guide",
+            "[H]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._toggle_guide_panel_visibility,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_st, self._tile_settings_inner = self._action_tile(
+            hdr_util,
+            "⚙️",
+            "Settings",
+            "[,]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._open_settings_dialog,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_gd.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
+        _o_st.grid(row=0, column=1, sticky="nsew")
+
         load_row = tk.Frame(top_left_col, bg=self.bg)
-        load_row.pack(anchor="w", fill="x")
+        load_row.pack(anchor="w", fill="x", pady=(_SECTION_GAP_Y, 0))
         self._load_folder_ring, self.btn_load = self._load_folder_button(load_row, self.pick_folder)
-        self._load_folder_ring.pack(side="left")
+        self._load_folder_ring.pack(side="left", fill="x", expand=True)
+
+        def_row = tk.Frame(top_left_col, bg=self.bg)
+        def_row.pack(anchor="w", fill="x", pady=(8, 0))
         self.btn_load_default_folder = tk.Button(
-            load_row,
+            def_row,
             text="Load Default Folder",
             command=self._on_load_default_folder,
             font=("Helvetica", 10, "bold"),
@@ -3716,7 +3904,7 @@ class App:
             pady=5,
         )
         self._style_tk_button_transport_grey(self.btn_load_default_folder)
-        self.btn_load_default_folder.pack(side="left", padx=(12, 0))
+        self.btn_load_default_folder.pack(side="left", fill="x", expand=True)
 
         self.lbl_default_folder_path = tk.Label(
             top_left_col,
@@ -3730,16 +3918,9 @@ class App:
         self.lbl_default_folder_path.pack(anchor="w", pady=(4, 0), fill="x")
         self._refresh_default_folder_label()
 
-        order_bar = tk.Frame(top_left_col, bg=self.bg)
-        order_bar.pack(anchor="w", pady=(8, 0), fill="x")
-        tk.Label(order_bar, text="Order:", bg=self.bg, fg=self.muted, font=("Helvetica", 10, "bold")).pack(
-            side="left",
-            padx=(0, 8),
-        )
-        order_tiles = tk.Frame(order_bar, bg=self.bg)
-        order_tiles.pack(side="left", fill="x", expand=True)
+        self._hidden_chrome_host = tk.Frame(self.root, bg=self.bg)
         o_rnd, self._tile_order_random_inner = self._action_tile(
-            order_tiles,
+            self._hidden_chrome_host,
             "🔀",
             "Random",
             "[U]",
@@ -3751,7 +3932,7 @@ class App:
             clickable_when_tiles_disabled=True,
         )
         o_io, self._tile_order_in_order_inner = self._action_tile(
-            order_tiles,
+            self._hidden_chrome_host,
             "📋",
             "In order",
             "[O]",
@@ -3766,17 +3947,6 @@ class App:
         o_io.pack(side="left", fill="x", expand=True)
         self._apply_order_toggle_chrome()
 
-        self.btn_toggle_guide = tk.Button(
-            top_left_col,
-            text="Show Guide",
-            command=self._toggle_guide_panel_visibility,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(self.btn_toggle_guide)
-        self.btn_toggle_guide.pack(anchor="w", pady=(10, 0))
-
         title_mid = tk.Frame(top, bg=self.bg)
         title_mid.grid(row=0, column=1, sticky="")
         self.lbl_mode_header = tk.Label(
@@ -3788,43 +3958,38 @@ class App:
             anchor="center",
             justify="center",
         )
-        self.lbl_mode_header.pack(pady=(0, 4))
+        self.lbl_mode_header.pack(pady=(0, 2))
         titles = tk.Frame(title_mid, bg=self.bg)
         titles.pack()
         tk.Label(titles, text="BAKKIS", bg=self.bg, fg=self.fg, font=("Helvetica", 20, "bold")).pack(side="left")
         tk.Label(titles, text=" ", bg=self.bg, font=("Helvetica", 5)).pack(side="left")
         tk.Label(titles, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica", 20, "bold")).pack(side="left")
-        self.btn_settings = tk.Button(
-            title_mid,
-            text="Settings ⚙",
-            command=self._open_settings_dialog,
-            font=("Helvetica", 10, "bold"),
-            padx=12,
-            pady=4,
-        )
-        self._style_tk_button_transport_grey(self.btn_settings)
-        self.btn_settings.pack(pady=(8, 0))
 
         top_right_col = tk.Frame(top, bg=self.bg)
         top_right_col.grid(row=0, column=2, sticky="ne")
         right_stack = tk.Frame(top_right_col, bg=self.bg)
-        right_stack.pack(anchor="ne")
+        right_stack.pack(anchor="ne", fill="x")
 
-        self.btn_toggle_queue = tk.Button(
-            right_stack,
-            text="Show Queue",
-            command=self._toggle_queue_panel_visibility,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
+        queue_row = tk.Frame(right_stack, bg=self.bg)
+        queue_row.pack(fill="x", anchor="e")
+        _o_q, self._tile_queue_inner = self._action_tile(
+            queue_row,
+            "☰",
+            "Queue",
+            "[Q]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._toggle_queue_panel_visibility,
+            clickable_when_tiles_disabled=True,
         )
-        self._style_tk_button_transport_grey(self.btn_toggle_queue)
-        self.btn_toggle_queue.pack(anchor="e")
+        _o_q.pack(fill="x", expand=True, anchor="e")
 
         mode_outer = tk.Frame(right_stack, bg=self.bg)
-        mode_outer.pack(anchor="e", pady=(10, 0))
+        mode_outer.pack(anchor="e", fill="x", pady=(_SECTION_GAP_Y, 0))
         mode_tiles = tk.Frame(mode_outer, bg=self.bg)
-        mode_tiles.pack(anchor="e")
+        mode_tiles.pack(anchor="e", fill="x")
         for mc in range(2):
             mode_tiles.columnconfigure(mc, weight=1, uniform="mode_pick_col")
         _o_mc, self._tile_mode_cleanup_inner = self._action_tile(
@@ -3854,8 +4019,19 @@ class App:
         _o_mc.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
         _o_mg.grid(row=0, column=1, sticky="nsew")
 
-        status_above_progress = tk.Frame(self._main_upper, bg=self.bg)
-        status_above_progress.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
+        player_card = tk.Frame(
+            self._main_upper,
+            bg=self.bg,
+            highlightthickness=1,
+            highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
+        )
+        player_card.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y))
+        card_inner = tk.Frame(player_card, bg=self.bg)
+        card_inner.pack(fill="x", padx=12, pady=(10, 10))
+
+        status_above_progress = tk.Frame(card_inner, bg=self.bg)
+        status_above_progress.pack(fill="x", pady=(0, 2))
         self.lbl_stats = tk.Label(
             status_above_progress,
             text="",
@@ -3869,16 +4045,16 @@ class App:
         self.lbl_stats.pack(fill="x")
 
         self.lbl_track = self._readonly_time_label(
-            self._main_upper,
+            card_inner,
             text="",
             font=("Helvetica", 12, "bold"),
             width=None,
             anchor="center",
         )
-        self.lbl_track.pack(fill="x", pady=(4, 1))
+        self.lbl_track.pack(fill="x", pady=(2, 0))
 
         self.lbl_now_playing_tag = tk.Label(
-            self._main_upper,
+            card_inner,
             text="",
             bg=self.bg,
             fg=self.accent,
@@ -3888,8 +4064,8 @@ class App:
             anchor="center",
         )
 
-        self._now_playing_main_wrap = tk.Frame(self._main_upper, bg=self.bg)
-        self._now_playing_main_wrap.pack(fill="x", pady=(0, 2))
+        self._now_playing_main_wrap = tk.Frame(card_inner, bg=self.bg)
+        self._now_playing_main_wrap.pack(fill="x", pady=(2, 4))
         tk.Frame(self._now_playing_main_wrap, bg=self.bg).pack(side="left", fill="x", expand=True)
         self._now_playing_main_inner = tk.Frame(self._now_playing_main_wrap, bg=self.bg)
         self._now_playing_main_inner.pack(side="left")
@@ -3897,31 +4073,8 @@ class App:
 
         self._set_now_playing_main_plain("Load a folder to begin")
 
-        self.lbl_source_folder = tk.Label(
-            self._main_upper,
-            text="",
-            bg=self.bg,
-            fg=self.muted,
-            wraplength=1100,
-            justify="center",
-            font=("Helvetica", 10),
-            anchor="center",
-        )
-        self.lbl_source_folder.pack(fill="x", pady=(0, 2))
-
-        self.lbl_path = tk.Label(
-            self._main_upper,
-            text="",
-            bg=self.bg,
-            fg=self.muted,
-            wraplength=1100,
-            justify="center",
-            font=("Helvetica", 11),
-        )
-        self.lbl_path.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 5))
-
-        progress_row = tk.Frame(self._main_upper, bg=self.bg)
-        progress_row.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 6))
+        progress_row = tk.Frame(card_inner, bg=self.bg)
+        progress_row.pack(fill="x", pady=(0, 2))
 
         self.lbl_elapsed = self._readonly_time_label(
             progress_row,
@@ -3934,7 +4087,7 @@ class App:
 
         self.progress_canvas = tk.Canvas(
             progress_row,
-            height=32,
+            height=28,
             bg=self.trough,
             highlightthickness=1,
             highlightbackground=self.panel_border,
@@ -3955,13 +4108,113 @@ class App:
 
         self.root.after_idle(self._raise_time_text_above_scrubber)
 
+        paths_strip = tk.Frame(card_inner, bg=self.bg)
+        paths_strip.pack(fill="x", pady=(4, 0))
+        self.lbl_source_folder = tk.Label(
+            paths_strip,
+            text="",
+            bg=self.bg,
+            fg=self.muted,
+            wraplength=1100,
+            justify="center",
+            font=("Helvetica", 10),
+            anchor="center",
+        )
+        self.lbl_source_folder.pack(fill="x", pady=(0, 2))
+        self.lbl_path = tk.Label(
+            paths_strip,
+            text="",
+            bg=self.bg,
+            fg=self.muted,
+            wraplength=1100,
+            justify="center",
+            font=("Helvetica", 10),
+        )
+        self.lbl_path.pack(fill="x", pady=(0, 0))
+
+        undo_sc = "[⌘Z]" if sys.platform == "darwin" else "[Z]"
+
+        transport_bar = tk.Frame(self._main_upper, bg=self.bg)
+        transport_bar.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y_TIGHT))
+        transport_bar.rowconfigure(0, minsize=72)
+        u_uniform = "transport_util"
+        for col in range(4):
+            transport_bar.columnconfigure(col, weight=1, uniform=u_uniform)
+        u_gap = 10
+
+        def _place_transport_cell(col: int, outer: tk.Frame) -> None:
+            px = (0, u_gap) if col < 3 else (0, 0)
+            outer.grid(row=0, column=col, sticky="nsew", padx=px)
+
+        _o_play, _ = self._build_transport_utility_cell(
+            transport_bar,
+            "▶",
+            "Play",
+            "[Space]",
+            self.toggle_play,
+            role="play",
+        )
+        self.btn_play = _o_play
+        self._transport_play_icon_label = getattr(self.btn_play, "_utility_icon", None)
+        _place_transport_cell(0, _o_play)
+
+        _o_rep, _ = self._build_transport_utility_cell(
+            transport_bar,
+            "↻",
+            "Replay",
+            "[R]",
+            self._replay_active_jump_point,
+            role="replay",
+        )
+        self.btn_replay = _o_rep
+        _place_transport_cell(1, _o_rep)
+
+        _o_sk, _skip_inner = self._build_transport_utility_cell(
+            transport_bar,
+            "⏭",
+            "Skip",
+            "[Enter]",
+            self.skip_current,
+            role="skip",
+        )
+        self.btn_skip = _o_sk
+        self._swipe_skip_inner = _skip_inner
+        self._grid_skip_inner = _skip_inner
+        _place_transport_cell(2, _o_sk)
+
+        _o_un, _undo_inner = self._build_transport_utility_cell(
+            transport_bar,
+            "↶",
+            "Undo",
+            undo_sc,
+            self.undo_last,
+            role="undo",
+            clickable_when_tiles_disabled=True,
+        )
+        self.btn_undo = _o_un
+        self._swipe_undo_inner = _undo_inner
+        self._grid_undo_inner = _undo_inner
+        _place_transport_cell(3, _o_un)
+
         jump = tk.Frame(self._main_upper, bg=self.bg)
-        jump.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 4))
-        jl = tk.Label(jump, text="Jump to", bg=self.bg, fg=self.muted, font=("Helvetica", 10, "bold"))
-        jl.pack(anchor="w", pady=(0, 6))
+        jump.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y_TIGHT))
+        jl = tk.Label(jump, text="JUMP TO", bg=self.bg, fg=self.accent, font=("Helvetica", 10, "bold"))
+        jl.pack(anchor="w", pady=(0, 4))
 
         row1 = tk.Frame(jump, bg=self.bg)
         row1.pack(fill="x")
+        self._jump_btn_pb_start = self._jump_time_button(
+            row1,
+            "START\n0:00",
+            self._jump_to_playback_start_slot,
+            hint_suffix=None,
+            width=0,
+            tinder_target_sec=None,
+        )
+        self._jump_buttons.append(self._jump_btn_pb_start)
+        self._jump_btn_pb_start.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        self._sync_pb_start_jump_button_label()
+
         for base, hint, sec in [
             ("⏱  0:00", "  1", 0),
             ("⏱  0:30", "  2", 30),
@@ -3979,7 +4232,7 @@ class App:
             )
             self._jump_buttons.append(b)
             self._preset_jump_buttons[sec] = b
-            b.pack(side="left", padx=(0, 8), fill="x", expand=True)
+            b.pack(side="left", padx=(0, 6), fill="x", expand=True)
 
         row2_presets = tk.Frame(jump, bg=self.bg)
         row2_presets.pack(fill="x", pady=(8, 0))
@@ -4031,73 +4284,15 @@ class App:
         )
         self.lbl_seek_hint.pack(anchor="w", pady=(6, 0))
 
-        transport_bar = tk.Frame(self._main_upper, bg=self.bg)
-        transport_bar.pack(fill="x", padx=_CONTENT_GUTTER, pady=(6, 8))
-        transport_bar.rowconfigure(0, minsize=104)
-        u_uniform = "transport_util"
-        for col in range(4):
-            transport_bar.columnconfigure(col, weight=1, uniform=u_uniform)
-        u_gap = 10
-
-        def _place_transport_cell(col: int, outer: tk.Frame) -> None:
-            px = (0, u_gap) if col < 3 else (0, 0)
-            outer.grid(row=0, column=col, sticky="nsew", padx=px)
-
-        _o_play, _ = self._build_transport_utility_cell(
-            transport_bar,
-            "▶",
-            "[Space]",
-            self.toggle_play,
-            role="play",
-        )
-        self.btn_play = _o_play
-        self._transport_play_icon_label = getattr(self.btn_play, "_utility_icon", None)
-        _place_transport_cell(0, _o_play)
-
-        _o_rep, _ = self._build_transport_utility_cell(
-            transport_bar,
-            "↻",
-            "[R]",
-            self._replay_active_jump_point,
-            role="replay",
-        )
-        self.btn_replay = _o_rep
-        _place_transport_cell(1, _o_rep)
-
-        _o_sk, _skip_inner = self._build_transport_utility_cell(
-            transport_bar,
-            "⏭",
-            "[Enter]",
-            self.skip_current,
-            role="skip",
-        )
-        self.btn_skip = _o_sk
-        self._swipe_skip_inner = _skip_inner
-        self._grid_skip_inner = _skip_inner
-        _place_transport_cell(2, _o_sk)
-
-        _o_un, _undo_inner = self._build_transport_utility_cell(
-            transport_bar,
-            "↶",
-            "[Z]",
-            self.undo_last,
-            role="undo",
-            clickable_when_tiles_disabled=True,
-        )
-        self.btn_undo = _o_un
-        self._swipe_undo_inner = _undo_inner
-        self._grid_undo_inner = _undo_inner
-        _place_transport_cell(3, _o_un)
-
         self._apply_mode_switch_chrome()
 
-        self.cleanup_outer = tk.Frame(self._main_action_shell, bg=self.bg)
-        self.cleanup_outer.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
+        self.cleanup_outer = tk.Frame(self._action_swap_host, bg=self.bg)
+        self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
         self.cleanup_actions = tk.Frame(self.cleanup_outer, bg=self.bg)
-        self.cleanup_actions.pack(fill="x")
+        self.cleanup_actions.pack(fill="both", expand=True)
 
         tinder_sort_row = tk.Frame(self.cleanup_actions, bg=self.bg)
-        tinder_sort_row.pack(fill="x")
+        tinder_sort_row.pack(fill="both", expand=True)
         for tc in range(3):
             tinder_sort_row.columnconfigure(tc, weight=1, uniform="tinder_sort_col")
         tinder_sort_row.rowconfigure(0, weight=1)
@@ -4107,7 +4302,7 @@ class App:
             tinder_sort_row,
             "😊",
             "KEEP",
-            "[→]",
+            "[1]  Swipe →",
             self.accent,
             self.accent_active,
             self.teal_on_fg,
@@ -4119,7 +4314,7 @@ class App:
             tinder_sort_row,
             "☹️",
             "ARCHIVE",
-            "[←]",
+            "[2]  Swipe ↑",
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
@@ -4131,7 +4326,7 @@ class App:
             tinder_sort_row,
             "🤩",
             "FAVORITE",
-            "[↑]",
+            "[3]  Swipe ←",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
@@ -4145,7 +4340,7 @@ class App:
         self.btn_archive = self._tile_archive_inner  # type: ignore[assignment]
         self.btn_favorite = self._tile_favorite_inner  # type: ignore[assignment]
 
-        self.genre_actions = tk.Frame(self._main_action_shell, bg=self.bg)
+        self.genre_actions = tk.Frame(self._action_swap_host, bg=self.bg)
         genre_grid = tk.Frame(self.genre_actions, bg=self.bg)
         genre_grid.pack(fill="both", expand=True)
         for gr in range(3):
@@ -4179,6 +4374,48 @@ class App:
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
 
+        grid_kaf_row = tk.Frame(self.genre_actions, bg=self.bg)
+        grid_kaf_row.pack(fill="x", pady=(8, 2))
+        for gkc in range(3):
+            grid_kaf_row.columnconfigure(gkc, weight=1, uniform="grid_kaf_col")
+        _gk = _ACTION_TILE_GRID_GAP_PX
+        o_gkk, self._grid_kaf_keep_inner = self._action_tile(
+            grid_kaf_row,
+            "😊",
+            "KEEP",
+            "[→]",
+            self.accent,
+            self.accent_active,
+            self.teal_on_fg,
+            "#1A1A1A",
+            lambda: self.sort_current("keep"),
+        )
+        o_gkk.grid(row=0, column=0, sticky="nsew", padx=(0, _gk), pady=0)
+        o_gka, self._grid_kaf_archive_inner = self._action_tile(
+            grid_kaf_row,
+            "☹️",
+            "ARCHIVE",
+            "[↑]",
+            self.archive_bg,
+            self.archive_active,
+            self.archive_fg,
+            "#1A1A1A",
+            lambda: self.sort_current("archive"),
+        )
+        o_gka.grid(row=0, column=1, sticky="nsew", padx=(0, _gk), pady=0)
+        o_gkf, self._grid_kaf_favorite_inner = self._action_tile(
+            grid_kaf_row,
+            "🤩",
+            "FAVORITE",
+            "[←]",
+            self.favorite_bg,
+            self.favorite_active,
+            self.favorite_on_fg,
+            "#1A1A1A",
+            lambda: self.sort_current("favorites"),
+        )
+        o_gkf.grid(row=0, column=2, sticky="nsew", padx=(0, 0), pady=0)
+
         tk.Label(
             self.genre_actions,
             text="Edit genres in Settings",
@@ -4191,7 +4428,7 @@ class App:
         self.genre_actions.pack_forget()
         if self._sorting_mode == "grid":
             self.cleanup_outer.pack_forget()
-            self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 6))
+            self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
 
         self._build_queue_sidebar()
         self._build_guide_sidebar()
@@ -4201,6 +4438,7 @@ class App:
         self._build_branding_footer(self.footer_outer)
 
         self._apply_guide_panel_visibility(self._shortcut_panel_visible)
+        self._sync_queue_tile_title()
 
     def _queue_ellipsis(self, text: str, max_chars: int = 36) -> str:
         s = text.strip()
@@ -4266,13 +4504,33 @@ class App:
             except tk.TclError:
                 pass
 
-    def _apply_queue_panel_visibility(self, visible: bool) -> None:
-        self._queue_panel_visible = visible
-        if self.btn_toggle_queue is not None:
+    def _sync_guide_tile_title(self) -> None:
+        inner = self._tile_guide_inner
+        if inner is None:
+            return
+        w = getattr(inner, "_tile_widgets", ())
+        if len(w) >= 2:
+            t = "Hide guide" if self._shortcut_panel_visible else "Guide"
             try:
-                self.btn_toggle_queue.configure(text="Hide Queue" if visible else "Show Queue")
+                w[1].configure(text=t)
             except tk.TclError:
                 pass
+
+    def _sync_queue_tile_title(self) -> None:
+        inner = self._tile_queue_inner
+        if inner is None:
+            return
+        w = getattr(inner, "_tile_widgets", ())
+        if len(w) >= 2:
+            t = "Hide queue" if self._queue_panel_visible else "Queue"
+            try:
+                w[1].configure(text=t)
+            except tk.TclError:
+                pass
+
+    def _apply_queue_panel_visibility(self, visible: bool) -> None:
+        self._queue_panel_visible = visible
+        self._sync_queue_tile_title()
         if self._queue_sidebar_outer is not None:
             try:
                 if visible:
@@ -4292,15 +4550,13 @@ class App:
         if not self._shortcuts_active():
             return None
         self._toggle_queue_panel_visibility()
+        if self._tile_queue_inner is not None:
+            self._flash_tile_widget(self._tile_queue_inner)
         return "break"
 
     def _apply_guide_panel_visibility(self, visible: bool) -> None:
         self._shortcut_panel_visible = visible
-        if self.btn_toggle_guide is not None:
-            try:
-                self.btn_toggle_guide.configure(text="Hide Guide" if visible else "Show Guide")
-            except tk.TclError:
-                pass
+        self._sync_guide_tile_title()
         if self._guide_sidebar_outer is not None:
             try:
                 if visible:
@@ -4503,10 +4759,12 @@ class App:
             (
                 "◆ MODE",
                 [
-                    "Center: Tinder / Genre status above the title",
-                    "Transport: Play · Replay · Skip · Undo",
-                    "Header right: Swipe · Grid tiles",
+                    "Center: Swipe / Grid status above the title",
+                    "Header left: Guide · Settings · load folder rows",
+                    "Header right: Queue · Swipe · Grid tiles",
+                    "H  Guide · Q  Queue",
                     "S or T  Swipe · G  Grid",
+                    "U  Random order · O  In order (also in Settings → Default track order)",
                     "1–9  Sort to grid folder (grid mode)",
                     "Enter  Skip · Z  Undo",
                     "⌃Z  Undo all",
