@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import uuid
 import queue
 import random
 import shutil
@@ -27,10 +28,10 @@ import tkinter as tk
 
 ButtonKind = Literal["panel", "accent", "archive", "favorite", "transport"]
 JumpUiKey = Union[int, Literal["outro"]]
-SortingMode = Literal["cleanup", "genre"]
+SortingMode = Literal["swipe", "grid"]
 TrackOrder = Literal["random", "in_order"]
 from mutagen import File as MutagenFile
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 # Default landscape window; genre grid + right panel fit without main-window scrolling.
 _DEFAULT_WIN_W = 1380
@@ -68,6 +69,30 @@ def supported_audio_formats_display() -> str:
     return ", ".join(sorted(SUPPORTED_AUDIO_FORMATS))
 
 
+_HAIR_SPACE = "\u200a"  # HAIR SPACE — subtle faux letter-spacing (Tk has no CSS tracking).
+
+
+def _shortcut_caption_loose(s: str) -> str:
+    """Loosen text inside ``[...]`` for monospace shortcut captions."""
+    t = s.strip()
+    if len(t) < 3 or not (t.startswith("[") and t.endswith("]")):
+        return s
+    body = t[1:-1]
+    if len(body) <= 1:
+        return s
+    return "[" + _HAIR_SPACE.join(body) + "]"
+
+
+# Unified action tile layout (transport · mode · order · tinder · genre).
+_ACTION_TILE_ROW_GAP_PX = 10
+_ACTION_TILE_FRAME_PAD_PX = 4
+_ACTION_TILE_GRID_GAP_PX = 6
+_ACTION_TILE_ICON_FONT = ("Helvetica Neue", 22)
+_ACTION_TILE_TITLE_FONT = ("Helvetica Neue", 13)
+_ACTION_TILE_SHORTCUT_FONT = ("Menlo", 10)
+_ACTION_TILE_HOVER_MIX = 0.058
+
+
 def _should_ignore_scan_file(name: str) -> bool:
     """Skip junk / hidden / AppleDouble files during folder scans."""
     if name == ".DS_Store":
@@ -93,7 +118,242 @@ KEEP_NAME = "KEEP"
 ARCHIVE_NAME = "ARCHIVE"
 FAVORITES_NAME = "FAVORITES"
 GENRES_NAME = "GENRES"
-SKIP_SCAN_DIRS = {KEEP_NAME.lower(), ARCHIVE_NAME.lower(), FAVORITES_NAME.lower(), GENRES_NAME.lower()}
+MODE_PRESETS_JSON = "mode_presets.json"
+LEGACY_SKIP_SCAN_DIR_NAMES = frozenset(
+    {KEEP_NAME.lower(), ARCHIVE_NAME.lower(), FAVORITES_NAME.lower(), GENRES_NAME.lower()},
+)
+
+
+def _norm_sorting_mode_value(raw: object) -> SortingMode:
+    s = str(raw or "").strip().lower()
+    if s in ("cleanup", "swipe", "tinder"):
+        return "swipe"
+    if s in ("genre", "grid"):
+        return "grid"
+    return "swipe"
+
+
+def _new_preset_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _mode_presets_path() -> Path:
+    return _user_config_dir() / MODE_PRESETS_JSON
+
+
+def _default_swipe_preset_dict() -> dict:
+    pid = _new_preset_id()
+    return {
+        "id": pid,
+        "name": "Default swipe",
+        "mode": "swipe",
+        "labels": ["Keep", "Archive", "Favorite"],
+        "colors": ["#00D6B4", "#FF2D55", "#FFF200"],
+        "folders": [KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME],
+    }
+
+
+def _default_grid_preset_dict_from_genre_file() -> dict:
+    labels, colors = load_genre_config()
+    pid = _new_preset_id()
+    folders = [safe_genre_folder_name(lb) for lb in labels[:9]]
+    return {
+        "id": pid,
+        "name": "Default grid",
+        "mode": "grid",
+        "labels": list(labels[:9]),
+        "colors": list(colors[:9]),
+        "folders": folders,
+    }
+
+
+def _coerce_swipe_preset_blob(blob: object) -> Optional[dict]:
+    if not isinstance(blob, dict):
+        return None
+    if str(blob.get("mode", "")).lower() != "swipe":
+        return None
+    pid = str(blob.get("id") or "").strip() or _new_preset_id()
+    name = str(blob.get("name") or "Swipe preset").strip() or "Swipe preset"
+    labels = blob.get("labels")
+    colors = blob.get("colors")
+    folders = blob.get("folders")
+    if not isinstance(labels, list):
+        labels = ["Keep", "Archive", "Favorite"]
+    if not isinstance(colors, list):
+        colors = ["#00D6B4", "#FF2D55", "#FFF200"]
+    if not isinstance(folders, list):
+        folders = [KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME]
+    ls = [str(x).strip() or "?" for x in labels[:3]]
+    while len(ls) < 3:
+        ls.append(["Keep", "Archive", "Favorite"][len(ls)])
+    default_c = ["#00D6B4", "#FF2D55", "#FFF200"]
+    cs = [_normalize_hex(str(colors[i])) if i < len(colors) else default_c[i] for i in range(3)]
+    fs = [str(x).strip() or f"OUT{i}" for i, x in enumerate(folders[:3])]
+    while len(fs) < 3:
+        fs.append([KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME][len(fs)])
+    return {"id": pid, "name": name, "mode": "swipe", "labels": ls, "colors": cs, "folders": fs}
+
+
+def _coerce_grid_preset_blob(blob: object) -> Optional[dict]:
+    if not isinstance(blob, dict):
+        return None
+    if str(blob.get("mode", "")).lower() != "grid":
+        return None
+    pid = str(blob.get("id") or "").strip() or _new_preset_id()
+    name = str(blob.get("name") or "Grid preset").strip() or "Grid preset"
+    labels = blob.get("labels")
+    colors = blob.get("colors")
+    folders = blob.get("folders")
+    if not isinstance(labels, list):
+        return None
+    if not isinstance(colors, list):
+        colors = []
+    if not isinstance(folders, list):
+        folders = []
+    ls: list[str] = []
+    for i in range(9):
+        if i < len(labels):
+            ls.append(str(labels[i]).strip() or "?")
+        else:
+            ls.append(DEFAULT_GENRE_LABELS[i])
+    cs_out: list[str] = []
+    for i in range(9):
+        if i < len(colors):
+            cs_out.append(_coerce_palette_hex(str(colors[i]), DEFAULT_GENRE_COLORS[i]))
+        else:
+            cs_out.append(DEFAULT_GENRE_COLORS[i])
+    fs_out: list[str] = []
+    for i in range(9):
+        if i < len(folders) and str(folders[i]).strip():
+            fs_out.append(str(folders[i]).strip())
+        else:
+            fs_out.append(safe_genre_folder_name(ls[i]))
+    return {"id": pid, "name": name, "mode": "grid", "labels": ls, "colors": cs_out, "folders": fs_out}
+
+
+def _normalize_mode_preset_store(data: dict) -> dict:
+    presets_raw = data.get("presets")
+    presets: list[dict] = []
+    if isinstance(presets_raw, list):
+        for item in presets_raw:
+            if not isinstance(item, dict):
+                continue
+            m = str(item.get("mode", "")).lower()
+            if m == "swipe":
+                co = _coerce_swipe_preset_blob(item)
+                if co:
+                    presets.append(co)
+            elif m == "grid":
+                co = _coerce_grid_preset_blob(item)
+                if co:
+                    presets.append(co)
+    if not presets:
+        presets = [_default_swipe_preset_dict(), _default_grid_preset_dict_from_genre_file()]
+    swipe_ids = [p["id"] for p in presets if p.get("mode") == "swipe"]
+    grid_ids = [p["id"] for p in presets if p.get("mode") == "grid"]
+    aid = str(data.get("active_swipe_preset_id") or "")
+    gid = str(data.get("active_grid_preset_id") or "")
+    if aid not in swipe_ids:
+        aid = swipe_ids[0] if swipe_ids else presets[0]["id"]
+    if gid not in grid_ids:
+        gid = grid_ids[0] if grid_ids else presets[-1]["id"]
+    return {"presets": presets, "active_swipe_preset_id": aid, "active_grid_preset_id": gid}
+
+
+def load_mode_preset_store() -> dict:
+    path = _mode_presets_path()
+    raw: dict = {}
+    try:
+        if path.is_file():
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    raw = loaded
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+    normalized = _normalize_mode_preset_store(raw)
+    try:
+        if not path.is_file() or not raw.get("presets"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(normalized, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+    return normalized
+
+
+def save_mode_preset_store(store: dict) -> None:
+    path = _mode_presets_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2, ensure_ascii=False)
+
+
+def preset_by_id(store: dict, pid: str) -> Optional[dict]:
+    for p in store.get("presets") or []:
+        if isinstance(p, dict) and p.get("id") == pid:
+            return p
+    return None
+
+
+def presets_of_mode(store: dict, mode: Literal["swipe", "grid"]) -> list[dict]:
+    return [p for p in (store.get("presets") or []) if isinstance(p, dict) and p.get("mode") == mode]
+
+
+def format_preset_menu_label(p: dict) -> str:
+    m = str(p.get("mode", "")).lower()
+    prefix = "Swipe" if m == "swipe" else "Grid" if m == "grid" else "?"
+    name = str(p.get("name") or "?").strip()
+    return f"{prefix} · {name}"
+
+
+def active_swipe_preset(store: dict) -> dict:
+    pid = str(store.get("active_swipe_preset_id") or "")
+    p = preset_by_id(store, pid)
+    if p and p.get("mode") == "swipe":
+        co = _coerce_swipe_preset_blob(p)
+        if co:
+            return co
+    for q in presets_of_mode(store, "swipe"):
+        co = _coerce_swipe_preset_blob(q)
+        if co:
+            return co
+    return _coerce_swipe_preset_blob(_default_swipe_preset_dict()) or _default_swipe_preset_dict()
+
+
+def active_grid_preset(store: dict) -> dict:
+    pid = str(store.get("active_grid_preset_id") or "")
+    p = preset_by_id(store, pid)
+    if p and p.get("mode") == "grid":
+        co = _coerce_grid_preset_blob(p)
+        if co:
+            return co
+    for q in presets_of_mode(store, "grid"):
+        co = _coerce_grid_preset_blob(q)
+        if co:
+            return co
+    return _coerce_grid_preset_blob(_default_grid_preset_dict_from_genre_file()) or _default_grid_preset_dict_from_genre_file()
+
+
+def collect_skip_scan_dir_names(store: dict) -> frozenset[str]:
+    out: set[str] = set(LEGACY_SKIP_SCAN_DIR_NAMES)
+    for p in store.get("presets") or []:
+        if not isinstance(p, dict):
+            continue
+        mode = str(p.get("mode", "")).lower()
+        folders = p.get("folders")
+        if not isinstance(folders, list):
+            continue
+        if mode == "swipe":
+            for fn in folders[:3]:
+                if isinstance(fn, str) and fn.strip():
+                    out.add(fn.strip().lower())
+        elif mode == "grid":
+            for fn in folders[:9]:
+                if isinstance(fn, str) and fn.strip():
+                    out.add(safe_genre_folder_name(fn).lower())
+                    out.add(fn.strip().lower())
+    return frozenset(out)
 
 # Background scan / preload tuning
 _SCAN_QUEUE_POLL_MS = 55
@@ -186,6 +446,16 @@ def _mix_hex_toward_black(hex_bg: str, amount: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _mix_hex_toward_white(hex_bg: str, amount: float) -> str:
+    """Blend ``hex_bg`` toward white by ``amount`` in 0..1 (hover lift)."""
+    r, g, b = _hex_rgb(hex_bg)
+    t = max(0.0, min(1.0, amount))
+    r = int(r + (255 - r) * t)
+    g = int(g + (255 - g) * t)
+    b = int(b + (255 - b) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def _palette_name_for_hex(h: str) -> str:
     u = _coerce_palette_hex(h, DEFAULT_GENRE_COLORS[0]).upper()
     for name, hx in GENRE_PALETTE:
@@ -272,7 +542,8 @@ def _default_user_settings_blob() -> dict:
         "default_folder_path": None,
         "auto_load_default_folder": False,
         "playback_start_seconds": DEFAULT_PLAYBACK_START_SEC,
-        "default_mode_on_startup": "cleanup",
+        "default_mode_on_startup": "swipe",
+        "startup_preset_id": None,
         "track_order_mode": "random",
         "track_order": "random",
         "include_subfolders": True,
@@ -300,8 +571,15 @@ def _normalize_user_settings_dict(data: dict) -> None:
     if pss not in PLAYBACK_START_OPTIONS_SEC:
         pss = min(PLAYBACK_START_OPTIONS_SEC, key=lambda x: abs(x - pss))
     data["playback_start_seconds"] = pss
-    dm = data.get("default_mode_on_startup", "cleanup")
-    data["default_mode_on_startup"] = dm if dm in ("cleanup", "genre") else "cleanup"
+    dm = data.get("default_mode_on_startup", "swipe")
+    data["default_mode_on_startup"] = "swipe" if _norm_sorting_mode_value(dm) == "swipe" else "grid"
+    sp = data.get("startup_preset_id")
+    if sp is None or (isinstance(sp, str) and not sp.strip()):
+        data["startup_preset_id"] = None
+    elif isinstance(sp, str):
+        data["startup_preset_id"] = sp.strip()
+    else:
+        data["startup_preset_id"] = None
     tr = data.get("track_order_mode") or data.get("track_order", "random")
     data["track_order_mode"] = tr if tr in ("random", "in_order") else "random"
     data["track_order"] = data["track_order_mode"]
@@ -390,8 +668,7 @@ def playback_sec_to_choice_label(sec: float) -> str:
 
 
 def load_default_mode_on_startup() -> SortingMode:
-    m = read_user_settings().get("default_mode_on_startup", "cleanup")
-    return m if m in ("cleanup", "genre") else "cleanup"
+    return _norm_sorting_mode_value(read_user_settings().get("default_mode_on_startup", "swipe"))
 
 
 def load_playback_start_seconds() -> float:
@@ -529,22 +806,28 @@ def safe_genre_folder_name(label: str) -> str:
     return s[:120]
 
 
-def ensure_genre_folders(root: Path, labels: list[str]) -> None:
+def ensure_genre_folders(root: Path, folder_names: list[str]) -> None:
     base = root / GENRES_NAME
     base.mkdir(parents=True, exist_ok=True)
-    for lb in labels[:9]:
-        (base / safe_genre_folder_name(lb)).mkdir(parents=True, exist_ok=True)
+    for raw in folder_names[:9]:
+        (base / safe_genre_folder_name(str(raw))).mkdir(parents=True, exist_ok=True)
 
 
-def iter_audio_files_under(folder: Path, *, recursive: bool = True):
+def iter_audio_files_under(
+    folder: Path,
+    *,
+    recursive: bool = True,
+    skip_dir_names: Optional[frozenset[str]] = None,
+):
     """Yield resolved audio file paths. When ``recursive`` is False, only the folder's top-level files."""
     root_folder = folder.resolve()
+    skip = LEGACY_SKIP_SCAN_DIR_NAMES if skip_dir_names is None else skip_dir_names
     if recursive:
         for root, dirs, files in os.walk(root_folder, topdown=True):
             dirs[:] = [
                 d
                 for d in dirs
-                if d.lower() not in SKIP_SCAN_DIRS and not _should_skip_scan_subdirectory(d)
+                if d.lower() not in skip and not _should_skip_scan_subdirectory(d)
             ]
             for name in files:
                 if _should_ignore_scan_file(name):
@@ -564,8 +847,13 @@ def iter_audio_files_under(folder: Path, *, recursive: bool = True):
             return
 
 
-def scan_audio_files(folder: Path, *, recursive: bool = True) -> list[Path]:
-    return list(iter_audio_files_under(folder, recursive=recursive))
+def scan_audio_files(
+    folder: Path,
+    *,
+    recursive: bool = True,
+    skip_dir_names: Optional[frozenset[str]] = None,
+) -> list[Path]:
+    return list(iter_audio_files_under(folder, recursive=recursive, skip_dir_names=skip_dir_names))
 
 
 def _relative_path_posix(path: Path, root: Path) -> str:
@@ -593,12 +881,14 @@ def build_track_relative_index(paths: list[Path], root: Path) -> dict[str, str]:
     return out
 
 
-def ensure_sort_folders(root: Path) -> dict[str, Path]:
-    out = {
-        "keep": root / KEEP_NAME,
-        "archive": root / ARCHIVE_NAME,
-        "favorites": root / FAVORITES_NAME,
-    }
+def ensure_sort_folders(
+    root: Path,
+    swipe_output_folder_names: Optional[tuple[str, str, str]] = None,
+) -> dict[str, Path]:
+    if swipe_output_folder_names is None:
+        swipe_output_folder_names = (KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME)
+    kn, an, fn = swipe_output_folder_names
+    out = {"keep": root / kn, "archive": root / an, "favorites": root / fn}
     for d in out.values():
         d.mkdir(parents=True, exist_ok=True)
     return out
@@ -803,6 +1093,7 @@ class App:
         self.time_text_fg = "#000000"  # Play/Pause label on grey transport button only
         self.transport_grey_bg = "#3A3F47"  # Play/Pause + time readout button backgrounds only
         self.transport_grey_active = "#4D5562"
+        self.action_tile_border_hover = "#3D4A5C"
         self.muted = "#A0A0A0"
         self.accent = "#00D6B4"
         self.teal_on_fg = "#000000"  # text on teal (Play, active jump, Keep tile)
@@ -835,13 +1126,22 @@ class App:
         self._display_index = 0
         self._undo_stack: list[dict] = []
 
+        self._mode_preset_store = load_mode_preset_store()
+        self._apply_startup_preset_ids_from_user_settings()
+        self._genre_labels = list(DEFAULT_GENRE_LABELS)
+        self._genre_colors = list(DEFAULT_GENRE_COLORS)
+        self._genre_folder_names: list[str] = []
+        self._swipe_labels = ["Keep", "Archive", "Favorite"]
+        self._swipe_colors = [self.accent, self.archive_bg, self.favorite_bg]
+        self._guide_swipe_line_labels: list[tk.Label] = []
+
         self._sorting_mode: SortingMode = load_default_mode_on_startup()
         self._track_order: TrackOrder = load_track_order()
         self._user_playback_start_sec: float = float(load_playback_start_seconds())
         self._var_include_subfolders = tk.BooleanVar(master=self.root, value=load_include_subfolders())
         self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
         self._path_rel_to_music_root: dict[str, str] = {}
-        self._genre_labels, self._genre_colors = load_genre_config()
+        self._apply_track_labels_from_preset_store()
         self._genre_title_labels: list[tk.Label] = []
         self._genre_tile_inners: list[tk.Frame] = []
         self.cleanup_actions: Optional[tk.Frame] = None
@@ -934,6 +1234,7 @@ class App:
         self.btn_load_default_folder: Optional[tk.Button] = None
         self.lbl_default_folder_path: Optional[tk.Label] = None
         self._flash_after_ids: dict[int, str] = {}
+        self._transport_play_icon_label: Optional[tk.Label] = None
         self._last_shortcut_keysym: Optional[str] = None
         self._last_shortcut_time: float = 0.0
         self._key_repeat_suppress_sec = 0.085
@@ -948,6 +1249,8 @@ class App:
         self._mpv_play_retry_count = 0
 
         self._build_ui()
+        self._sync_swipe_tiles_from_preset()
+        self._refresh_shortcut_guide_swipe_lines()
         if load_show_queue_panel_on_startup():
             self._apply_queue_panel_visibility(True)
         _prune_stale_bakkis_tempfiles()
@@ -963,6 +1266,204 @@ class App:
         self.root.after(220, self._maybe_autoload_default_folder)
         self.root.after(0, self._mpv_start_idle)
         self._tick()
+
+    def _apply_startup_preset_ids_from_user_settings(self) -> None:
+        pid = read_user_settings().get("startup_preset_id")
+        if not isinstance(pid, str) or not pid.strip():
+            return
+        pid = pid.strip()
+        changed = False
+        for p in self._mode_preset_store.get("presets") or []:
+            if not isinstance(p, dict) or str(p.get("id")) != pid:
+                continue
+            m = str(p.get("mode", "")).lower()
+            if m == "swipe":
+                self._mode_preset_store["active_swipe_preset_id"] = pid
+                changed = True
+            elif m == "grid":
+                self._mode_preset_store["active_grid_preset_id"] = pid
+                changed = True
+            break
+        if changed:
+            try:
+                save_mode_preset_store(self._mode_preset_store)
+            except OSError:
+                pass
+
+    def _apply_track_labels_from_preset_store(self) -> None:
+        sw = active_swipe_preset(self._mode_preset_store)
+        gr = active_grid_preset(self._mode_preset_store)
+        self._swipe_labels = [str(x) for x in sw.get("labels", [])[:3]]
+        while len(self._swipe_labels) < 3:
+            self._swipe_labels.append(["Keep", "Archive", "Favorite"][len(self._swipe_labels)])
+        scol = sw.get("colors", [])
+        self._swipe_colors = [
+            _normalize_hex(str(scol[i])) if i < len(scol) else ["#00D6B4", "#FF2D55", "#FFF200"][i] for i in range(3)
+        ]
+        self._genre_labels = [str(x) for x in gr.get("labels", [])[:9]]
+        while len(self._genre_labels) < 9:
+            self._genre_labels.append(DEFAULT_GENRE_LABELS[len(self._genre_labels)])
+        gcols = gr.get("colors", [])
+        self._genre_colors = [
+            _coerce_palette_hex(str(gcols[i]), DEFAULT_GENRE_COLORS[i]) if i < len(gcols) else DEFAULT_GENRE_COLORS[i]
+            for i in range(9)
+        ]
+        self._genre_folder_names = [str(x) for x in gr.get("folders", [])[:9]]
+        while len(self._genre_folder_names) < 9:
+            self._genre_folder_names.append(safe_genre_folder_name(self._genre_labels[len(self._genre_folder_names)]))
+
+    def _refresh_shortcut_guide_swipe_lines(self) -> None:
+        lines = [
+            f"{self._swipe_labels[0]} (→)",
+            f"{self._swipe_labels[1]} (←)",
+            f"{self._swipe_labels[2]} (↑)",
+            "Enter  Skip",
+            "Z  Undo last step",
+            "⌃Z  Undo all (back to folder load)",
+        ]
+        for i, lb in enumerate(self._guide_swipe_line_labels):
+            if i < len(lines):
+                try:
+                    lb.configure(text=lines[i])
+                except tk.TclError:
+                    pass
+
+    def _sync_swipe_tiles_from_preset(self) -> None:
+        inners = (self._tile_keep_inner, self._tile_archive_inner, self._tile_favorite_inner)
+        for i, inner in enumerate(inners):
+            if inner is None:
+                continue
+            hx = self._swipe_colors[i] if i < len(self._swipe_colors) else self.accent
+            active = _mix_hex_toward_black(hx, 0.22)
+            fg_m = _fg_for_genre_bg(hx)
+            sc_m = _genre_shortcut_fg(fg_m)
+            inner._tile_bg = hx  # type: ignore[attr-defined]
+            inner._tile_active_bg = active  # type: ignore[attr-defined]
+            inner._tile_fg = fg_m  # type: ignore[attr-defined]
+            inner._tile_shortcut_fg = sc_m  # type: ignore[attr-defined]
+            w = getattr(inner, "_tile_widgets", ())
+            if len(w) >= 2:
+                try:
+                    w[1].configure(text=self._swipe_labels[i].strip().upper())
+                except tk.TclError:
+                    pass
+            try:
+                self._set_action_tile_enabled(inner, self._tiles_enabled)
+            except tk.TclError:
+                pass
+
+    def _upsert_preset_in_store(self, preset: dict) -> None:
+        pid = str(preset.get("id") or "")
+        if not pid:
+            return
+        presets = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict)]
+        replaced = False
+        for j, p in enumerate(presets):
+            if str(p.get("id")) == pid:
+                presets[j] = preset
+                replaced = True
+                break
+        if not replaced:
+            presets.append(preset)
+        self._mode_preset_store["presets"] = presets
+        save_mode_preset_store(self._mode_preset_store)
+
+    def _open_edit_swipe_preset_dialog(self) -> None:
+        self._prepare_native_dialog()
+        sw = active_swipe_preset(self._mode_preset_store)
+        top = tk.Toplevel(self.root)
+        top.title("Edit swipe preset")
+        top.configure(bg=self.bg)
+        try:
+            top.transient(self.root)
+        except tk.TclError:
+            pass
+        labels_e: list[tk.Entry] = []
+        colors_e: list[tk.Entry] = []
+        folders_e: list[tk.Entry] = []
+        row_titles = ("Right → keep", "Left ← archive", "Up ↑ favorites")
+        for i in range(3):
+            row = tk.Frame(top, bg=self.bg)
+            row.pack(fill="x", padx=14, pady=4)
+            tk.Label(row, text=row_titles[i], bg=self.bg, fg=self.accent, width=18, anchor="e", font=("Helvetica", 10)).pack(
+                side="left",
+            )
+            le = tk.Entry(
+                row,
+                width=16,
+                bg=self.panel,
+                fg=self.fg,
+                insertbackground=self.accent,
+                highlightthickness=1,
+                highlightbackground=self.panel_border,
+                highlightcolor=self.accent,
+                font=("Helvetica", 11),
+            )
+            le.insert(0, sw["labels"][i])
+            le.pack(side="left", padx=(6, 4))
+            labels_e.append(le)
+            ce = tk.Entry(
+                row,
+                width=10,
+                bg=self.panel,
+                fg=self.fg,
+                insertbackground=self.accent,
+                highlightthickness=1,
+                highlightbackground=self.panel_border,
+                font=("Helvetica", 11),
+            )
+            ce.insert(0, sw["colors"][i])
+            ce.pack(side="left", padx=4)
+            colors_e.append(ce)
+            fe = tk.Entry(
+                row,
+                width=14,
+                bg=self.panel,
+                fg=self.fg,
+                insertbackground=self.accent,
+                highlightthickness=1,
+                highlightbackground=self.panel_border,
+                font=("Helvetica", 11),
+            )
+            fe.insert(0, sw["folders"][i])
+            fe.pack(side="left", padx=4)
+            folders_e.append(fe)
+
+        def save_sw() -> None:
+            nls = [e.get().strip() or "?" for e in labels_e]
+            ncs = [_normalize_hex(e.get()) for e in colors_e]
+            nfs = [e.get().strip() or f"OUT{j}" for j, e in enumerate(folders_e)]
+            blob = _coerce_swipe_preset_blob(
+                {
+                    "id": sw["id"],
+                    "name": sw.get("name", "Swipe"),
+                    "mode": "swipe",
+                    "labels": nls,
+                    "colors": ncs,
+                    "folders": nfs,
+                },
+            )
+            if not blob:
+                return
+            self._upsert_preset_in_store(blob)
+            self._apply_track_labels_from_preset_store()
+            self._sync_swipe_tiles_from_preset()
+            self._refresh_shortcut_guide_swipe_lines()
+            if self._music_root is not None:
+                trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
+                self._folders = ensure_sort_folders(self._music_root, trip)  # type: ignore[arg-type]
+            self._refresh_stats()
+            top.destroy()
+            self.root.after(10, self._refresh_all_widget_chrome)
+
+        btn_row = tk.Frame(top, bg=self.bg)
+        btn_row.pack(pady=(12, 14))
+        bs = tk.Button(btn_row, text="Save", command=save_sw, font=("Helvetica", 11, "bold"), padx=16, pady=6)
+        bc = tk.Button(btn_row, text="Cancel", command=top.destroy, font=("Helvetica", 11, "bold"), padx=16, pady=6)
+        self._style_tk_button_accent(bs)
+        self._style_tk_button_transport_grey(bc)
+        bs.pack(side="left", padx=6)
+        bc.pack(side="left", padx=6)
 
     def _center_main_window(self, w: int, h: int) -> None:
         self.root.update_idletasks()
@@ -1005,7 +1506,7 @@ class App:
         except tk.TclError:
             pass
         try:
-            if self._sorting_mode == "genre":
+            if self._sorting_mode == "grid":
                 self.lbl_stats.configure(wraplength=inner)
             else:
                 self.lbl_stats.configure(wraplength=0)
@@ -1467,14 +1968,14 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _folder_scan_worker(self, root_folder: Path, sid: int, recursive: bool) -> None:
+    def _folder_scan_worker(self, root_folder: Path, sid: int, recursive: bool, skip_names: frozenset[str]) -> None:
         t0 = time.perf_counter()
         paths: list[Path] = []
         n = 0
         last_prog = 0.0
         try:
             root_resolved = root_folder.resolve()
-            for p in iter_audio_files_under(root_resolved, recursive=recursive):
+            for p in iter_audio_files_under(root_resolved, recursive=recursive, skip_dir_names=skip_names):
                 if sid != self._scan_id:
                     return
                 paths.append(p)
@@ -1539,8 +2040,10 @@ class App:
                     root = scan_root
                     self._music_root = root
                     self._path_rel_to_music_root = build_track_relative_index(paths, root)
-                    self._folders = ensure_sort_folders(root)
-                    ensure_genre_folders(root, self._genre_labels)
+                    sw = active_swipe_preset(self._mode_preset_store)
+                    trip = tuple(str(x) for x in sw["folders"][:3])
+                    self._folders = ensure_sort_folders(root, trip)
+                    ensure_genre_folders(root, list(active_grid_preset(self._mode_preset_store)["folders"][:9]))
                     self._queue = paths
                     self._session_total = len(paths)
                     self._display_index = 1
@@ -1757,13 +2260,13 @@ class App:
 
     def _tinder_jump_target_beyond_track(self, target_sec: float) -> bool:
         """Keyboard / Tinder: preset past end."""
-        if self._sorting_mode != "cleanup":
+        if self._sorting_mode != "swipe":
             return False
         return self._absolute_jump_past_track_end(target_sec)
 
     def _tinder_delta_plus_would_exceed(self) -> bool:
         """Keyboard + Tinder only: +30s would pass track end (genre keeps D key usable)."""
-        if self._sorting_mode != "cleanup":
+        if self._sorting_mode != "swipe":
             return False
         return self._delta_plus_past_track_end()
 
@@ -1833,16 +2336,7 @@ class App:
         except tk.TclError:
             pass
         try:
-            t_state = "normal" if self._tiles_enabled else "disabled"
-            undo_state = "normal" if (self._tiles_enabled or bool(self._undo_stack)) else "disabled"
-            self.btn_play.configure(state=t_state)
-            self.btn_replay.configure(state=t_state)
-            self.btn_skip.configure(state=t_state)
-            self.btn_undo.configure(state=undo_state)
-            self._style_tk_button_transport_grey(self.btn_play)
-            self._style_tk_button_transport_grey(self.btn_replay)
-            self._style_tk_button_transport_grey(self.btn_skip)
-            self._style_tk_button_transport_grey(self.btn_undo)
+            self._apply_transport_utility_row_chrome()
         except tk.TclError:
             pass
         sel: JumpUiKey = self._jump_highlight_key
@@ -1972,8 +2466,13 @@ class App:
         self.jump_to(self._outro_jump_seconds(), jump_ui_key="outro")
 
     def _set_play_button_text(self, text: str) -> None:
-        """Changing only `text` can reset macOS Tk button colors; always re-chrome."""
-        self.btn_play.configure(text=text)
+        """Sync play/pause glyph on the transport tile icon; re-chrome the app."""
+        if self._transport_play_icon_label is not None:
+            glyph = "❚❚" if text.strip().lower().startswith("pause") else "▶"
+            try:
+                self._transport_play_icon_label.configure(text=glyph)
+            except tk.TclError:
+                pass
         self._refresh_all_widget_chrome()
 
     def _dj_button(
@@ -2031,6 +2530,198 @@ class App:
             self._style_tk_button_transport_grey(b)
         return b
 
+    def _transport_utility_cell_enabled(self, cell: tk.Frame) -> bool:
+        """Play / Replay / Skip need an active session; Undo stays lit whenever undo history exists."""
+        t_ok = self._tiles_enabled
+        undo_ok = self._tiles_enabled or bool(self._undo_stack)
+        role = getattr(cell, "_utility_role", "")
+        return undo_ok if role == "undo" else t_ok
+
+    def _build_transport_utility_cell(
+        self,
+        parent: tk.Misc,
+        *,
+        column: int,
+        padx_after: int,
+        icon_initial: str,
+        label_text: str,
+        shortcut_text: str,
+        command: Callable[[], None],
+        role: Literal["play", "replay", "skip", "undo"],
+    ) -> tk.Frame:
+        """Three-row tile matching action tiles: icon, label, shortcut (same chrome as sort row)."""
+        cell = tk.Frame(parent, bg=self.bg, cursor="")
+        inner = tk.Frame(
+            cell,
+            bg=self.skip_bg,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
+            cursor="",
+        )
+        inner.pack(
+            fill="both",
+            expand=True,
+            padx=_ACTION_TILE_FRAME_PAD_PX,
+            pady=_ACTION_TILE_FRAME_PAD_PX,
+        )
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(0, weight=1)
+        inner.rowconfigure(4, weight=1)
+        gap = _ACTION_TILE_ROW_GAP_PX
+        ic = tk.Label(
+            inner,
+            text=icon_initial,
+            font=_ACTION_TILE_ICON_FONT,
+            fg=self.fg,
+            bg=self.skip_bg,
+            anchor="center",
+            justify="center",
+            highlightthickness=0,
+            cursor="",
+        )
+        tl = tk.Label(
+            inner,
+            text=label_text,
+            font=_ACTION_TILE_TITLE_FONT,
+            fg=self.fg,
+            bg=self.skip_bg,
+            anchor="center",
+            justify="center",
+            highlightthickness=0,
+            cursor="",
+        )
+        sc = tk.Label(
+            inner,
+            text=_shortcut_caption_loose(shortcut_text),
+            font=_ACTION_TILE_SHORTCUT_FONT,
+            fg=self.muted,
+            bg=self.skip_bg,
+            anchor="center",
+            justify="center",
+            highlightthickness=0,
+            cursor="",
+        )
+        ic.grid(row=1, column=0, sticky="")
+        tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
+        sc.grid(row=3, column=0, sticky="")
+
+        def on_press(_e: object) -> None:
+            self._on_transport_utility_cell_press(cell)
+
+        for w in (cell, inner, ic, tl, sc):
+            w.bind("<Button-1>", on_press)
+            w.bind("<Enter>", lambda _e, c=cell: self._on_utility_action_tile_enter(c))
+            w.bind("<Leave>", lambda _e, c=cell: self._on_utility_action_tile_leave(c))
+
+        cell._utility_transport_cell = True  # type: ignore[attr-defined]
+        cell._utility_inner = inner  # type: ignore[attr-defined]
+        cell._utility_icon = ic  # type: ignore[attr-defined]
+        cell._utility_title = tl  # type: ignore[attr-defined]
+        cell._utility_sub = sc  # type: ignore[attr-defined]
+        cell._utility_command = command  # type: ignore[attr-defined]
+        cell._utility_role = role  # type: ignore[attr-defined]
+        cell._utility_click_ok = False  # type: ignore[attr-defined]
+        cell._utility_hover = False  # type: ignore[attr-defined]
+        if role == "play":
+            self._transport_play_icon_label = ic
+        cell.grid(row=0, column=column, sticky="nsew", padx=(0, padx_after))
+        return cell
+
+    def _on_transport_utility_cell_press(self, cell: tk.Frame) -> None:
+        if not getattr(cell, "_utility_click_ok", False):
+            return
+        cmd = getattr(cell, "_utility_command", None)
+        if callable(cmd):
+            cmd()
+        self._flash_transport_utility_cell(cell)
+
+    def _on_utility_action_tile_enter(self, cell: tk.Frame) -> None:
+        if not self._transport_utility_cell_enabled(cell):
+            return
+        inner: tk.Frame = getattr(cell, "_utility_inner")
+        ic: tk.Label = getattr(cell, "_utility_icon")
+        tl: tk.Label = getattr(cell, "_utility_title")
+        sc: tk.Label = getattr(cell, "_utility_sub")
+        g = _mix_hex_toward_white(self.skip_bg, _ACTION_TILE_HOVER_MIX)
+        hb = self.action_tile_border_hover
+        cell._utility_hover = True  # type: ignore[attr-defined]
+        try:
+            inner.configure(bg=g, highlightbackground=hb, highlightcolor=hb, cursor="hand2")
+            ic.configure(bg=g, fg=self.fg, cursor="hand2")
+            tl.configure(bg=g, fg=self.fg, cursor="hand2")
+            sc.configure(bg=g, fg=self.muted, cursor="hand2")
+            cell.configure(cursor="hand2")
+        except tk.TclError:
+            pass
+
+    def _on_utility_action_tile_leave(self, cell: tk.Frame) -> None:
+        cell._utility_hover = False  # type: ignore[attr-defined]
+        try:
+            cell.configure(cursor="")
+        except tk.TclError:
+            pass
+        self._apply_transport_utility_cell_chrome(cell, self._transport_utility_cell_enabled(cell))
+
+    def _apply_transport_utility_cell_chrome(self, cell: tk.Frame, enabled: bool) -> None:
+        inner: tk.Frame = getattr(cell, "_utility_inner")
+        ic: tk.Label = getattr(cell, "_utility_icon")
+        tl: tk.Label = getattr(cell, "_utility_title")
+        sc: tk.Label = getattr(cell, "_utility_sub")
+        cell._utility_click_ok = bool(enabled)  # type: ignore[attr-defined]
+        cell._utility_hover = False  # type: ignore[attr-defined]
+        try:
+            cell.configure(cursor="hand2" if enabled else "")
+        except tk.TclError:
+            pass
+        if enabled:
+            g, hb, ifg, tfg, sfg = self.skip_bg, self.panel_border, self.fg, self.fg, self.muted
+        else:
+            g = hb = self.trough
+            ifg = tfg = sfg = self.disabled_fg
+        try:
+            inner.configure(bg=g, highlightbackground=hb, highlightcolor=hb, cursor="hand2" if enabled else "")
+            ic.configure(bg=g, fg=ifg, cursor="hand2" if enabled else "")
+            tl.configure(bg=g, fg=tfg, cursor="hand2" if enabled else "")
+            sc.configure(bg=g, fg=sfg, cursor="hand2" if enabled else "")
+        except tk.TclError:
+            pass
+
+    def _apply_transport_utility_row_chrome(self) -> None:
+        for cell in (self.btn_play, self.btn_replay, self.btn_skip, self.btn_undo):
+            self._apply_transport_utility_cell_chrome(cell, self._transport_utility_cell_enabled(cell))
+
+    def _flash_transport_utility_cell(self, cell: tk.Frame) -> None:
+        if not getattr(cell, "_utility_click_ok", False):
+            return
+        inner: tk.Frame = getattr(cell, "_utility_inner")
+        ic: tk.Label = getattr(cell, "_utility_icon")
+        tl: tk.Label = getattr(cell, "_utility_title")
+        sc: tk.Label = getattr(cell, "_utility_sub")
+        key = id(cell)
+        prev_after = self._flash_after_ids.pop(key, None)
+        if prev_after is not None:
+            try:
+                cell.after_cancel(prev_after)
+            except Exception:
+                pass
+        fb, ff = self.accent_active, self.fg
+        try:
+            inner.configure(bg=fb)
+            ic.configure(bg=fb, fg=ff)
+            tl.configure(bg=fb, fg=ff)
+            sc.configure(bg=fb, fg=ff)
+        except tk.TclError:
+            return
+
+        def restore() -> None:
+            self._flash_after_ids.pop(key, None)
+            self._refresh_all_widget_chrome()
+
+        self._flash_after_ids[key] = cell.after(95, restore)
+
     def _load_folder_button(self, parent: tk.Misc, command: Callable[[], None]) -> tuple[tk.Frame, tk.Button]:
         """Teal outline = Frame ring; inner tk.Button uses dark chrome (no system-white fill)."""
         ring = tk.Frame(parent, bg=self.accent)
@@ -2063,13 +2754,13 @@ class App:
             if not self._tiles_enabled:
                 return
             if tinder_target_sec is not None and self._absolute_jump_past_track_end(float(tinder_target_sec)):
-                if self._sorting_mode in ("cleanup", "genre"):
+                if self._sorting_mode in ("swipe", "grid"):
                     lbl._tinder_hold_invalid = True  # type: ignore[attr-defined]
                     self._jump_mouse_error_lbl = lbl
                     self._style_jump_label_error_hold(lbl)
                     return
             if tinder_delta_plus and self._delta_plus_past_track_end():
-                if self._sorting_mode in ("cleanup", "genre"):
+                if self._sorting_mode in ("swipe", "grid"):
                     lbl._tinder_hold_invalid = True  # type: ignore[attr-defined]
                     self._jump_mouse_error_lbl = lbl
                     self._style_jump_label_error_hold(lbl)
@@ -2094,8 +2785,8 @@ class App:
         if hint_suffix:
 
             def _hint_enter(_e: object) -> None:
-                # In genre mode, keys 1–9 select genres — do not show those digits on jump tiles.
-                if self._sorting_mode == "genre" and (hint_suffix or "").strip().isdigit():
+                # In grid mode, keys 1–9 sort to tiles — do not show those digits on jump tiles.
+                if self._sorting_mode == "grid" and (hint_suffix or "").strip().isdigit():
                     return
                 try:
                     lbl.configure(text=base_text + hint_suffix)
@@ -2127,44 +2818,35 @@ class App:
         *,
         clickable_when_tiles_disabled: bool = False,
         show_icon: bool = True,
-        compact: bool = False,
     ) -> tuple[tk.Frame, tk.Frame]:
-        """Stacked icon / title / shortcut; centered; returns (outer, inner) for packing and flash."""
+        """Unified tile: icon / title / shortcut — same layout as transport row."""
         outer = tk.Frame(parent, bg=self.bg, cursor="")
         inner = tk.Frame(
             outer,
             bg=bg,
             highlightthickness=1,
             highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
             cursor="",
         )
+        inner._tile_hovering = False  # type: ignore[attr-defined]
+        inner._tile_flash_when_disabled = bool(clickable_when_tiles_disabled)  # type: ignore[attr-defined]
+        inner._is_genre_tile = False  # type: ignore[attr-defined]
+        gap = _ACTION_TILE_ROW_GAP_PX
+        sc_text = _shortcut_caption_loose(shortcut)
 
         def on_click(_e: object) -> None:
             if not self._tiles_enabled and not clickable_when_tiles_disabled:
                 return
             command()
-
-        if compact:
-            icon_font = ("Helvetica", 17, "bold")
-            title_font = ("Helvetica", 10, "bold")
-            shortcut_font = ("Helvetica", 9)
-            pad_icon = (5, 2)
-            pad_title = (0, 1) if show_icon else (7, 1)
-            pad_shortcut = (0, 5)
-        else:
-            icon_font = ("Helvetica", 28, "bold")
-            title_font = ("Helvetica", 13, "bold")
-            shortcut_font = ("Helvetica", 11)
-            pad_icon = (11, 4)
-            pad_title = (0, 2) if show_icon else (12, 2)
-            pad_shortcut = (1, 11)
+            self._flash_tile_widget(inner)
 
         ic = tk.Label(
             inner,
             text=icon,
             bg=bg,
             fg=fg,
-            font=icon_font,
+            font=_ACTION_TILE_ICON_FONT,
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2175,7 +2857,7 @@ class App:
             text=title,
             bg=bg,
             fg=fg,
-            font=title_font,
+            font=_ACTION_TILE_TITLE_FONT,
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2183,33 +2865,43 @@ class App:
         )
         sc = tk.Label(
             inner,
-            text=shortcut,
+            text=sc_text,
             bg=bg,
             fg=shortcut_fg,
-            font=shortcut_font,
+            font=_ACTION_TILE_SHORTCUT_FONT,
             anchor="center",
             justify="center",
             highlightthickness=0,
             cursor="",
         )
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(0, weight=1)
+        inner.rowconfigure(4, weight=1)
         if show_icon:
-            ic.pack(fill="x", pady=pad_icon)
-        tl.pack(fill="x", pady=pad_title)
-        sc.pack(fill="x", pady=pad_shortcut)
-        bind_widgets = (outer, inner, tl, sc)
-        if show_icon:
-            for w in (outer, inner, ic, tl, sc):
-                w.bind("<Button-1>", on_click)
+            ic.grid(row=1, column=0, sticky="")
+            tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
+            sc.grid(row=3, column=0, sticky="")
+            bind_targets = (outer, inner, ic, tl, sc)
+            inner._tile_widgets = (ic, tl, sc)  # type: ignore[attr-defined]
         else:
-            for w in bind_widgets:
-                w.bind("<Button-1>", on_click)
-
+            tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
+            sc.grid(row=3, column=0, sticky="")
+            bind_targets = (outer, inner, tl, sc)
+            inner._tile_widgets = (tl, sc)  # type: ignore[attr-defined]
+        for w in bind_targets:
+            w.bind("<Button-1>", on_click)
+            w.bind("<Enter>", lambda _e, inn=inner: self._on_unified_action_tile_enter(inn))
+            w.bind("<Leave>", lambda _e, inn=inner: self._on_unified_action_tile_leave(inn))
         inner._tile_bg = bg  # type: ignore[attr-defined]
         inner._tile_active_bg = active_bg  # type: ignore[attr-defined]
         inner._tile_fg = fg  # type: ignore[attr-defined]
         inner._tile_shortcut_fg = shortcut_fg  # type: ignore[attr-defined]
-        inner._tile_widgets = (ic, tl, sc) if show_icon else (tl, sc)  # type: ignore[attr-defined]
-        inner.pack(fill="both", expand=True, padx=3, pady=0)
+        inner.pack(
+            fill="both",
+            expand=True,
+            padx=_ACTION_TILE_FRAME_PAD_PX,
+            pady=_ACTION_TILE_FRAME_PAD_PX,
+        )
         return outer, inner
 
     def _genre_action_tile(
@@ -2223,59 +2915,149 @@ class App:
         shortcut_fg: str,
         command: Callable[[], None],
     ) -> tuple[tk.Frame, tk.Frame]:
-        """Genre tile: genre name on top (dominant), shortcut digit centered below."""
+        """Genre slot: same three-row system (♪ / name / [n])."""
         outer = tk.Frame(parent, bg=self.bg, cursor="")
         inner = tk.Frame(
             outer,
             bg=bg,
             highlightthickness=1,
             highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
             cursor="",
         )
+        inner._tile_hovering = False  # type: ignore[attr-defined]
+        inner._tile_flash_when_disabled = False  # type: ignore[attr-defined]
+        inner._is_genre_tile = True  # type: ignore[attr-defined]
+        gap = _ACTION_TILE_ROW_GAP_PX
+        sc_text = _shortcut_caption_loose(f"[{digit.strip()}]")
 
         def on_click(_e: object) -> None:
             if not self._tiles_enabled:
                 return
             command()
+            self._flash_tile_widget(inner)
 
+        ic = tk.Label(
+            inner,
+            text="♪",
+            bg=bg,
+            fg=fg,
+            font=_ACTION_TILE_ICON_FONT,
+            anchor="center",
+            justify="center",
+            highlightthickness=0,
+            cursor="",
+        )
         tl = tk.Label(
             inner,
             text=genre_name.strip().upper(),
             bg=bg,
             fg=fg,
-            font=("Helvetica", 10, "bold"),
+            font=_ACTION_TILE_TITLE_FONT,
             anchor="center",
             justify="center",
-            wraplength=72,
+            wraplength=96,
             highlightthickness=0,
             cursor="",
         )
-        tl.pack(fill="x", padx=3, pady=(6, 1))
         sc = tk.Label(
             inner,
-            text=digit,
+            text=sc_text,
             bg=bg,
             fg=shortcut_fg,
-            font=("Helvetica", 12, "bold"),
+            font=_ACTION_TILE_SHORTCUT_FONT,
             anchor="center",
             justify="center",
             highlightthickness=0,
             cursor="",
         )
-        sc.pack(fill="x", padx=3, pady=(0, 6))
-        for w in (outer, inner, tl, sc):
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(0, weight=1)
+        inner.rowconfigure(4, weight=1)
+        ic.grid(row=1, column=0, sticky="")
+        tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
+        sc.grid(row=3, column=0, sticky="")
+        for w in (outer, inner, ic, tl, sc):
             w.bind("<Button-1>", on_click)
-
+            w.bind("<Enter>", lambda _e, inn=inner: self._on_unified_action_tile_enter(inn))
+            w.bind("<Leave>", lambda _e, inn=inner: self._on_unified_action_tile_leave(inn))
         inner._tile_bg = bg  # type: ignore[attr-defined]
         inner._tile_active_bg = active_bg  # type: ignore[attr-defined]
         inner._tile_fg = fg  # type: ignore[attr-defined]
         inner._tile_shortcut_fg = shortcut_fg  # type: ignore[attr-defined]
-        inner._tile_widgets = (tl, sc)  # type: ignore[attr-defined]
-        inner._is_genre_tile = True  # type: ignore[attr-defined]
-        inner.pack(fill="both", expand=True, padx=2, pady=0)
+        inner._tile_widgets = (ic, tl, sc)  # type: ignore[attr-defined]
+        inner._genre_name_label = tl  # type: ignore[attr-defined]
+        inner.pack(
+            fill="both",
+            expand=True,
+            padx=_ACTION_TILE_FRAME_PAD_PX,
+            pady=_ACTION_TILE_FRAME_PAD_PX,
+        )
         return outer, inner
 
+    def _unified_action_tile_hover_ok(self, inner: tk.Frame) -> bool:
+        if getattr(inner, "_is_genre_tile", False):
+            return self._tiles_enabled
+        if inner in (
+            self._tile_mode_cleanup_inner,
+            self._tile_mode_genre_inner,
+            self._tile_order_random_inner,
+            self._tile_order_in_order_inner,
+        ):
+            return True
+        return self._tiles_enabled
+
+    def _restore_unified_action_tile_surface(self, inner: tk.Frame) -> None:
+        inner._tile_hovering = False  # type: ignore[attr-defined]
+        if getattr(inner, "_is_genre_tile", False):
+            self._apply_genre_tile_colors()
+            return
+        if inner in (self._tile_mode_cleanup_inner, self._tile_mode_genre_inner):
+            self._apply_mode_switch_chrome()
+            return
+        if inner in (self._tile_order_random_inner, self._tile_order_in_order_inner):
+            self._apply_order_toggle_chrome()
+            return
+        self._set_action_tile_enabled(inner, self._tiles_enabled)
+
+    def _on_unified_action_tile_enter(self, inner: tk.Frame, _e: Optional[object] = None) -> None:
+        if getattr(inner, "_tile_hovering", False):
+            return
+        if not self._unified_action_tile_hover_ok(inner):
+            return
+        widgets: tuple[tk.Label, ...] = getattr(inner, "_tile_widgets", ())
+        if not widgets:
+            return
+        sc = widgets[-1]
+        try:
+            base = inner.cget("bg")
+        except tk.TclError:
+            return
+        hover_bg = _mix_hex_toward_white(base, _ACTION_TILE_HOVER_MIX)
+        hb = self.action_tile_border_hover
+        fg_main = str(getattr(inner, "_tile_fg", self.fg))
+        fg_sc = str(getattr(inner, "_tile_shortcut_fg", self.muted))
+        inner._tile_hovering = True  # type: ignore[attr-defined]
+        try:
+            inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor="hand2")
+            for w in widgets:
+                w.configure(bg=hover_bg, fg=fg_sc if w is sc else fg_main, cursor="hand2")
+        except tk.TclError:
+            pass
+        try:
+            inner.master.configure(cursor="hand2")  # type: ignore[union-attr]
+        except tk.TclError:
+            pass
+
+    def _on_unified_action_tile_leave(self, inner: tk.Frame, _e: Optional[object] = None) -> None:
+        try:
+            inner.master.configure(cursor="")  # type: ignore[union-attr]
+        except tk.TclError:
+            pass
+        self._restore_unified_action_tile_surface(inner)
+
     def _set_action_tile_enabled(self, inner: tk.Frame, on: bool) -> None:
+        inner._tile_hovering = False  # type: ignore[attr-defined]
         widgets: tuple[tk.Label, ...] = getattr(inner, "_tile_widgets", ())
         if not widgets:
             return
@@ -2283,18 +3065,32 @@ class App:
         bg_n = str(getattr(inner, "_tile_bg", self.panel))
         fg_n = str(getattr(inner, "_tile_fg", self.fg))
         sc_fg = str(getattr(inner, "_tile_shortcut_fg", self.muted))
+        hlb = self.panel_border if on else self.trough
         if on:
-            inner.configure(cursor="", bg=bg_n)
+            inner.configure(
+                cursor="hand2",
+                bg=bg_n,
+                highlightthickness=1,
+                highlightbackground=hlb,
+                highlightcolor=hlb,
+            )
             for w in widgets:
                 w.configure(
                     bg=bg_n,
                     fg=fg_n if w is not shortcut_w else sc_fg,
                     highlightthickness=0,
+                    cursor="hand2",
                 )
         else:
-            inner.configure(cursor="", bg=self.trough)
+            inner.configure(
+                cursor="",
+                bg=self.trough,
+                highlightthickness=1,
+                highlightbackground=hlb,
+                highlightcolor=hlb,
+            )
             for w in widgets:
-                w.configure(bg=self.trough, fg=self.disabled_fg, highlightthickness=0)
+                w.configure(bg=self.trough, fg=self.disabled_fg, highlightthickness=0, cursor="")
 
     def _on_help_key(self, _e: object) -> Optional[str]:
         if not self._shortcuts_active():
@@ -2314,6 +3110,7 @@ class App:
             (inner_left, left_selected),
             (inner_right, not left_selected),
         ):
+            inner._tile_hovering = False  # type: ignore[attr-defined]
             if active:
                 inner._tile_bg = self.accent  # type: ignore[attr-defined]
                 inner._tile_active_bg = self.accent_active  # type: ignore[attr-defined]
@@ -2329,7 +3126,7 @@ class App:
                 bg = self.skip_bg
                 hlb = self.panel_border
             try:
-                inner.configure(bg=bg, highlightthickness=1, highlightbackground=hlb, highlightcolor=hlb)
+                inner.configure(bg=bg, highlightthickness=1, highlightbackground=hlb, highlightcolor=hlb, cursor="")
             except tk.TclError:
                 pass
             widgets: tuple[tk.Label, ...] = getattr(inner, "_tile_widgets", ())
@@ -2340,7 +3137,7 @@ class App:
             fg_sc = str(inner._tile_shortcut_fg)  # type: ignore[attr-defined]
             for w in widgets:
                 try:
-                    w.configure(bg=bg, fg=fg_t if w is not shortcut_w else fg_sc)
+                    w.configure(bg=bg, fg=fg_t if w is not shortcut_w else fg_sc, cursor="")
                 except tk.TclError:
                     pass
 
@@ -2351,7 +3148,7 @@ class App:
         self._apply_dual_tile_selection_chrome(
             self._tile_mode_cleanup_inner,
             self._tile_mode_genre_inner,
-            left_selected=(self._sorting_mode == "cleanup"),
+            left_selected=(self._sorting_mode == "swipe"),
         )
 
     def _reset_jump_time_button_captions(self) -> None:
@@ -2425,11 +3222,11 @@ class App:
         self._reset_jump_time_button_captions()
         if self.lbl_mode_header is not None:
             self.lbl_mode_header.configure(
-                text="MODE: TINDER" if mode == "cleanup" else "MODE: GENRE",
+                text="MODE: SWIPE" if mode == "swipe" else "MODE: GRID",
             )
         self._apply_mode_switch_chrome()
         if self.cleanup_outer is not None and self.genre_actions is not None:
-            if mode == "cleanup":
+            if mode == "swipe":
                 self.genre_actions.pack_forget()
                 self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 8))
             else:
@@ -2438,6 +3235,9 @@ class App:
         self._refresh_stats()
         self._refresh_session_stats()
         self._refresh_all_widget_chrome()
+        if self._music_root is not None:
+            trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
+            self._folders = ensure_sort_folders(self._music_root, trip)
 
     def _sync_genre_tile_titles(self) -> None:
         for i, lab in enumerate(self._genre_title_labels):
@@ -2468,11 +3268,25 @@ class App:
                 pass
 
     def _reset_genres_to_defaults_and_persist(self) -> None:
-        self._genre_labels = list(DEFAULT_GENRE_LABELS)
-        self._genre_colors = list(DEFAULT_GENRE_COLORS)
-        save_genre_config(self._genre_labels, self._genre_colors)
+        gid = str(self._mode_preset_store.get("active_grid_preset_id") or "")
+        gp = preset_by_id(self._mode_preset_store, gid)
+        if not gp or gp.get("mode") != "grid":
+            return
+        blob = _coerce_grid_preset_blob(
+            {
+                "id": gid,
+                "name": gp.get("name", "Grid"),
+                "mode": "grid",
+                "labels": list(DEFAULT_GENRE_LABELS),
+                "colors": list(DEFAULT_GENRE_COLORS),
+                "folders": [safe_genre_folder_name(lb) for lb in DEFAULT_GENRE_LABELS],
+            },
+        )
+        if blob:
+            self._upsert_preset_in_store(blob)
+        self._apply_track_labels_from_preset_store()
         if self._music_root is not None:
-            ensure_genre_folders(self._music_root, self._genre_labels)
+            ensure_genre_folders(self._music_root, self._genre_folder_names)
         self._sync_genre_tile_titles()
         self._apply_genre_tile_colors()
         self._refresh_stats()
@@ -2481,13 +3295,14 @@ class App:
     def _open_edit_genres_dialog(self) -> None:
         self._prepare_native_dialog()
         top = tk.Toplevel(self.root)
-        top.title("Edit genres")
+        top.title("Edit grid preset")
         top.configure(bg=self.bg)
         try:
             top.transient(self.root)
         except tk.TclError:
             pass
         entries: list[tk.Entry] = []
+        folder_entries: list[tk.Entry] = []
         color_vars: list[tk.StringVar] = []
         palette_names = [n for n, _ in GENRE_PALETTE]
         for i in range(9):
@@ -2498,7 +3313,7 @@ class App:
             )
             e = tk.Entry(
                 row,
-                width=28,
+                width=18,
                 bg=self.panel,
                 fg=self.fg,
                 insertbackground=self.accent,
@@ -2508,8 +3323,24 @@ class App:
                 font=("Helvetica", 11),
             )
             e.insert(0, self._genre_labels[i])
-            e.pack(side="left", fill="x", expand=True, padx=(8, 6))
+            e.pack(side="left", fill="x", expand=True, padx=(8, 4))
             entries.append(e)
+
+            fe = tk.Entry(
+                row,
+                width=14,
+                bg=self.panel,
+                fg=self.fg,
+                insertbackground=self.accent,
+                highlightthickness=1,
+                highlightbackground=self.panel_border,
+                highlightcolor=self.accent,
+                font=("Helvetica", 10),
+            )
+            fn0 = self._genre_folder_names[i] if i < len(self._genre_folder_names) else safe_genre_folder_name(self._genre_labels[i])
+            fe.insert(0, fn0)
+            fe.pack(side="left", padx=(0, 4))
+            folder_entries.append(fe)
 
             var_c = tk.StringVar(value=_palette_name_for_hex(self._genre_colors[i]))
             color_vars.append(var_c)
@@ -2563,21 +3394,38 @@ class App:
                 ent = entries[idx]
                 ent.delete(0, tk.END)
                 ent.insert(0, DEFAULT_GENRE_LABELS[idx])
+                folder_entries[idx].delete(0, tk.END)
+                folder_entries[idx].insert(0, safe_genre_folder_name(DEFAULT_GENRE_LABELS[idx]))
                 color_vars[idx].set(_palette_name_for_hex(DEFAULT_GENRE_COLORS[idx]))
 
         def save_and_close() -> None:
             new_labels: list[str] = []
             new_colors: list[str] = []
+            new_folders: list[str] = []
             for j, ent in enumerate(entries):
                 t = ent.get().strip()
                 new_labels.append(t if t else DEFAULT_GENRE_LABELS[j])
                 name = color_vars[j].get()
                 new_colors.append(GENRE_PALETTE_NAME_TO_HEX.get(name, DEFAULT_GENRE_COLORS[j]))
-            self._genre_labels = new_labels[:9]
-            self._genre_colors = new_colors[:9]
-            save_genre_config(self._genre_labels, self._genre_colors)
+                rawf = folder_entries[j].get().strip()
+                new_folders.append(rawf if rawf else safe_genre_folder_name(new_labels[j]))
+            gid = str(self._mode_preset_store.get("active_grid_preset_id") or "")
+            gp = preset_by_id(self._mode_preset_store, gid) or {}
+            blob = _coerce_grid_preset_blob(
+                {
+                    "id": gid,
+                    "name": str(gp.get("name", "Grid")),
+                    "mode": "grid",
+                    "labels": new_labels[:9],
+                    "colors": new_colors[:9],
+                    "folders": new_folders[:9],
+                },
+            )
+            if blob:
+                self._upsert_preset_in_store(blob)
+            self._apply_track_labels_from_preset_store()
             if self._music_root is not None:
-                ensure_genre_folders(self._music_root, self._genre_labels)
+                ensure_genre_folders(self._music_root, self._genre_folder_names)
             self._sync_genre_tile_titles()
             self._apply_genre_tile_colors()
             self._refresh_stats()
@@ -2603,10 +3451,10 @@ class App:
         bs.pack(side="left", padx=6)
         bc.pack(side="left", padx=6)
 
-        top.minsize(720, 480)
+        top.minsize(880, 520)
         top.update_idletasks()
-        tw = max(720, top.winfo_reqwidth())
-        th = max(480, top.winfo_reqheight())
+        tw = max(880, top.winfo_reqwidth())
+        th = max(520, top.winfo_reqheight())
         sw = top.winfo_screenwidth()
         sh = top.winfo_screenheight()
         x = max(0, (sw - tw) // 2)
@@ -2625,8 +3473,8 @@ class App:
                 return None
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(self._skip_flash_widget())
             self.skip_current()
+            self._flash_control(self._skip_flash_widget())
             return "break"
 
         return handler
@@ -2637,8 +3485,8 @@ class App:
                 return None
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(self._undo_flash_widget())
             self.undo_last()
+            self._flash_control(self._undo_flash_widget())
             return "break"
 
         return handler
@@ -2649,8 +3497,8 @@ class App:
                 return None
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(self._undo_flash_widget())
             self.undo_all_to_session_start()
+            self._flash_control(self._undo_flash_widget())
             return "break"
 
         return handler
@@ -2659,12 +3507,12 @@ class App:
         def handler(_e: object) -> Optional[str]:
             if not self._shortcuts_active():
                 return None
-            if self._sorting_mode != "cleanup":
+            if self._sorting_mode != "swipe":
                 return "break"
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(flash)
             self.sort_current(bucket)
+            self._flash_control(flash)
             return "break"
 
         return handler
@@ -2674,22 +3522,22 @@ class App:
             return None
         if not self._tiles_enabled:
             return "break"
-        if self._sorting_mode == "genre":
+        if self._sorting_mode == "grid":
             self._tinder_kb_jump_error_digit = None
             gsym = f"GenreKey-{digit_1_to_9}"
             if self._suppress_key_repeat(gsym):
                 return "break"
             idx = digit_1_to_9 - 1
             if 0 <= idx < len(self._genre_tile_inners):
+                self.sort_current_genre(idx)
                 self._flash_control(self._genre_tile_inners[idx])
-            self.sort_current_genre(idx)
             return "break"
         if digit_1_to_9 == 9:
             self._tinder_kb_jump_error_digit = None
             if self._suppress_key_repeat("9"):
                 return "break"
-            self._flash_control(self._jump_btn_outro)
             self.jump_to_outro()
+            self._flash_control(self._jump_btn_outro)
             return "break"
         sec_map = {1: 0, 2: 30, 3: 60, 4: 90, 5: 120, 6: 180, 7: 240, 8: 300}
         sec = sec_map[digit_1_to_9]
@@ -2702,8 +3550,8 @@ class App:
         if self._suppress_key_repeat(f"Key-{digit_1_to_9}"):
             return "break"
         btn = self._preset_jump_buttons.get(sec)
-        self._flash_control(btn)
         self.jump_to(float(sec), jump_ui_key=sec)
+        self._flash_control(btn)
         return "break"
 
     def _build_ui(self) -> None:
@@ -2797,30 +3645,28 @@ class App:
         o_rnd, self._tile_order_random_inner = self._action_tile(
             order_tiles,
             "🔀",
-            "RANDOM",
-            "Shuffle",
+            "Random",
+            "[U]",
             self.skip_bg,
             self.skip_active,
             self.fg,
             self.muted,
             lambda: self._on_pick_track_order("random"),
             clickable_when_tiles_disabled=True,
-            compact=True,
         )
         o_io, self._tile_order_in_order_inner = self._action_tile(
             order_tiles,
             "📋",
-            "IN ORDER",
-            "A–Z path",
+            "In order",
+            "[O]",
             self.skip_bg,
             self.skip_active,
             self.fg,
             self.muted,
             lambda: self._on_pick_track_order("in_order"),
             clickable_when_tiles_disabled=True,
-            compact=True,
         )
-        o_rnd.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        o_rnd.pack(side="left", padx=(0, _ACTION_TILE_GRID_GAP_PX), fill="x", expand=True)
         o_io.pack(side="left", fill="x", expand=True)
         self._apply_order_toggle_chrome()
 
@@ -2862,30 +3708,28 @@ class App:
         o_mc, self._tile_mode_cleanup_inner = self._action_tile(
             mode_row,
             "💘",
-            "TINDER",
-            "Swipe row",
+            "Swipe",
+            "[T]",
             self.skip_bg,
             self.skip_active,
             self.fg,
             self.muted,
-            lambda: self._set_sorting_mode("cleanup"),
+            lambda: self._set_sorting_mode("swipe"),
             clickable_when_tiles_disabled=True,
-            compact=True,
         )
         o_mg, self._tile_mode_genre_inner = self._action_tile(
             mode_row,
             "🎵",
-            "GENRE",
-            "Nine tiles",
+            "Grid",
+            "[G]",
             self.skip_bg,
             self.skip_active,
             self.fg,
             self.muted,
-            lambda: self._set_sorting_mode("genre"),
+            lambda: self._set_sorting_mode("grid"),
             clickable_when_tiles_disabled=True,
-            compact=True,
         )
-        o_mc.pack(side="left", padx=(8, 6), fill="x", expand=True)
+        o_mc.pack(side="left", padx=(8, _ACTION_TILE_GRID_GAP_PX), fill="x", expand=True)
         o_mg.pack(side="left", fill="x", expand=True)
 
         self._apply_mode_switch_chrome()
@@ -2905,7 +3749,7 @@ class App:
         status_above_progress.pack(fill="x", padx=24, pady=(2, 6))
         self.lbl_mode_header = tk.Label(
             status_above_progress,
-            text="MODE: TINDER" if self._sorting_mode == "cleanup" else "MODE: GENRE",
+            text="MODE: SWIPE" if self._sorting_mode == "swipe" else "MODE: GRID",
             bg=self.bg,
             fg=self.accent,
             font=("Helvetica", 12, "bold"),
@@ -3099,49 +3943,50 @@ class App:
 
         transport = tk.Frame(self._main_upper, bg=self.bg)
         transport.pack(fill="x", padx=24, pady=(8, 10))
+        transport.rowconfigure(0, minsize=118)
         for uc in range(4):
             transport.columnconfigure(uc, weight=1, uniform="utility_transport")
-        u_gap = 6
-        self.btn_play = self._dj_button(
+        u_gap = _ACTION_TILE_GRID_GAP_PX
+        self.btn_play = self._build_transport_utility_cell(
             transport,
-            "Play",
-            self.toggle_play,
-            kind="transport",
-            width=0,
-            padx=12,
-            pady=10,
+            column=0,
+            padx_after=u_gap,
+            icon_initial="▶",
+            label_text="Play",
+            shortcut_text="[Space]",
+            command=self.toggle_play,
+            role="play",
         )
-        self.btn_play.grid(row=0, column=0, sticky="nsew", padx=(0, u_gap))
-        self.btn_replay = self._dj_button(
+        self.btn_replay = self._build_transport_utility_cell(
             transport,
-            "Replay",
-            self._replay_active_jump_point,
-            kind="transport",
-            width=0,
-            padx=12,
-            pady=10,
+            column=1,
+            padx_after=u_gap,
+            icon_initial="↻",
+            label_text="Replay",
+            shortcut_text="[R]",
+            command=self._replay_active_jump_point,
+            role="replay",
         )
-        self.btn_replay.grid(row=0, column=1, sticky="nsew", padx=(0, u_gap))
-        self.btn_skip = self._dj_button(
+        self.btn_skip = self._build_transport_utility_cell(
             transport,
-            "Skip",
-            self.skip_current,
-            kind="transport",
-            width=0,
-            padx=12,
-            pady=10,
+            column=2,
+            padx_after=u_gap,
+            icon_initial="⏭",
+            label_text="Skip",
+            shortcut_text="[Enter]",
+            command=self.skip_current,
+            role="skip",
         )
-        self.btn_skip.grid(row=0, column=2, sticky="nsew", padx=(0, u_gap))
-        self.btn_undo = self._dj_button(
+        self.btn_undo = self._build_transport_utility_cell(
             transport,
-            "Undo",
-            self.undo_last,
-            kind="transport",
-            width=0,
-            padx=12,
-            pady=10,
+            column=3,
+            padx_after=0,
+            icon_initial="↶",
+            label_text="Undo",
+            shortcut_text="[Z]",
+            command=self.undo_last,
+            role="undo",
         )
-        self.btn_undo.grid(row=0, column=3, sticky="nsew", padx=(0, 0))
 
         self.cleanup_outer = tk.Frame(self._main_action_shell, bg=self.bg)
         self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 8))
@@ -3158,38 +4003,38 @@ class App:
             tinder_sort_row,
             "😊",
             "KEEP",
-            "→",
+            "[→]",
             self.accent,
             self.accent_active,
             self.teal_on_fg,
             "#1A1A1A",
             lambda: self.sort_current("keep"),
         )
-        o_k.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+        o_k.grid(row=0, column=0, sticky="nsew", padx=_ACTION_TILE_GRID_GAP_PX, pady=_ACTION_TILE_GRID_GAP_PX)
         o_a, self._tile_archive_inner = self._action_tile(
             tinder_sort_row,
             "☹️",
             "ARCHIVE",
-            "←",
+            "[←]",
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
             "#1A1A1A",
             lambda: self.sort_current("archive"),
         )
-        o_a.grid(row=0, column=1, sticky="nsew", padx=3, pady=3)
+        o_a.grid(row=0, column=1, sticky="nsew", padx=_ACTION_TILE_GRID_GAP_PX, pady=_ACTION_TILE_GRID_GAP_PX)
         o_f, self._tile_favorite_inner = self._action_tile(
             tinder_sort_row,
             "🤩",
             "FAVORITE",
-            "↑",
+            "[↑]",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
             "#1A1A1A",
             lambda: self.sort_current("favorites"),
         )
-        o_f.grid(row=0, column=2, sticky="nsew", padx=3, pady=3)
+        o_f.grid(row=0, column=2, sticky="nsew", padx=_ACTION_TILE_GRID_GAP_PX, pady=_ACTION_TILE_GRID_GAP_PX)
 
         # Aliases for keyboard flash (tile inner frames)
         self.btn_keep = self._tile_keep_inner  # type: ignore[assignment]
@@ -3223,16 +4068,16 @@ class App:
                 sc_m,
                 lambda idx=i: self.sort_current_genre(idx),
             )
-            o_g.grid(row=row, column=col, sticky="nsew", padx=3, pady=3)
-            tw = getattr(inn_g, "_tile_widgets", ())
-            if tw and isinstance(tw[0], tk.Label):
-                self._genre_title_labels.append(tw[0])
+            o_g.grid(row=row, column=col, sticky="nsew", padx=_ACTION_TILE_GRID_GAP_PX, pady=_ACTION_TILE_GRID_GAP_PX)
+            name_lab = getattr(inn_g, "_genre_name_label", None)
+            if isinstance(name_lab, tk.Label):
+                self._genre_title_labels.append(name_lab)
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
 
         tk.Label(
             self.genre_actions,
-            text="Edit genres in Settings",
+            text="Edit grid in Settings",
             bg=self.bg,
             fg=self.muted,
             font=("Helvetica", 9),
@@ -3240,7 +4085,7 @@ class App:
         ).pack(fill="x", pady=(4, 0))
 
         self.genre_actions.pack_forget()
-        if self._sorting_mode == "genre":
+        if self._sorting_mode == "grid":
             self.cleanup_outer.pack_forget()
             self.genre_actions.pack(fill="both", expand=True, padx=24, pady=(0, 8))
 
@@ -3278,7 +4123,7 @@ class App:
                 return f"✕ Archive · {name}"
             if sb == "favorites":
                 return f"★ Favorite · {name}"
-            if sb == "genre":
+            if sb in ("genre", "grid"):
                 g = self._queue_ellipsis(p.parent.name if p.parent else "")
                 return f"{g} · {name}"
             return name
@@ -3498,18 +4343,32 @@ class App:
         stack = tk.Frame(inner_pad, bg=self.panel)
         stack.pack(fill="x")
         wl = _GUIDE_SIDEBAR_TEXT_WRAP
+        self._guide_swipe_line_labels.clear()
+        swipe_f = tk.Frame(stack, bg=self.panel)
+        swipe_f.pack(fill="x", pady=(0, 10))
+        tk.Label(swipe_f, text="▶ SWIPE", bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
+        swipe_intro = [
+            f"{self._swipe_labels[0]} (→)",
+            f"{self._swipe_labels[1]} (←)",
+            f"{self._swipe_labels[2]} (↑)",
+            "Enter  Skip",
+            "Z  Undo last step",
+            "⌃Z  Undo all (back to folder load)",
+        ]
+        for line in swipe_intro:
+            lb = tk.Label(
+                swipe_f,
+                text=line,
+                bg=self.panel,
+                fg=self.fg,
+                font=body,
+                anchor="w",
+                justify="left",
+                wraplength=wl,
+            )
+            lb.pack(anchor="w", pady=(2, 0), fill="x")
+            self._guide_swipe_line_labels.append(lb)
         specs = [
-            (
-                "▶ TINDER",
-                [
-                    "😊  Keep (→)",
-                    "☹️  Archive (←)",
-                    "🤩  Favorite (↑)",
-                    "Enter  Skip",
-                    "Z  Undo last step",
-                    "⌃Z  Undo all (back to folder load)",
-                ],
-            ),
             (
                 "♪ PLAYBACK",
                 [
@@ -3522,12 +4381,12 @@ class App:
             (
                 "⏱ JUMP TO",
                 [
-                    "Tinder mode: 1–9 jump",
+                    "Swipe mode: 1–9 jump",
                     "1–5  → 0:00 … 2:00",
                     "6–8  → 3:00 … 5:00",
                     "9  → Outro (last 60s)",
                     "5  = 2:00 (long-track default)",
-                    "Genre mode: use mouse here",
+                    "Grid mode: use mouse here",
                 ],
             ),
             (
@@ -3538,13 +4397,13 @@ class App:
                 ],
             ),
             (
-                "◆ GENRE MODE",
+                "◆ GRID MODE",
                 [
-                    "Switch: Tinder / Genre tabs",
-                    "1–9  Sort to genre folder",
+                    "Switch: Swipe / Grid tabs",
+                    "1–9  Sort to grid folder",
                     "Enter  Skip · Z  Undo",
                     "⌃Z  Undo all",
-                    "Edit genres in Settings (labels + colors)",
+                    "Edit grid in Settings (labels + colors + folders)",
                 ],
             ),
         ]
@@ -3640,6 +4499,9 @@ class App:
     def _flash_control(self, w: Optional[tk.Misc]) -> None:
         if w is None:
             return
+        if getattr(w, "_utility_transport_cell", False):
+            self._flash_transport_utility_cell(w)  # type: ignore[arg-type]
+            return
         if isinstance(w, tk.Button):
             self._flash_button_widget(w)
         elif isinstance(w, tk.Label) and w in self._jump_buttons:
@@ -3665,21 +4527,12 @@ class App:
             self._flash_after_ids.pop(key, None)
             self._refresh_all_widget_chrome()
 
-        if btn in (self.btn_play, self.btn_replay, self.btn_skip, self.btn_undo):
-            t = self.time_text_fg
-            btn.configure(
-                bg=self.transport_grey_active,
-                fg=t,
-                activebackground=self.transport_grey_active,
-                activeforeground=t,
-            )
-        else:
-            btn.configure(
-                bg=self.accent_active,
-                fg=self.teal_on_fg,
-                activebackground=self.accent_btn_press,
-                activeforeground=self.teal_on_fg,
-            )
+        btn.configure(
+            bg=self.accent_active,
+            fg=self.teal_on_fg,
+            activebackground=self.accent_btn_press,
+            activeforeground=self.teal_on_fg,
+        )
         self._flash_after_ids[key] = btn.after(95, restore)
 
     def _flash_jump_label_widget(self, lbl: tk.Label) -> None:
@@ -3704,7 +4557,8 @@ class App:
         self._flash_after_ids[key] = lbl.after(95, restore)
 
     def _flash_tile_widget(self, inner: tk.Frame) -> None:
-        if not self._tiles_enabled:
+        allow = self._tiles_enabled or bool(getattr(inner, "_tile_flash_when_disabled", False))
+        if not allow:
             return
         key = id(inner)
         prev_after = self._flash_after_ids.pop(key, None)
@@ -3749,9 +4603,9 @@ class App:
                 return None
             if self._suppress_key_repeat(keysym):
                 return "break"
+            fn()
             if flash is not None:
                 self._flash_control(flash)
-            fn()
             return "break"
 
         return handler
@@ -3771,8 +4625,8 @@ class App:
             self._tinder_kb_jump_error_plus30 = False
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(self._jump_btn_plus)
             self.jump_delta(30)
+            self._flash_control(self._jump_btn_plus)
             return "break"
 
         return handler
@@ -3789,8 +4643,8 @@ class App:
             self._last_replay_key_ts = now
             if self._suppress_key_repeat(keysym):
                 return "break"
-            self._flash_control(self.btn_replay)
             self._replay_active_jump_point()
+            self._flash_control(self.btn_replay)
             return "break"
 
         return handler
@@ -3844,6 +4698,14 @@ class App:
         b("<Left>", self._kbd_cleanup_sort("Left", "archive", self.btn_archive))
         b("<Up>", self._kbd_cleanup_sort("Up", "favorites", self.btn_favorite))
         b("<Down>", self._kbd("Down", self._replay_from_playback_start, self.btn_play))
+        b("<KeyPress-t>", self._kbd("t", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
+        b("<KeyPress-T>", self._kbd("T", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
+        b("<KeyPress-g>", self._kbd("g", lambda: self._set_sorting_mode("grid"), self._tile_mode_genre_inner))
+        b("<KeyPress-G>", self._kbd("G", lambda: self._set_sorting_mode("grid"), self._tile_mode_genre_inner))
+        b("<KeyPress-u>", self._kbd("u", lambda: self._on_pick_track_order("random"), self._tile_order_random_inner))
+        b("<KeyPress-U>", self._kbd("U", lambda: self._on_pick_track_order("random"), self._tile_order_random_inner))
+        b("<KeyPress-o>", self._kbd("o", lambda: self._on_pick_track_order("in_order"), self._tile_order_in_order_inner))
+        b("<KeyPress-O>", self._kbd("O", lambda: self._on_pick_track_order("in_order"), self._tile_order_in_order_inner))
         b("<KeyPress-r>", self._kbd_replay("r"))
         b("<KeyPress-R>", self._kbd_replay("R"))
         b("<KeyPress-z>", self._kbd_undo("z"))
@@ -3918,7 +4780,8 @@ class App:
         parts: list[str] = []
         for idx in range(9):
             lab = self._genre_labels[idx]
-            d = base_gen / safe_genre_folder_name(lab)
+            fn = self._genre_folder_names[idx] if idx < len(self._genre_folder_names) else safe_genre_folder_name(lab)
+            d = base_gen / safe_genre_folder_name(fn)
             n = _count_files_in_dir(d) if d.is_dir() else 0
             parts.append(f"{lab}: {n}")
         nq = len(self._queue)
@@ -3929,13 +4792,14 @@ class App:
             self.lbl_stats.configure(text="")
             self._update_content_wraplengths()
             return
-        if self._sorting_mode == "genre":
+        if self._sorting_mode == "grid":
             self.lbl_stats.configure(text=self._genre_stats_text())
         else:
             k = _count_files_in_dir(self._folders["keep"])
             a = _count_files_in_dir(self._folders["archive"])
             f = _count_files_in_dir(self._folders["favorites"])
-            base = f"Kept: {k}   Archived: {a}   Favorites: {f}"
+            s0, s1, s2 = (self._swipe_labels + ["?", "?", "?"])[:3]
+            base = f"{s0}: {k}   {s1}: {a}   {s2}: {f}"
             self.lbl_stats.configure(text=base)
         self._update_content_wraplengths()
 
@@ -3979,7 +4843,7 @@ class App:
             f"Favorites: {self._session_favorites}",
             f"Skipped: {self._session_skipped}",
         ]
-        if self._sorting_mode == "genre":
+        if self._sorting_mode == "grid":
             parts.append(f"Genres sorted: {self._session_genre}")
         line1 = "  ·  ".join(parts)
         line2 = f"Keep rate: {kr:.0f}%  ·  Session: {sess}"
@@ -3992,7 +4856,7 @@ class App:
             self._session_archived = max(0, self._session_archived - 1)
         elif bucket == "favorites":
             self._session_favorites = max(0, self._session_favorites - 1)
-        elif bucket == "genre":
+        elif bucket in ("genre", "grid"):
             self._session_genre = max(0, self._session_genre - 1)
         self._refresh_session_stats()
 
@@ -4027,7 +4891,7 @@ class App:
         self._settings_top = top
         top.title("Settings")
         top.configure(bg=self.bg)
-        top.minsize(480, 420)
+        top.minsize(560, 520)
         try:
             top.transient(self.root)
         except tk.TclError:
@@ -4215,18 +5079,53 @@ class App:
         row_mode = tk.Frame(inner, bg=self.panel)
         row_mode.pack(anchor="w", pady=(6, 6))
         tk.Label(row_mode, text="Mode:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
-        v_mode = tk.StringVar(
-            master=top,
-            value="Tinder Mode" if read_user_settings()["default_mode_on_startup"] == "cleanup" else "Genre Mode",
-        )
+        ini = read_user_settings()
+        dm_cur = _norm_sorting_mode_value(ini.get("default_mode_on_startup", "swipe"))
+        v_mode = tk.StringVar(master=top, value="Swipe" if dm_cur == "swipe" else "Grid")
 
         def on_mode_change(*_a: object) -> None:
-            key: SortingMode = "cleanup" if v_mode.get() == "Tinder Mode" else "genre"
+            key: SortingMode = "swipe" if v_mode.get() == "Swipe" else "grid"
             patch_user_settings(default_mode_on_startup=key)
 
-        om_mode = tk.OptionMenu(row_mode, v_mode, "Tinder Mode", "Genre Mode", command=on_mode_change)
+        om_mode = tk.OptionMenu(row_mode, v_mode, "Swipe", "Grid", command=on_mode_change)
         self._style_tk_option_menu_transport(om_mode)
         om_mode.pack(side="left", padx=(8, 0))
+
+        tk.Label(
+            inner,
+            text="Startup preset (optional)",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(10, 0))
+        row_sp = tk.Frame(inner, bg=self.panel)
+        row_sp.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_sp, text="Preset:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        all_presets_list = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict)]
+        startup_labels = ["(none)"] + [format_preset_menu_label(p) for p in all_presets_list]
+        cur_sid = read_user_settings().get("startup_preset_id")
+        cur_startup_lbl = "(none)"
+        if isinstance(cur_sid, str) and cur_sid.strip():
+            cp = preset_by_id(self._mode_preset_store, cur_sid.strip())
+            if cp:
+                cur_startup_lbl = format_preset_menu_label(cp)
+        if cur_startup_lbl not in startup_labels:
+            cur_startup_lbl = "(none)"
+        v_sp = tk.StringVar(master=top, value=cur_startup_lbl)
+
+        def on_startup_preset(*_a: object) -> None:
+            lab = v_sp.get()
+            if lab == "(none)":
+                patch_user_settings(startup_preset_id=None)
+                return
+            for p in all_presets_list:
+                if format_preset_menu_label(p) == lab:
+                    patch_user_settings(startup_preset_id=str(p.get("id")))
+                    return
+
+        om_sp = tk.OptionMenu(row_sp, v_sp, *startup_labels, command=on_startup_preset)
+        self._style_tk_option_menu_transport(om_sp)
+        om_sp.pack(side="left", padx=(8, 0))
 
         tk.Label(
             inner,
@@ -4321,64 +5220,274 @@ class App:
             font=("Helvetica", 10),
         ).pack(anchor="w", pady=(4, 8))
 
-        sep_genre = tk.Frame(inner, bg=self.panel_border, height=1)
-        sep_genre.pack_propagate(False)
-        sep_genre.pack(fill="x", pady=(0, 10))
+        sep_mp = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_mp.pack_propagate(False)
+        sep_mp.pack(fill="x", pady=(0, 10))
 
         tk.Label(
             inner,
-            text="Genre settings",
+            text="Mode presets",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w")
         tk.Label(
             inner,
-            text="Edit genre labels and colors, or reset to defaults.",
+            text="Swipe presets set the three hotkey targets; grid presets define nine folders under GENRES/.",
             bg=self.panel,
             fg=self.muted,
             font=("Helvetica", 9),
-            wraplength=440,
+            wraplength=480,
             justify="left",
             anchor="w",
         ).pack(anchor="w", pady=(4, 8))
 
-        row_genre = tk.Frame(inner, bg=self.panel)
-        row_genre.pack(anchor="w", pady=(0, 8))
+        def _settings_refresh_from_store() -> None:
+            self._mode_preset_store = load_mode_preset_store()
+            self._apply_track_labels_from_preset_store()
+            self._sync_swipe_tiles_from_preset()
+            self._sync_genre_tile_titles()
+            self._apply_genre_tile_colors()
+            self._refresh_shortcut_guide_swipe_lines()
+            if self._music_root is not None:
+                trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
+                self._folders = ensure_sort_folders(self._music_root, trip)
+                ensure_genre_folders(self._music_root, list(active_grid_preset(self._mode_preset_store)["folders"][:9]))
+            self._refresh_stats()
+            self.root.after(10, self._refresh_all_widget_chrome)
 
-        def on_edit_genres_from_settings() -> None:
+        def _settings_reopen() -> None:
+            close()
+            self.root.after(80, self._open_settings_dialog)
+
+        swipe_presets = presets_of_mode(self._mode_preset_store, "swipe")
+        grid_presets = presets_of_mode(self._mode_preset_store, "grid")
+        swipe_menu_labs = [format_preset_menu_label(p) for p in swipe_presets] or ["Swipe · Default"]
+        grid_menu_labs = [format_preset_menu_label(p) for p in grid_presets] or ["Grid · Default"]
+
+        row_ap = tk.Frame(inner, bg=self.panel)
+        row_ap.pack(anchor="w", pady=(0, 4))
+        tk.Label(row_ap, text="Swipe:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        aid = str(self._mode_preset_store.get("active_swipe_preset_id") or "")
+
+        def _sw_lab(pid: str) -> str:
+            x = preset_by_id(self._mode_preset_store, pid)
+            return format_preset_menu_label(x) if x else swipe_menu_labs[0]
+
+        v_sw_act = tk.StringVar(master=top, value=_sw_lab(aid))
+
+        def on_sw_act(*_a: object) -> None:
+            lab = v_sw_act.get()
+            for p in swipe_presets:
+                if format_preset_menu_label(p) == lab:
+                    self._mode_preset_store["active_swipe_preset_id"] = str(p["id"])
+                    save_mode_preset_store(self._mode_preset_store)
+                    _settings_refresh_from_store()
+                    return
+
+        om_sw_act = tk.OptionMenu(row_ap, v_sw_act, *swipe_menu_labs, command=on_sw_act)
+        self._style_tk_option_menu_transport(om_sw_act)
+        om_sw_act.pack(side="left", padx=(6, 16))
+
+        tk.Label(row_ap, text="Grid:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        gid = str(self._mode_preset_store.get("active_grid_preset_id") or "")
+
+        def _gr_lab(pid: str) -> str:
+            x = preset_by_id(self._mode_preset_store, pid)
+            return format_preset_menu_label(x) if x else grid_menu_labs[0]
+
+        v_gr_act = tk.StringVar(master=top, value=_gr_lab(gid))
+
+        def on_gr_act(*_a: object) -> None:
+            lab = v_gr_act.get()
+            for p in grid_presets:
+                if format_preset_menu_label(p) == lab:
+                    self._mode_preset_store["active_grid_preset_id"] = str(p["id"])
+                    save_mode_preset_store(self._mode_preset_store)
+                    _settings_refresh_from_store()
+                    return
+
+        om_gr_act = tk.OptionMenu(row_ap, v_gr_act, *grid_menu_labs, command=on_gr_act)
+        self._style_tk_option_menu_transport(om_gr_act)
+        om_gr_act.pack(side="left", padx=(6, 0))
+
+        row_edit = tk.Frame(inner, bg=self.panel)
+        row_edit.pack(anchor="w", pady=(6, 4))
+
+        def on_edit_sw() -> None:
+            self._open_edit_swipe_preset_dialog()
+
+        def on_edit_gr() -> None:
             self._open_edit_genres_dialog()
 
-        def on_reset_genres_defaults() -> None:
+        b_es = tk.Button(
+            row_edit,
+            text="Edit swipe preset",
+            command=on_edit_sw,
+            font=("Helvetica", 10, "bold"),
+            padx=8,
+            pady=4,
+        )
+        self._style_tk_button_transport_grey(b_es)
+        b_es.pack(side="left", padx=(0, 6))
+        b_eg = tk.Button(
+            row_edit,
+            text="Edit grid preset",
+            command=on_edit_gr,
+            font=("Helvetica", 10, "bold"),
+            padx=8,
+            pady=4,
+        )
+        self._style_tk_button_transport_grey(b_eg)
+        b_eg.pack(side="left", padx=(0, 6))
+
+        row_cr = tk.Frame(inner, bg=self.panel)
+        row_cr.pack(anchor="w", pady=(6, 4))
+
+        def new_sw() -> None:
+            raw = simpledialog.askstring("New swipe preset", "Name:", parent=top)
+            if not raw or not str(raw).strip():
+                return
+            d = _default_swipe_preset_dict()
+            d["name"] = str(raw).strip()
+            self._upsert_preset_in_store(d)
+            self._mode_preset_store["active_swipe_preset_id"] = d["id"]
+            save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def new_gr() -> None:
+            raw = simpledialog.askstring("New grid preset", "Name:", parent=top)
+            if not raw or not str(raw).strip():
+                return
+            labels, colors = load_genre_config()
+            d = _coerce_grid_preset_blob(
+                {
+                    "id": _new_preset_id(),
+                    "name": str(raw).strip(),
+                    "mode": "grid",
+                    "labels": labels,
+                    "colors": colors,
+                    "folders": [safe_genre_folder_name(x) for x in labels],
+                },
+            )
+            if d:
+                self._upsert_preset_in_store(d)
+                self._mode_preset_store["active_grid_preset_id"] = d["id"]
+                save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def dup_sw() -> None:
+            pid = str(self._mode_preset_store.get("active_swipe_preset_id") or "")
+            p = preset_by_id(self._mode_preset_store, pid)
+            if not p:
+                return
+            bb = _coerce_swipe_preset_blob(dict(p))
+            if not bb:
+                return
+            bb["id"] = _new_preset_id()
+            bb["name"] = str(p.get("name", "Swipe")) + " copy"
+            self._upsert_preset_in_store(bb)
+            self._mode_preset_store["active_swipe_preset_id"] = bb["id"]
+            save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def dup_gr() -> None:
+            pid = str(self._mode_preset_store.get("active_grid_preset_id") or "")
+            p = preset_by_id(self._mode_preset_store, pid)
+            if not p:
+                return
+            bb = _coerce_grid_preset_blob(dict(p))
+            if not bb:
+                return
+            bb["id"] = _new_preset_id()
+            bb["name"] = str(p.get("name", "Grid")) + " copy"
+            self._upsert_preset_in_store(bb)
+            self._mode_preset_store["active_grid_preset_id"] = bb["id"]
+            save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def del_sw() -> None:
+            if len(swipe_presets) <= 1:
+                messagebox.showinfo("Presets", "Cannot delete the last swipe preset.", parent=top)
+                return
+            pid = str(self._mode_preset_store.get("active_swipe_preset_id") or "")
+            if not messagebox.askyesno("Delete swipe preset", "Delete the active swipe preset?", parent=top):
+                return
+            pl = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict) and str(p.get("id")) != pid]
+            self._mode_preset_store["presets"] = pl
+            nsw = presets_of_mode(self._mode_preset_store, "swipe")
+            if nsw:
+                self._mode_preset_store["active_swipe_preset_id"] = str(nsw[0]["id"])
+            save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def del_gr() -> None:
+            if len(grid_presets) <= 1:
+                messagebox.showinfo("Presets", "Cannot delete the last grid preset.", parent=top)
+                return
+            pid = str(self._mode_preset_store.get("active_grid_preset_id") or "")
+            if not messagebox.askyesno("Delete grid preset", "Delete the active grid preset?", parent=top):
+                return
+            pl = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict) and str(p.get("id")) != pid]
+            self._mode_preset_store["presets"] = pl
+            ngr = presets_of_mode(self._mode_preset_store, "grid")
+            if ngr:
+                self._mode_preset_store["active_grid_preset_id"] = str(ngr[0]["id"])
+            save_mode_preset_store(self._mode_preset_store)
+            _settings_reopen()
+
+        def rst_sw() -> None:
+            pid = str(self._mode_preset_store.get("active_swipe_preset_id") or "")
+            p = preset_by_id(self._mode_preset_store, pid)
+            if not p:
+                return
+            base = _default_swipe_preset_dict()
+            bb = _coerce_swipe_preset_blob(
+                {
+                    "id": pid,
+                    "name": str(p.get("name", "Swipe")),
+                    "mode": "swipe",
+                    "labels": base["labels"],
+                    "colors": base["colors"],
+                    "folders": base["folders"],
+                },
+            )
+            if bb:
+                self._upsert_preset_in_store(bb)
+            _settings_refresh_from_store()
+
+        def rst_gr() -> None:
             self._prepare_native_dialog()
             if not messagebox.askyesno(
-                "Reset genres",
-                "Reset all genre names and colors to the app defaults? This saves immediately.",
+                "Reset grid preset",
+                "Reset active grid preset to default labels, colors, and folders?",
                 parent=top,
             ):
                 return
             self._reset_genres_to_defaults_and_persist()
+            _settings_refresh_from_store()
 
-        b_edit_genres = tk.Button(
-            row_genre,
-            text="Edit genre labels & colors",
-            command=on_edit_genres_from_settings,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(b_edit_genres)
-        b_edit_genres.pack(side="left")
-        b_reset_genres = tk.Button(
-            row_genre,
-            text="Reset genres to default",
-            command=on_reset_genres_defaults,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(b_reset_genres)
-        b_reset_genres.pack(side="left", padx=(8, 0))
+        for txt, cmd in (
+            ("New swipe", new_sw),
+            ("New grid", new_gr),
+            ("Duplicate swipe", dup_sw),
+            ("Duplicate grid", dup_gr),
+        ):
+            bx = tk.Button(row_cr, text=txt, command=cmd, font=("Helvetica", 9, "bold"), padx=6, pady=3)
+            self._style_tk_button_transport_grey(bx)
+            bx.pack(side="left", padx=(0, 4))
+
+        row_del = tk.Frame(inner, bg=self.panel)
+        row_del.pack(anchor="w", pady=(4, 4))
+        for txt, cmd in (
+            ("Delete swipe", del_sw),
+            ("Delete grid", del_gr),
+            ("Reset swipe", rst_sw),
+            ("Reset grid", rst_gr),
+        ):
+            bx = tk.Button(row_del, text=txt, command=cmd, font=("Helvetica", 9, "bold"), padx=6, pady=3)
+            self._style_tk_button_transport_grey(bx)
+            bx.pack(side="left", padx=(0, 4))
 
         btn_close = tk.Button(outer, text="Close", command=close, font=("Helvetica", 11, "bold"), padx=16, pady=6)
         self._style_tk_button_transport_grey(btn_close)
@@ -4427,9 +5536,10 @@ class App:
             pass
         self._folder_scan_alive = True
         recursive = bool(self._var_include_subfolders.get())
+        skip = collect_skip_scan_dir_names(self._mode_preset_store)
         threading.Thread(
             target=self._folder_scan_worker,
-            args=(resolved, sid, recursive),
+            args=(resolved, sid, recursive, skip),
             daemon=True,
         ).start()
         self._poll_scan_progress()
@@ -5023,10 +6133,12 @@ class App:
             return
         if slot_index < 0 or slot_index > 8:
             return
-        name = self._genre_labels[slot_index]
         src = self._queue[0]
         prev_display = self._display_index
-        dest_dir = self._music_root / GENRES_NAME / safe_genre_folder_name(name)
+        fn = self._genre_folder_names[slot_index] if slot_index < len(self._genre_folder_names) else safe_genre_folder_name(
+            self._genre_labels[slot_index],
+        )
+        dest_dir = self._music_root / GENRES_NAME / safe_genre_folder_name(fn)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = _unique_destination(dest_dir, src.name)
         try:
@@ -5042,7 +6154,7 @@ class App:
                 "from": dest,
                 "to": src.resolve(),
                 "prev_display": prev_display,
-                "session_bucket": "genre",
+                "session_bucket": "grid",
             },
         )
         self._session_genre += 1
@@ -5124,7 +6236,7 @@ class App:
         self._queue.insert(0, dst.resolve())
         self._display_index = int(item["prev_display"])
         sb = item.get("session_bucket")
-        if sb in ("keep", "archive", "favorites", "genre"):
+        if sb in ("keep", "archive", "favorites", "genre", "grid"):
             self._session_undo_bucket(sb)
         self.load_current_track(autoplay=autoplay)
 
