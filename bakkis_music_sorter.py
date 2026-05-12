@@ -2713,8 +2713,8 @@ class App:
         tinder_delta_plus: bool = False,
     ) -> tk.Label:
         """Clickable Label tiles — macOS Tk Buttons often render unusable light-grey fills."""
-        idle_font = ("Helvetica", 13, "bold")
-        active_font = ("Helvetica", 11, "bold")
+        idle_font = ("Helvetica Neue", 11, "bold")
+        active_font = ("Helvetica Neue", 10, "bold")
 
         def on_press(_e: object) -> None:
             if not self._tiles_enabled:
@@ -2736,8 +2736,8 @@ class App:
         opt: dict = dict(
             text=base_text,
             font=idle_font,
-            padx=12,
-            pady=10,
+            padx=6,
+            pady=7,
             anchor="center",
             justify="center",
             cursor="",
@@ -2751,7 +2751,7 @@ class App:
         lbl._jump_active_font = active_font  # type: ignore[attr-defined]
         if tinder_target_sec is not None:
             lbl._jump_time_only = format_sec(float(tinder_target_sec))  # type: ignore[attr-defined]
-        elif "Outro" in base_text:
+        elif "Outro" in base_text or "OUTRO" in base_text:
             lbl._jump_time_only = "Outro"  # type: ignore[attr-defined]
         else:
             lbl._jump_time_only = ""  # type: ignore[attr-defined]
@@ -2795,6 +2795,10 @@ class App:
         *,
         clickable_when_tiles_disabled: bool = False,
         show_icon: bool = True,
+        icon_font: tuple | None = None,
+        title_font: tuple | None = None,
+        shortcut_font: tuple | None = None,
+        row_gap: int | None = None,
     ) -> tuple[tk.Frame, tk.Frame]:
         """Unified tile: icon / title / shortcut — same layout as transport row."""
         outer = tk.Frame(parent, bg=self.bg, cursor="")
@@ -2809,8 +2813,11 @@ class App:
         inner._tile_hovering = False  # type: ignore[attr-defined]
         inner._tile_flash_when_disabled = bool(clickable_when_tiles_disabled)  # type: ignore[attr-defined]
         inner._is_genre_tile = False  # type: ignore[attr-defined]
-        gap = _ACTION_TILE_ROW_GAP_PX
+        gap = row_gap if row_gap is not None else _ACTION_TILE_ROW_GAP_PX
         sc_text = _shortcut_caption_loose(shortcut)
+        _icon_font = icon_font if icon_font is not None else _ACTION_TILE_ICON_FONT
+        _title_font = title_font if title_font is not None else _ACTION_TILE_TITLE_FONT
+        _shortcut_font = shortcut_font if shortcut_font is not None else _ACTION_TILE_SHORTCUT_FONT
 
         def on_click(_e: object) -> None:
             if not self._tiles_enabled and not clickable_when_tiles_disabled:
@@ -2823,7 +2830,7 @@ class App:
             text=icon,
             bg=bg,
             fg=fg,
-            font=_ACTION_TILE_ICON_FONT,
+            font=_icon_font,
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2834,7 +2841,7 @@ class App:
             text=title,
             bg=bg,
             fg=fg,
-            font=_ACTION_TILE_TITLE_FONT,
+            font=_title_font,
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2845,7 +2852,7 @@ class App:
             text=sc_text,
             bg=bg,
             fg=shortcut_fg,
-            font=_ACTION_TILE_SHORTCUT_FONT,
+            font=_shortcut_font,
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2856,13 +2863,13 @@ class App:
         inner.rowconfigure(4, weight=1)
         if show_icon:
             ic.grid(row=1, column=0, sticky="")
-            tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
-            sc.grid(row=3, column=0, sticky="")
+            tl.grid(row=2, column=0, sticky="", pady=(gap, 0))
+            sc.grid(row=3, column=0, sticky="", pady=(2, 0))
             bind_targets = (outer, inner, ic, tl, sc)
             inner._tile_widgets = (ic, tl, sc)  # type: ignore[attr-defined]
         else:
-            tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
-            sc.grid(row=3, column=0, sticky="")
+            tl.grid(row=2, column=0, sticky="", pady=(gap, 0))
+            sc.grid(row=3, column=0, sticky="", pady=(2, 0))
             bind_targets = (outer, inner, tl, sc)
             inner._tile_widgets = (tl, sc)  # type: ignore[attr-defined]
         for w in bind_targets:
@@ -4198,8 +4205,8 @@ class App:
 
         jump = tk.Frame(self._main_upper, bg=self.bg)
         jump.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y_TIGHT))
-        jl = tk.Label(jump, text="JUMP TO", bg=self.bg, fg=self.accent, font=("Helvetica", 10, "bold"))
-        jl.pack(anchor="w", pady=(0, 4))
+        jl = tk.Label(jump, text="JUMP TO", bg=self.bg, fg=self.accent, font=("Helvetica Neue", 9, "bold"))
+        jl.pack(anchor="w", pady=(0, 3))
 
         row1 = tk.Frame(jump, bg=self.bg)
         row1.pack(fill="x")
@@ -4212,15 +4219,15 @@ class App:
             tinder_target_sec=None,
         )
         self._jump_buttons.append(self._jump_btn_pb_start)
-        self._jump_btn_pb_start.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        self._jump_btn_pb_start.pack(side="left", padx=(0, 4), fill="x", expand=True)
         self._sync_pb_start_jump_button_label()
 
         for base, hint, sec in [
-            ("⏱  0:00", "  1", 0),
-            ("⏱  0:30", "  2", 30),
-            ("⏱  1:00", "  3", 60),
-            ("⏱  1:30", "  4", 90),
-            ("⏱  2:00", "  5", 120),
+            ("0:00", "  1", 0),
+            ("0:30", "  2", 30),
+            ("1:00", "  3", 60),
+            ("1:30", "  4", 90),
+            ("2:00", "  5", 120),
         ]:
             b = self._jump_time_button(
                 row1,
@@ -4232,14 +4239,14 @@ class App:
             )
             self._jump_buttons.append(b)
             self._preset_jump_buttons[sec] = b
-            b.pack(side="left", padx=(0, 6), fill="x", expand=True)
+            b.pack(side="left", padx=(0, 4), fill="x", expand=True)
 
         row2_presets = tk.Frame(jump, bg=self.bg)
-        row2_presets.pack(fill="x", pady=(8, 0))
+        row2_presets.pack(fill="x", pady=(4, 0))
         for base, hint, sec in [
-            ("⏱  3:00", "  6", 180),
-            ("⏱  4:00", "  7", 240),
-            ("⏱  5:00", "  8", 300),
+            ("3:00", "  6", 180),
+            ("4:00", "  7", 240),
+            ("5:00", "  8", 300),
         ]:
             b = self._jump_time_button(
                 row2_presets,
@@ -4251,21 +4258,21 @@ class App:
             )
             self._jump_buttons.append(b)
             self._preset_jump_buttons[sec] = b
-            b.pack(side="left", padx=(0, 8), fill="x", expand=True)
-        b_out = self._jump_time_button(row2_presets, "⏱  Outro", self.jump_to_outro, hint_suffix="  9", width=0)
+            b.pack(side="left", padx=(0, 4), fill="x", expand=True)
+        b_out = self._jump_time_button(row2_presets, "OUTRO", self.jump_to_outro, hint_suffix="  9", width=0)
         self._jump_buttons.append(b_out)
         self._jump_btn_outro = b_out
         b_out.pack(side="left", padx=(0, 0), fill="x", expand=True)
 
         row2 = tk.Frame(jump, bg=self.bg)
-        row2.pack(fill="x", pady=(8, 0))
-        b_m = self._jump_time_button(row2, "←  ⏱  −30s", lambda: self.jump_delta(-30), hint_suffix="  A", width=16)
+        row2.pack(fill="x", pady=(4, 0))
+        b_m = self._jump_time_button(row2, "← −30s", lambda: self.jump_delta(-30), hint_suffix="  A", width=16)
         self._jump_buttons.append(b_m)
         self._jump_btn_minus = b_m
-        b_m.pack(side="left", padx=(0, 8), fill="x", expand=True)
+        b_m.pack(side="left", padx=(0, 4), fill="x", expand=True)
         b_p = self._jump_time_button(
             row2,
-            "⏱  +30s  →",
+            "+30s →",
             lambda: self.jump_delta(30),
             hint_suffix="  D",
             width=16,
@@ -4280,9 +4287,9 @@ class App:
             text="",
             bg=self.bg,
             fg=self.warning,
-            font=("Helvetica", 11),
+            font=("Helvetica Neue", 10),
         )
-        self.lbl_seek_hint.pack(anchor="w", pady=(6, 0))
+        self.lbl_seek_hint.pack(anchor="w", pady=(4, 0))
 
         self._apply_mode_switch_chrome()
 
@@ -4297,6 +4304,9 @@ class App:
             tinder_sort_row.columnconfigure(tc, weight=1, uniform="tinder_sort_col")
         tinder_sort_row.rowconfigure(0, weight=1)
         _sgp = _SWIPE_SORT_GRID_PAD
+        _swipe_icon_font = ("Helvetica Neue", 36)
+        _swipe_title_font = ("Helvetica Neue", 15, "bold")
+        _swipe_hint_font = ("Menlo", 9)
 
         o_k, self._tile_keep_inner = self._action_tile(
             tinder_sort_row,
@@ -4306,8 +4316,12 @@ class App:
             self.accent,
             self.accent_active,
             self.teal_on_fg,
-            "#1A1A1A",
+            "#1B3B38",
             lambda: self.sort_current("keep"),
+            icon_font=_swipe_icon_font,
+            title_font=_swipe_title_font,
+            shortcut_font=_swipe_hint_font,
+            row_gap=5,
         )
         o_k.grid(row=0, column=0, sticky="nsew", padx=_sgp, pady=_sgp)
         o_a, self._tile_archive_inner = self._action_tile(
@@ -4318,8 +4332,12 @@ class App:
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
-            "#1A1A1A",
+            "#3B1B1B",
             lambda: self.sort_current("archive"),
+            icon_font=_swipe_icon_font,
+            title_font=_swipe_title_font,
+            shortcut_font=_swipe_hint_font,
+            row_gap=5,
         )
         o_a.grid(row=0, column=1, sticky="nsew", padx=_sgp, pady=_sgp)
         o_f, self._tile_favorite_inner = self._action_tile(
@@ -4330,8 +4348,12 @@ class App:
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
-            "#1A1A1A",
+            "#3B3818",
             lambda: self.sort_current("favorites"),
+            icon_font=_swipe_icon_font,
+            title_font=_swipe_title_font,
+            shortcut_font=_swipe_hint_font,
+            row_gap=5,
         )
         o_f.grid(row=0, column=2, sticky="nsew", padx=_sgp, pady=_sgp)
 
