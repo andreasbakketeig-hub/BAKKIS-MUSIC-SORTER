@@ -269,7 +269,7 @@ def load_track_order() -> TrackOrder:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            v = data.get("track_order", "random")
+            v = data.get("track_order_mode") or data.get("track_order", "random")
             if v in ("random", "in_order"):
                 return v  # type: ignore[return-value]
     except (OSError, json.JSONDecodeError):
@@ -288,6 +288,7 @@ def save_track_order_setting(order: TrackOrder) -> None:
                     data = raw
     except (OSError, json.JSONDecodeError):
         data = {}
+    data["track_order_mode"] = order
     data["track_order"] = order
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -318,6 +319,75 @@ def save_include_subfolders_setting(on: bool) -> None:
     except (OSError, json.JSONDecodeError):
         data = {}
     data["include_subfolders"] = bool(on)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def load_default_folder_path() -> Optional[str]:
+    path = _app_settings_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            raw = data.get("default_folder_path")
+            if isinstance(raw, str):
+                s = raw.strip()
+                if s:
+                    return s
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def save_default_folder_path(folder: Optional[Union[str, Path]]) -> None:
+    path = _app_settings_path()
+    data: dict = {}
+    try:
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+                if isinstance(raw, dict):
+                    data = raw
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if folder is None:
+        data.pop("default_folder_path", None)
+    else:
+        s = str(folder).strip()
+        if s:
+            data["default_folder_path"] = s
+        else:
+            data.pop("default_folder_path", None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def load_auto_load_default_folder() -> bool:
+    path = _app_settings_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "auto_load_default_folder" in data:
+            return bool(data["auto_load_default_folder"])
+    except (OSError, json.JSONDecodeError):
+        pass
+    return False
+
+
+def save_auto_load_default_folder(on: bool) -> None:
+    path = _app_settings_path()
+    data: dict = {}
+    try:
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+                if isinstance(raw, dict):
+                    data = raw
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data["auto_load_default_folder"] = bool(on)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -485,16 +555,135 @@ def _unique_destination(dest_dir: Path, name: str) -> Path:
         n += 1
 
 
-def _read_track_meta_uncached(path: Path) -> tuple[float, str]:
-    """Duration + display title (filename); used for cache misses."""
+_MUTAGEN_TITLE_KEYS = ("title", "TITLE", "TIT2", "\xa9nam", "Title")
+_MUTAGEN_ARTIST_KEYS = ("artist", "ARTIST", "TPE1", "\xa9ART", "Artist")
+_MUTAGEN_BPM_KEYS = ("TBPM", "bpm", "BPM")
+_MUTAGEN_KEY_KEYS = ("TKEY", "key", "initialkey", "KEY")
+
+
+def _coerce_mutagen_scalar(val: object) -> Optional[str]:
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)):
+        if not val:
+            return None
+        val = val[0]
+    if hasattr(val, "text"):
+        raw = getattr(val, "text")
+        if isinstance(raw, list):
+            parts = [str(x).strip() for x in raw if str(x).strip()]
+            return " / ".join(parts) if parts else None
+        s = str(raw).strip()
+        return s if s else None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _audio_tag_get(audio: object, keys: tuple[str, ...]) -> Optional[str]:
+    for k in keys:
+        v: object = None
+        try:
+            if hasattr(audio, "get"):
+                v = audio.get(k)  # type: ignore[union-attr]
+        except Exception:
+            v = None
+        tags = getattr(audio, "tags", None)
+        if v is None and tags is not None:
+            try:
+                v = tags.get(k)  # type: ignore[union-attr]
+            except Exception:
+                v = None
+        out = _coerce_mutagen_scalar(v)
+        if out:
+            return out
+    return None
+
+
+def _mutagen_title_artist(audio: object) -> tuple[Optional[str], Optional[str]]:
+    return (
+        _audio_tag_get(audio, _MUTAGEN_TITLE_KEYS),
+        _audio_tag_get(audio, _MUTAGEN_ARTIST_KEYS),
+    )
+
+
+def _parse_filename_artist_dash_title(path: Path) -> tuple[Optional[str], Optional[str]]:
+    """``Artist Name - Track Title.ext`` → ``(title, artist)`` for display."""
+    stem = path.stem.strip()
+    if " - " not in stem:
+        return None, None
+    left, _, right = stem.partition(" - ")
+    artist = left.strip()
+    title = right.strip()
+    if not artist or not title:
+        return None, None
+    return title, artist
+
+
+def _now_playing_main_line(
+    path: Path,
+    tag_title: Optional[str],
+    tag_artist: Optional[str],
+) -> str:
+    if tag_title and tag_artist:
+        return f"{tag_title} — {tag_artist}"
+    if tag_title:
+        return tag_title
+    if tag_artist:
+        return tag_artist
+    ft, fa = _parse_filename_artist_dash_title(path)
+    if ft and fa:
+        return f"{ft} — {fa}"
+    return path.name
+
+
+def _mutagen_bpm_key_strings(audio: object) -> tuple[Optional[str], Optional[str]]:
+    bpm_raw = _audio_tag_get(audio, _MUTAGEN_BPM_KEYS)
+    key_raw = _audio_tag_get(audio, _MUTAGEN_KEY_KEYS)
+    bpm_s: Optional[str] = None
+    if bpm_raw:
+        try:
+            f = float(str(bpm_raw).replace(",", ".").strip())
+            if f > 0:
+                if abs(f - round(f)) < 0.02:
+                    bpm_s = str(int(round(f)))
+                else:
+                    bpm_s = str(f).rstrip("0").rstrip(".")
+        except ValueError:
+            t = str(bpm_raw).strip()
+            if t:
+                bpm_s = t
+    key_s = key_raw.strip() if key_raw else None
+    return bpm_s, key_s
+
+
+def _read_track_meta_uncached(path: Path) -> tuple[float, str, Optional[str], Optional[str]]:
+    """Duration, ``Title — Artist`` line, optional BPM number string, optional key (e.g. ``7A``)."""
     dur = 0.0
+    audio: object = None
     try:
-        info = MutagenFile(str(path))
-        if info is not None and getattr(info, "info", None) is not None:
-            dur = float(getattr(info.info, "length", 0.0) or 0.0)
+        audio = MutagenFile(str(path))
+        if audio is not None and getattr(audio, "info", None) is not None:
+            dur = float(getattr(audio.info, "length", 0.0) or 0.0)
     except Exception:
-        pass
-    return dur, path.name
+        audio = None
+
+    tt: Optional[str] = None
+    ta: Optional[str] = None
+    if audio is not None:
+        try:
+            tt, ta = _mutagen_title_artist(audio)
+        except Exception:
+            tt, ta = None, None
+
+    main = _now_playing_main_line(path, tt, ta)
+    bpm_s: Optional[str] = None
+    key_s: Optional[str] = None
+    if audio is not None:
+        try:
+            bpm_s, key_s = _mutagen_bpm_key_strings(audio)
+        except Exception:
+            bpm_s, key_s = None, None
+    return dur, main, bpm_s, key_s
 
 
 def get_duration_seconds(path: Path) -> float:
@@ -574,6 +763,7 @@ class App:
         self._sorting_mode: SortingMode = "cleanup"
         self._track_order: TrackOrder = load_track_order()
         self._var_include_subfolders = tk.BooleanVar(master=self.root, value=load_include_subfolders())
+        self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
         self._path_rel_to_music_root: dict[str, str] = {}
         self._genre_labels, self._genre_colors = load_genre_config()
         self._genre_title_labels: list[tk.Label] = []
@@ -590,6 +780,12 @@ class App:
         self.lbl_mode_header: Optional[tk.Label] = None
         self.lbl_source_folder: Optional[tk.Label] = None
         self.lbl_session_stats: Optional[tk.Label] = None
+        self.lbl_now_playing_tag: Optional[tk.Label] = None
+        self._now_playing_main_wrap: Optional[tk.Frame] = None
+        self._now_playing_main_inner: Optional[tk.Frame] = None
+        self._now_playing_wraplength: int = 1100
+        self._now_playing_summary_text: str = ""
+        self._now_playing_active_plain_label: Optional[tk.Label] = None
         self._session_kept = 0
         self._session_archived = 0
         self._session_favorites = 0
@@ -639,6 +835,10 @@ class App:
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
+        self._main_scroll_outer: Optional[tk.Frame] = None
+        self._main_scroll_canvas: Optional[tk.Canvas] = None
+        self._main_scrollbar: Optional[tk.Scrollbar] = None
+        self._main_scroll_inner_win_id: Optional[int] = None
         self._main_column: Optional[tk.Frame] = None
         self._queue_sidebar_outer: Optional[tk.Frame] = None
         self._lbl_queue_now: Optional[tk.Label] = None
@@ -648,12 +848,15 @@ class App:
         self.btn_toggle_queue: Optional[tk.Button] = None
         self._footer_logo_photo: Optional[object] = None
         self._load_folder_ring: Optional[tk.Frame] = None
+        self.btn_set_default_folder: Optional[tk.Button] = None
+        self.btn_load_default_folder: Optional[tk.Button] = None
+        self.lbl_default_folder_path: Optional[tk.Label] = None
         self._flash_after_ids: dict[int, str] = {}
         self._last_shortcut_keysym: Optional[str] = None
         self._last_shortcut_time: float = 0.0
         self._key_repeat_suppress_sec = 0.085
 
-        self._track_meta_cache: dict[str, tuple[float, str]] = {}
+        self._track_meta_cache: dict[str, tuple[float, str, Optional[str], Optional[str]]] = {}
         self._meta_cache_lock = threading.Lock()
         self._scan_id = 0
         self._scan_progress_queue: queue.Queue = queue.Queue()
@@ -673,6 +876,7 @@ class App:
         self.root.lift()
         self.root.after(80, lambda: self._raise_main_window())
         self.root.after(150, self._refresh_all_widget_chrome)
+        self.root.after(220, self._maybe_autoload_default_folder)
         self.root.after(0, self._mpv_start_idle)
         self._tick()
 
@@ -703,8 +907,13 @@ class App:
         )
         inner = max(420, rw - 80 - sidebar_reserve)
         try:
-            self.lbl_title.configure(wraplength=inner)
             self.lbl_path.configure(wraplength=inner)
+            if self.lbl_now_playing_tag is not None:
+                self.lbl_now_playing_tag.configure(wraplength=inner)
+            self._now_playing_wraplength = inner
+            pl = self._now_playing_active_plain_label
+            if pl is not None:
+                pl.configure(wraplength=inner)
             if self.lbl_source_folder is not None:
                 self.lbl_source_folder.configure(wraplength=inner)
         except tk.TclError:
@@ -724,6 +933,10 @@ class App:
             if self.lbl_session_stats is not None:
                 sw = max(200, min(420, (rw - 96) // 2))
                 self.lbl_session_stats.configure(wraplength=sw)
+        except tk.TclError:
+            pass
+        try:
+            self.root.after_idle(self._sync_main_scroll_geometry)
         except tk.TclError:
             pass
 
@@ -1030,7 +1243,7 @@ class App:
         self._is_playing = True
         self._set_play_button_text("Pause")
 
-    def _get_track_meta(self, path: Path) -> tuple[float, str]:
+    def _get_track_meta(self, path: Path) -> tuple[float, str, Optional[str], Optional[str]]:
         key = str(path.resolve())
         with self._meta_cache_lock:
             hit = self._track_meta_cache.get(key)
@@ -1042,6 +1255,201 @@ class App:
             self._track_meta_cache[key] = meta
         self._perf_log(f"meta_read_uncached: {(time.perf_counter() - t0) * 1000.0:.1f}ms {path.name}")
         return meta
+
+    def _clear_now_playing_main_inner(self) -> None:
+        inner = self._now_playing_main_inner
+        if inner is None:
+            return
+        try:
+            for ch in inner.winfo_children():
+                ch.destroy()
+        except tk.TclError:
+            pass
+        self._now_playing_active_plain_label = None
+
+    def _set_now_playing_main_plain(self, text: str) -> None:
+        """Single centered headline (idle / scanning / done); hides NOW PLAYING kicker."""
+        nt = self.lbl_now_playing_tag
+        if nt is not None:
+            try:
+                nt.pack_forget()
+            except tk.TclError:
+                pass
+        self._clear_now_playing_main_inner()
+        self._now_playing_summary_text = text
+        inner = self._now_playing_main_inner
+        if inner is None:
+            return
+        try:
+            lb = tk.Label(
+                inner,
+                text=text,
+                bg=self.bg,
+                fg=self.fg,
+                font=("Helvetica", 22, "bold"),
+                wraplength=self._now_playing_wraplength,
+                justify="center",
+                anchor="center",
+            )
+            lb.pack()
+            self._now_playing_active_plain_label = lb
+        except tk.TclError:
+            pass
+
+    def _apply_track_identity_header(
+        self,
+        headline: str,
+        bpm: Optional[str],
+        key: Optional[str],
+    ) -> None:
+        """NOW PLAYING + one row: Title — Artist • BPM • key (teal bullets)."""
+        nt = self.lbl_now_playing_tag
+        wrap = self._now_playing_main_wrap
+        inner = self._now_playing_main_inner
+        if nt is None or wrap is None or inner is None:
+            self._set_now_playing_main_plain(headline)
+            return
+        tail: list[str] = []
+        if bpm:
+            tail.append(f"{bpm} BPM")
+        if key:
+            tail.append(key)
+        self._now_playing_summary_text = headline + (" • " + " • ".join(tail) if tail else "")
+        title_font = ("Helvetica", 22, "bold")
+        try:
+            self._now_playing_active_plain_label = None
+            self._clear_now_playing_main_inner()
+            nt.configure(text="NOW PLAYING")
+            if nt.winfo_manager() == "":
+                nt.pack(fill="x", pady=(4, 3), before=wrap)
+            tk.Label(
+                inner,
+                text=headline,
+                bg=self.bg,
+                fg=self.fg,
+                font=title_font,
+                anchor="center",
+            ).pack(side="left")
+            if bpm:
+                tk.Label(inner, text=" • ", bg=self.bg, fg=self.accent, font=title_font, anchor="center").pack(
+                    side="left",
+                )
+                tk.Label(
+                    inner,
+                    text=f"{bpm} BPM",
+                    bg=self.bg,
+                    fg=self.fg,
+                    font=title_font,
+                    anchor="center",
+                ).pack(side="left")
+            if key:
+                tk.Label(inner, text=" • ", bg=self.bg, fg=self.accent, font=title_font, anchor="center").pack(
+                    side="left",
+                )
+                tk.Label(inner, text=key, bg=self.bg, fg=self.fg, font=title_font, anchor="center").pack(
+                    side="left",
+                )
+        except tk.TclError:
+            pass
+
+    def _sync_main_scroll_geometry(self, _event: object | None = None) -> None:
+        """Fit inner column width to canvas; show scrollbar only when content is taller than viewport."""
+        c = self._main_scroll_canvas
+        sb = self._main_scrollbar
+        if c is None:
+            return
+        try:
+            c.update_idletasks()
+            bbox = c.bbox("all")
+            if bbox:
+                c.configure(scrollregion=bbox)
+            total_h = (bbox[3] - bbox[1]) if bbox else 0
+            cv_h = c.winfo_height()
+            if sb is None:
+                return
+            need_scroll = total_h > cv_h + 8
+            try:
+                mapped = bool(sb.winfo_ismapped())
+            except tk.TclError:
+                mapped = False
+            if need_scroll and not mapped:
+                sb.pack(side="right", fill="y")
+            elif not need_scroll and mapped:
+                sb.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _on_main_scroll_canvas_configure(self, event: tk.Event) -> None:
+        wid = self._main_scroll_inner_win_id
+        c = self._main_scroll_canvas
+        if c is None or wid is None:
+            return
+        try:
+            c.itemconfigure(wid, width=event.width)
+        except tk.TclError:
+            pass
+        self._sync_main_scroll_geometry()
+
+    def _pointer_over_main_scroll_canvas(self, x_root: int, y_root: int) -> bool:
+        c = self._main_scroll_canvas
+        if c is None:
+            return False
+        try:
+            x = int(c.winfo_rootx())
+            y = int(c.winfo_rooty())
+            w = int(c.winfo_width())
+            h = int(c.winfo_height())
+            return x <= x_root < x + max(w, 1) and y <= y_root < y + max(h, 1)
+        except tk.TclError:
+            return False
+
+    def _on_wheel_scroll_main_column(self, event: tk.Event) -> str | None:
+        if not self._pointer_over_main_scroll_canvas(event.x_root, event.y_root):
+            return None
+        sb = self._main_scrollbar
+        if sb is None:
+            return None
+        try:
+            if not sb.winfo_ismapped():
+                return None
+        except tk.TclError:
+            return None
+        c = self._main_scroll_canvas
+        if c is None:
+            return None
+        delta = getattr(event, "delta", 0)
+        if delta:
+            c.yview_scroll(int(-1 * (delta / 120)), "units")
+            return "break"
+        return None
+
+    def _on_button4_main_scroll(self, _event: tk.Event) -> str | None:
+        if not self._pointer_over_main_scroll_canvas(_event.x_root, _event.y_root):
+            return None
+        sb = self._main_scrollbar
+        if sb is None or not sb.winfo_ismapped():
+            return None
+        if self._main_scroll_canvas:
+            self._main_scroll_canvas.yview_scroll(-3, "units")
+            return "break"
+        return None
+
+    def _on_button5_main_scroll(self, _event: tk.Event) -> str | None:
+        if not self._pointer_over_main_scroll_canvas(_event.x_root, _event.y_root):
+            return None
+        sb = self._main_scrollbar
+        if sb is None or not sb.winfo_ismapped():
+            return None
+        if self._main_scroll_canvas:
+            self._main_scroll_canvas.yview_scroll(3, "units")
+            return "break"
+        return None
+
+    def _finalize_main_scroll_bindings(self) -> None:
+        self.root.bind_all("<MouseWheel>", self._on_wheel_scroll_main_column, add="+")
+        self.root.bind_all("<Button-4>", self._on_button4_main_scroll, add="+")
+        self.root.bind_all("<Button-5>", self._on_button5_main_scroll, add="+")
+        self.root.after_idle(self._sync_main_scroll_geometry)
 
     def _schedule_track_meta_preload(self) -> None:
         paths = [p for p in self._queue[1 : 1 + _PRELOAD_LOOKAHEAD] if p is not None]
@@ -1124,7 +1532,7 @@ class App:
                         )
                         messagebox.showinfo("No audio files", hint, parent=self.root)
                         try:
-                            self.lbl_title.configure(text="Load a folder to begin")
+                            self._set_now_playing_main_plain("Load a folder to begin")
                             self.lbl_track.configure(text="")
                             self.lbl_path.configure(text="")
                             if self.lbl_source_folder is not None:
@@ -1159,7 +1567,7 @@ class App:
                     self._perf_log(f"folder_scan_error: {err}")
                     messagebox.showerror("Scan failed", err, parent=self.root)
                     try:
-                        self.lbl_title.configure(text="Load a folder to begin")
+                        self._set_now_playing_main_plain("Load a folder to begin")
                         self.lbl_track.configure(text="")
                         if self.lbl_source_folder is not None:
                             self.lbl_source_folder.configure(text="")
@@ -1392,6 +1800,10 @@ class App:
             if self._load_folder_ring is not None:
                 self._load_folder_ring.configure(bg=self.accent)
             self._style_tk_button_load_inner(self.btn_load)
+            if self.btn_set_default_folder is not None:
+                self._style_tk_button_dark_panel(self.btn_set_default_folder)
+            if self.btn_load_default_folder is not None:
+                self._style_tk_button_dark_panel(self.btn_load_default_folder)
         except tk.TclError:
             pass
         try:
@@ -2289,8 +2701,41 @@ class App:
     def _build_ui(self) -> None:
         self._body = tk.Frame(self.root, bg=self.bg)
         self._body.pack(fill="both", expand=True)
-        self._main_column = tk.Frame(self._body, bg=self.bg)
-        self._main_column.pack(side="left", fill="both", expand=True)
+
+        self._main_scroll_outer = tk.Frame(self._body, bg=self.bg)
+        self._main_scroll_outer.pack(side="left", fill="both", expand=True)
+
+        self._main_scroll_canvas = tk.Canvas(
+            self._main_scroll_outer,
+            bg=self.bg,
+            highlightthickness=0,
+            bd=0,
+        )
+        self._main_scrollbar = tk.Scrollbar(
+            self._main_scroll_outer,
+            orient="vertical",
+            command=self._main_scroll_canvas.yview,
+            bg=self.panel,
+            troughcolor=self.bg,
+            activebackground=self.btn_dark_active,
+            bd=0,
+            highlightthickness=0,
+            width=14,
+        )
+        self._main_scroll_canvas.configure(yscrollcommand=self._main_scrollbar.set)
+
+        self._main_column = tk.Frame(self._main_scroll_canvas, bg=self.bg)
+        self._main_scroll_inner_win_id = self._main_scroll_canvas.create_window(
+            (0, 0),
+            window=self._main_column,
+            anchor="nw",
+        )
+
+        self._main_scroll_canvas.pack(side="left", fill="both", expand=True)
+        self._main_scrollbar.pack(side="right", fill="y")
+
+        self._main_column.bind("<Configure>", lambda _e: self._sync_main_scroll_geometry())
+        self._main_scroll_canvas.bind("<Configure>", self._on_main_scroll_canvas_configure)
 
         top = tk.Frame(self._main_column, bg=self.bg)
         top.pack(fill="x", padx=24, pady=(18, 10))
@@ -2320,6 +2765,58 @@ class App:
             font=("Helvetica", 10),
         )
         self.chk_include_subfolders.pack(side="left", padx=(14, 0), anchor="w")
+
+        default_row = tk.Frame(top_left_col, bg=self.bg)
+        default_row.pack(anchor="w", pady=(10, 0), fill="x")
+        self.btn_set_default_folder = tk.Button(
+            default_row,
+            text="Set Default Folder",
+            command=self._on_set_default_folder,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_dark_panel(self.btn_set_default_folder)
+        self.btn_set_default_folder.pack(side="left")
+        self.btn_load_default_folder = tk.Button(
+            default_row,
+            text="Load Default Folder",
+            command=self._on_load_default_folder,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_dark_panel(self.btn_load_default_folder)
+        self.btn_load_default_folder.pack(side="left", padx=(8, 0))
+
+        self.lbl_default_folder_path = tk.Label(
+            top_left_col,
+            text="",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="w",
+            justify="left",
+        )
+        self.lbl_default_folder_path.pack(anchor="w", pady=(4, 0), fill="x")
+        self._refresh_default_folder_label()
+
+        auto_default_row = tk.Frame(top_left_col, bg=self.bg)
+        auto_default_row.pack(anchor="w", pady=(6, 0), fill="x")
+        tk.Checkbutton(
+            auto_default_row,
+            text="Auto-load default folder on startup",
+            variable=self._var_auto_load_default,
+            command=self._on_auto_load_default_toggle,
+            bg=self.bg,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.bg,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            highlightbackground=self.bg,
+            font=("Helvetica", 10),
+        ).pack(side="left", anchor="w")
 
         order_bar = tk.Frame(top_left_col, bg=self.bg)
         order_bar.pack(anchor="w", pady=(10, 0), fill="x")
@@ -2491,30 +2988,29 @@ class App:
             width=None,
             anchor="center",
         )
-        self.lbl_playback_start.pack(fill="x", pady=(0, 4))
+        self.lbl_playback_start.pack(fill="x", pady=(0, 3))
 
         self.root.after_idle(self._raise_time_text_above_scrubber)
 
-        self.lbl_title = tk.Label(
+        self.lbl_now_playing_tag = tk.Label(
             self._main_column,
-            text="Load a folder to begin",
+            text="",
             bg=self.bg,
-            fg=self.fg,
-            font=("Helvetica", 22, "bold"),
+            fg=self.accent,
+            font=("Helvetica", 9),
             wraplength=1100,
             justify="center",
             anchor="center",
         )
-        self.lbl_title.pack(fill="x", pady=(0, 4))
 
-        self.lbl_track = self._readonly_time_label(
-            self._main_column,
-            text="",
-            font=("Helvetica", 12, "bold"),
-            width=None,
-            anchor="center",
-        )
-        self.lbl_track.pack(fill="x", pady=(0, 2))
+        self._now_playing_main_wrap = tk.Frame(self._main_column, bg=self.bg)
+        self._now_playing_main_wrap.pack(fill="x", pady=(0, 2))
+        tk.Frame(self._now_playing_main_wrap, bg=self.bg).pack(side="left", fill="x", expand=True)
+        self._now_playing_main_inner = tk.Frame(self._now_playing_main_wrap, bg=self.bg)
+        self._now_playing_main_inner.pack(side="left")
+        tk.Frame(self._now_playing_main_wrap, bg=self.bg).pack(side="left", fill="x", expand=True)
+
+        self._set_now_playing_main_plain("Load a folder to begin")
 
         self.lbl_source_folder = tk.Label(
             self._main_column,
@@ -2537,7 +3033,16 @@ class App:
             justify="center",
             font=("Helvetica", 11),
         )
-        self.lbl_path.pack(fill="x", padx=24, pady=(0, 8))
+        self.lbl_path.pack(fill="x", padx=24, pady=(0, 5))
+
+        self.lbl_track = self._readonly_time_label(
+            self._main_column,
+            text="",
+            font=("Helvetica", 12, "bold"),
+            width=None,
+            anchor="center",
+        )
+        self.lbl_track.pack(fill="x", pady=(0, 1))
 
         jump = tk.Frame(self._main_column, bg=self.bg)
         jump.pack(fill="x", padx=24, pady=(0, 6))
@@ -2776,6 +3281,7 @@ class App:
             self.shortcut_frame.pack(fill="x", padx=24, pady=(12, 8), before=self.footer_outer)
 
         self._build_queue_sidebar()
+        self._finalize_main_scroll_bindings()
 
     def _queue_ellipsis(self, text: str, max_chars: int = 36) -> str:
         s = text.strip()
@@ -2811,10 +3317,7 @@ class App:
     def _refresh_queue_panel(self) -> None:
         if self._lbl_queue_now is None:
             return
-        try:
-            title = self.lbl_title.cget("text")
-        except tk.TclError:
-            title = ""
+        title = self._now_playing_summary_text.strip()
         now_t = self._queue_ellipsis(title, 42) if title else "—"
         try:
             self._lbl_queue_now.configure(text=now_t)
@@ -2847,18 +3350,20 @@ class App:
     def _apply_queue_panel_visibility(self, visible: bool) -> None:
         self._queue_panel_visible = visible
         outer = self._queue_sidebar_outer
-        mc = self._main_column
-        if outer is None or mc is None:
+        main_area = self._main_scroll_outer
+        if main_area is None:
+            main_area = self._main_column
+        if outer is None or main_area is None:
             return
         try:
             if visible:
                 # Pack fixed-width sidebar before the expanding column so Tk never assigns it 0 width
                 # when the shortcut guide forces a large main minimum width.
-                mc.pack_forget()
+                main_area.pack_forget()
                 outer.pack(side="right", fill="y", padx=(0, 16), pady=(18, 24))
-                mc.pack(side="left", fill="both", expand=True)
+                main_area.pack(side="left", fill="both", expand=True)
                 try:
-                    outer.lift(mc)
+                    outer.lift(main_area)
                 except tk.TclError:
                     pass
                 if self.btn_toggle_queue is not None:
@@ -3485,32 +3990,117 @@ class App:
     def _on_include_subfolders_toggle(self) -> None:
         save_include_subfolders_setting(bool(self._var_include_subfolders.get()))
 
+    def _on_auto_load_default_toggle(self) -> None:
+        save_auto_load_default_folder(bool(self._var_auto_load_default.get()))
+
+    def _default_folder_missing_message(self) -> str:
+        return "Default folder not found. Please set a new default folder."
+
+    def _refresh_default_folder_label(self) -> None:
+        if self.lbl_default_folder_path is None:
+            return
+        p = load_default_folder_path()
+        if not p:
+            self.lbl_default_folder_path.configure(text="No default folder set", fg=self.muted)
+            return
+        display = p
+        if len(display) > 72:
+            display = "…" + display[-69:]
+        self.lbl_default_folder_path.configure(text=f"Default: {display}", fg=self.muted)
+
+    def _load_folder_from_path(self, root: Path, *, missing_message: Optional[str] = None) -> None:
+        try:
+            resolved = root.expanduser().resolve()
+        except (OSError, RuntimeError):
+            resolved = root
+        if not resolved.is_dir():
+            self._prepare_native_dialog()
+            messagebox.showinfo(
+                "Folder not available",
+                missing_message or "Could not open the selected folder.",
+                parent=self.root,
+            )
+            return
+        self._scan_id += 1
+        sid = self._scan_id
+        self._stop_playback()
+        try:
+            self._set_now_playing_main_plain("Scanning…")
+            self.lbl_track.configure(text="Scanning folders… 0 tracks")
+            self.lbl_path.configure(text=str(resolved))
+            if self.lbl_source_folder is not None:
+                self.lbl_source_folder.configure(text="")
+        except tk.TclError:
+            pass
+        self._folder_scan_alive = True
+        recursive = bool(self._var_include_subfolders.get())
+        threading.Thread(
+            target=self._folder_scan_worker,
+            args=(resolved, sid, recursive),
+            daemon=True,
+        ).start()
+        self._poll_scan_progress()
+
+    def _on_set_default_folder(self) -> None:
+        try:
+            self._prepare_native_dialog()
+            folder = filedialog.askdirectory(title="Choose default music folder", parent=self.root)
+            if not folder:
+                return
+            path = Path(folder).resolve()
+            save_default_folder_path(path)
+            self._refresh_default_folder_label()
+            if messagebox.askyesno(
+                "Default folder",
+                "Load this folder now?",
+                parent=self.root,
+            ):
+                self._load_folder_from_path(path, missing_message=self._default_folder_missing_message())
+        finally:
+            self.root.after(10, self._refresh_all_widget_chrome)
+
+    def _on_load_default_folder(self) -> None:
+        p = load_default_folder_path()
+        if not p:
+            self._prepare_native_dialog()
+            messagebox.showinfo(
+                "Default folder",
+                "No default folder is set. Use Set Default Folder first.",
+                parent=self.root,
+            )
+            return
+        self._load_folder_from_path(Path(p), missing_message=self._default_folder_missing_message())
+        self.root.after(10, self._refresh_all_widget_chrome)
+
+    def _maybe_autoload_default_folder(self) -> None:
+        if not self._var_auto_load_default.get():
+            return
+        p = load_default_folder_path()
+        if not p:
+            return
+        root = Path(p)
+        try:
+            resolved = root.expanduser().resolve()
+        except (OSError, RuntimeError):
+            resolved = root
+        if not resolved.is_dir():
+            self._prepare_native_dialog()
+            messagebox.showinfo(
+                "Default folder",
+                self._default_folder_missing_message(),
+                parent=self.root,
+            )
+            return
+        self._load_folder_from_path(resolved, missing_message=self._default_folder_missing_message())
+        self.root.after(10, self._refresh_all_widget_chrome)
+
     def pick_folder(self) -> None:
         try:
             self._prepare_native_dialog()
             folder = filedialog.askdirectory(title="Choose music folder", parent=self.root)
             if not folder:
                 return
-            root = Path(folder).resolve()
-            self._scan_id += 1
-            sid = self._scan_id
-            self._stop_playback()
-            try:
-                self.lbl_title.configure(text="Scanning…")
-                self.lbl_track.configure(text="Scanning folders… 0 tracks")
-                self.lbl_path.configure(text=str(root))
-                if self.lbl_source_folder is not None:
-                    self.lbl_source_folder.configure(text="")
-            except tk.TclError:
-                pass
-            self._folder_scan_alive = True
-            recursive = bool(self._var_include_subfolders.get())
-            threading.Thread(
-                target=self._folder_scan_worker,
-                args=(root, sid, recursive),
-                daemon=True,
-            ).start()
-            self._poll_scan_progress()
+            self._load_folder_from_path(Path(folder))
         finally:
             self.root.after(10, self._refresh_all_widget_chrome)
 
@@ -3695,7 +4285,7 @@ class App:
 
         if path is None:
             self._jump_highlight_key = 0
-            self.lbl_title.configure(text="Done — all tracks reviewed")
+            self._set_now_playing_main_plain("Done — all tracks reviewed")
             self.lbl_track.configure(text="")
             self.lbl_path.configure(text="")
             if self.lbl_source_folder is not None:
@@ -3728,9 +4318,9 @@ class App:
             self.lbl_source_folder.configure(text=src_line)
         self.lbl_path.configure(text=str(path))
 
-        dur, title_disp = self._get_track_meta(path)
+        dur, title_disp, bpm_s, key_s = self._get_track_meta(path)
         self._duration_sec = dur
-        self.lbl_title.configure(text=title_disp)
+        self._apply_track_identity_header(title_disp, bpm_s, key_s)
         self._set_total_seconds(self._duration_sec)
         self._perf_log(f"track_load: {(time.perf_counter() - t_load0) * 1000.0:.1f}ms {path.name}")
         self._schedule_track_meta_preload()
