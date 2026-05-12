@@ -82,8 +82,11 @@ def _should_skip_scan_subdirectory(name: str) -> bool:
     return bool(name.startswith(".") and name not in (".", ".."))
 
 
-LONG_TRACK_SEC = 90.0  # longer than this → default playback starts at 2:00
-DEFAULT_START_SEC = 120.0  # 2:00
+# Auto-play start: user picks one of ``PLAYBACK_START_OPTIONS_SEC``; if track length < start + 30s, begin at 0:00.
+PLAYBACK_START_OPTIONS_SEC: tuple[float, ...] = (0.0, 30.0, 60.0, 90.0, 120.0, 180.0)
+DEFAULT_PLAYBACK_START_SEC = 120.0  # 2:00
+SETTINGS_JSON = "settings.json"
+LEGACY_SETTINGS_JSON = "bakkis_settings.json"
 KEEP_NAME = "KEEP"
 ARCHIVE_NAME = "ARCHIVE"
 FAVORITES_NAME = "FAVORITES"
@@ -233,14 +236,172 @@ def ensure_user_config_seeded_from_bundle() -> None:
             shutil.copy2(src, dest)
         except OSError:
             pass
+    dest_settings = dest_root / SETTINGS_JSON
+    if not dest_settings.exists():
+        src_new = bundle / SETTINGS_JSON
+        if src_new.is_file():
+            try:
+                shutil.copy2(src_new, dest_settings)
+            except OSError:
+                pass
+        elif not dest_settings.exists():
+            src_legacy = bundle / LEGACY_SETTINGS_JSON
+            if src_legacy.is_file():
+                try:
+                    shutil.copy2(src_legacy, dest_settings)
+                except OSError:
+                    pass
 
 
 def _genre_labels_path() -> Path:
     return _user_config_dir() / "genre_labels.json"
 
 
-def _app_settings_path() -> Path:
-    return _user_config_dir() / "bakkis_settings.json"
+def _settings_json_path() -> Path:
+    return _user_config_dir() / SETTINGS_JSON
+
+
+def _legacy_settings_json_path() -> Path:
+    return _user_config_dir() / LEGACY_SETTINGS_JSON
+
+
+def _default_user_settings_blob() -> dict:
+    return {
+        "default_folder_path": None,
+        "auto_load_default_folder": False,
+        "playback_start_seconds": DEFAULT_PLAYBACK_START_SEC,
+        "default_mode_on_startup": "cleanup",
+        "track_order_mode": "random",
+        "track_order": "random",
+        "include_subfolders": True,
+        "show_help_guide_on_startup": True,
+        "show_queue_panel_on_startup": False,
+    }
+
+
+def _normalize_user_settings_dict(data: dict) -> None:
+    """Coerce loaded/patched settings in place; safe defaults for missing or invalid keys."""
+    defaults = _default_user_settings_blob()
+    for k, v in defaults.items():
+        if k not in data:
+            data[k] = v
+    dfp = data.get("default_folder_path")
+    if dfp is not None:
+        if not isinstance(dfp, str) or not str(dfp).strip():
+            data["default_folder_path"] = None
+        else:
+            data["default_folder_path"] = str(dfp).strip()
+    try:
+        pss = float(data.get("playback_start_seconds", DEFAULT_PLAYBACK_START_SEC))
+    except (TypeError, ValueError):
+        pss = DEFAULT_PLAYBACK_START_SEC
+    if pss not in PLAYBACK_START_OPTIONS_SEC:
+        pss = min(PLAYBACK_START_OPTIONS_SEC, key=lambda x: abs(x - pss))
+    data["playback_start_seconds"] = pss
+    dm = data.get("default_mode_on_startup", "cleanup")
+    data["default_mode_on_startup"] = dm if dm in ("cleanup", "genre") else "cleanup"
+    tr = data.get("track_order_mode") or data.get("track_order", "random")
+    data["track_order_mode"] = tr if tr in ("random", "in_order") else "random"
+    data["track_order"] = data["track_order_mode"]
+    data["auto_load_default_folder"] = bool(data.get("auto_load_default_folder", False))
+    data["include_subfolders"] = bool(data.get("include_subfolders", True))
+    data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", True))
+    data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
+
+
+def read_user_settings() -> dict:
+    raw: dict = {}
+    path = _settings_json_path()
+    if path.is_file():
+        try:
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                raw = loaded
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+    if not raw:
+        legacy = _legacy_settings_json_path()
+        if legacy.is_file():
+            try:
+                with open(legacy, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    raw = loaded
+            except (OSError, json.JSONDecodeError):
+                raw = {}
+    data = dict(_default_user_settings_blob())
+    for k, v in raw.items():
+        if k in data or k == "default_folder_path":
+            data[k] = v
+    _normalize_user_settings_dict(data)
+    return data
+
+
+def write_user_settings_blob(data: dict) -> None:
+    _normalize_user_settings_dict(data)
+    path = _settings_json_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if tmp.is_file():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def patch_user_settings(**kwargs: object) -> dict:
+    data = read_user_settings()
+    for k, v in kwargs.items():
+        data[str(k)] = v
+    _normalize_user_settings_dict(data)
+    write_user_settings_blob(data)
+    return data
+
+
+def playback_start_choice_labels() -> tuple[str, ...]:
+    return ("0:00", "0:30", "1:00", "1:30", "2:00", "3:00")
+
+
+def playback_start_label_to_sec(label: str) -> float:
+    m = {
+        "0:00": 0.0,
+        "0:30": 30.0,
+        "1:00": 60.0,
+        "1:30": 90.0,
+        "2:00": 120.0,
+        "3:00": 180.0,
+    }
+    return m.get(str(label).strip(), DEFAULT_PLAYBACK_START_SEC)
+
+
+def playback_sec_to_choice_label(sec: float) -> str:
+    if sec in PLAYBACK_START_OPTIONS_SEC:
+        return playback_start_choice_labels()[PLAYBACK_START_OPTIONS_SEC.index(sec)]
+    nearest = min(PLAYBACK_START_OPTIONS_SEC, key=lambda x: abs(x - float(sec)))
+    return playback_start_choice_labels()[PLAYBACK_START_OPTIONS_SEC.index(nearest)]
+
+
+def load_default_mode_on_startup() -> SortingMode:
+    m = read_user_settings().get("default_mode_on_startup", "cleanup")
+    return m if m in ("cleanup", "genre") else "cleanup"
+
+
+def load_playback_start_seconds() -> float:
+    return float(read_user_settings()["playback_start_seconds"])
+
+
+def load_show_help_guide_on_startup() -> bool:
+    return bool(read_user_settings()["show_help_guide_on_startup"])
+
+
+def load_show_queue_panel_on_startup() -> bool:
+    return bool(read_user_settings()["show_queue_panel_on_startup"])
 
 
 def _bundled_mpv_executable() -> Optional[Path]:
@@ -264,133 +425,45 @@ def _which_mpv() -> Optional[str]:
 
 
 def load_track_order() -> TrackOrder:
-    path = _app_settings_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            v = data.get("track_order_mode") or data.get("track_order", "random")
-            if v in ("random", "in_order"):
-                return v  # type: ignore[return-value]
-    except (OSError, json.JSONDecodeError):
-        pass
-    return "random"
+    v = read_user_settings().get("track_order_mode", "random")
+    return v if v in ("random", "in_order") else "random"
 
 
 def save_track_order_setting(order: TrackOrder) -> None:
-    path = _app_settings_path()
-    data: dict = {}
-    try:
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    data = raw
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    data["track_order_mode"] = order
-    data["track_order"] = order
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    patch_user_settings(track_order_mode=order, track_order=order)
 
 
 def load_include_subfolders() -> bool:
-    path = _app_settings_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "include_subfolders" in data:
-            return bool(data["include_subfolders"])
-    except (OSError, json.JSONDecodeError):
-        pass
-    return True
+    return bool(read_user_settings()["include_subfolders"])
 
 
 def save_include_subfolders_setting(on: bool) -> None:
-    path = _app_settings_path()
-    data: dict = {}
-    try:
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    data = raw
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    data["include_subfolders"] = bool(on)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    patch_user_settings(include_subfolders=bool(on))
 
 
 def load_default_folder_path() -> Optional[str]:
-    path = _app_settings_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            raw = data.get("default_folder_path")
-            if isinstance(raw, str):
-                s = raw.strip()
-                if s:
-                    return s
-    except (OSError, json.JSONDecodeError):
-        pass
+    raw = read_user_settings().get("default_folder_path")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s:
+            return s
     return None
 
 
 def save_default_folder_path(folder: Optional[Union[str, Path]]) -> None:
-    path = _app_settings_path()
-    data: dict = {}
-    try:
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    data = raw
-    except (OSError, json.JSONDecodeError):
-        data = {}
     if folder is None:
-        data.pop("default_folder_path", None)
-    else:
-        s = str(folder).strip()
-        if s:
-            data["default_folder_path"] = s
-        else:
-            data.pop("default_folder_path", None)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        patch_user_settings(default_folder_path=None)
+        return
+    s = str(folder).strip()
+    patch_user_settings(default_folder_path=s if s else None)
 
 
 def load_auto_load_default_folder() -> bool:
-    path = _app_settings_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "auto_load_default_folder" in data:
-            return bool(data["auto_load_default_folder"])
-    except (OSError, json.JSONDecodeError):
-        pass
-    return False
+    return bool(read_user_settings()["auto_load_default_folder"])
 
 
 def save_auto_load_default_folder(on: bool) -> None:
-    path = _app_settings_path()
-    data: dict = {}
-    try:
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-                if isinstance(raw, dict):
-                    data = raw
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    data["auto_load_default_folder"] = bool(on)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    patch_user_settings(auto_load_default_folder=bool(on))
 
 
 def load_genre_config() -> tuple[list[str], list[str]]:
@@ -760,8 +833,9 @@ class App:
         self._display_index = 0
         self._undo_stack: list[dict] = []
 
-        self._sorting_mode: SortingMode = "cleanup"
+        self._sorting_mode: SortingMode = load_default_mode_on_startup()
         self._track_order: TrackOrder = load_track_order()
+        self._user_playback_start_sec: float = float(load_playback_start_seconds())
         self._var_include_subfolders = tk.BooleanVar(master=self.root, value=load_include_subfolders())
         self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
         self._path_rel_to_music_root: dict[str, str] = {}
@@ -831,7 +905,9 @@ class App:
         self._tinder_kb_jump_error_plus30: bool = False
         # Which jump control shows teal (last preset used from UI/keyboard, or default on new track)
         self._jump_highlight_key: JumpUiKey = 0
-        self._shortcut_panel_visible = True
+        self._shortcut_panel_visible = load_show_help_guide_on_startup()
+        self._settings_top: Optional[tk.Toplevel] = None
+        self.btn_settings: Optional[tk.Button] = None
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
@@ -866,6 +942,8 @@ class App:
         self._mpv_play_retry_count = 0
 
         self._build_ui()
+        if load_show_queue_panel_on_startup():
+            self._apply_queue_panel_visibility(True)
         _prune_stale_bakkis_tempfiles()
         self.root.bind("<Configure>", self._on_root_configure, add="+")
         self.root.after_idle(self._update_content_wraplengths)
@@ -1661,6 +1739,31 @@ class App:
             cursor="",
         )
 
+    def _style_tk_option_menu_transport(self, om: tk.OptionMenu) -> None:
+        """Same readable treatment as transport buttons (used in Settings dropdowns)."""
+        g = self.transport_grey_bg
+        t = self.time_text_fg
+        om.configure(
+            bg=g,
+            fg=t,
+            activebackground=self.transport_grey_active,
+            activeforeground=t,
+            disabledforeground=self.disabled_fg,
+            highlightthickness=1,
+            highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
+            relief="flat",
+            borderwidth=1,
+            cursor="",
+        )
+        om["menu"].configure(
+            bg=g,
+            fg=t,
+            activebackground=self.accent,
+            activeforeground=self.teal_on_fg,
+            bd=0,
+        )
+
     def _style_tk_button_jump_active(self, b: tk.Button) -> None:
         """Active jump preset: teal + glow; black text."""
         glow = "#00F0DC"
@@ -1801,9 +1904,11 @@ class App:
                 self._load_folder_ring.configure(bg=self.accent)
             self._style_tk_button_load_inner(self.btn_load)
             if self.btn_set_default_folder is not None:
-                self._style_tk_button_dark_panel(self.btn_set_default_folder)
+                self._style_tk_button_transport_grey(self.btn_set_default_folder)
             if self.btn_load_default_folder is not None:
-                self._style_tk_button_dark_panel(self.btn_load_default_folder)
+                self._style_tk_button_transport_grey(self.btn_load_default_folder)
+            if self.btn_settings is not None:
+                self._style_tk_button_transport_grey(self.btn_settings)
         except tk.TclError:
             pass
         try:
@@ -2776,7 +2881,7 @@ class App:
             padx=10,
             pady=5,
         )
-        self._style_tk_button_dark_panel(self.btn_set_default_folder)
+        self._style_tk_button_transport_grey(self.btn_set_default_folder)
         self.btn_set_default_folder.pack(side="left")
         self.btn_load_default_folder = tk.Button(
             default_row,
@@ -2786,7 +2891,7 @@ class App:
             padx=10,
             pady=5,
         )
-        self._style_tk_button_dark_panel(self.btn_load_default_folder)
+        self._style_tk_button_transport_grey(self.btn_load_default_folder)
         self.btn_load_default_folder.pack(side="left", padx=(8, 0))
 
         self.lbl_default_folder_path = tk.Label(
@@ -2863,6 +2968,16 @@ class App:
         tk.Label(titles, text="BAKKIS", bg=self.bg, fg=self.fg, font=("Helvetica", 20, "bold")).pack(side="left")
         tk.Label(titles, text=" ", bg=self.bg, font=("Helvetica", 5)).pack(side="left")
         tk.Label(titles, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica", 20, "bold")).pack(side="left")
+        self.btn_settings = tk.Button(
+            title_mid,
+            text="Settings ⚙",
+            command=self._open_settings_dialog,
+            font=("Helvetica", 10, "bold"),
+            padx=12,
+            pady=4,
+        )
+        self._style_tk_button_transport_grey(self.btn_settings)
+        self.btn_settings.pack(pady=(8, 0))
 
         top_right_col = tk.Frame(top, bg=self.bg)
         top_right_col.grid(row=0, column=2, sticky="ne")
@@ -2928,7 +3043,7 @@ class App:
         status_above_progress.pack(fill="x", padx=24, pady=(2, 6))
         self.lbl_mode_header = tk.Label(
             status_above_progress,
-            text="MODE: TINDER",
+            text="MODE: TINDER" if self._sorting_mode == "cleanup" else "MODE: GENRE",
             bg=self.bg,
             fg=self.accent,
             font=("Helvetica", 12, "bold"),
@@ -3272,6 +3387,9 @@ class App:
         self._style_tk_button_transport_grey(self.btn_edit_genres)
         self.btn_edit_genres.pack(side="right")
         self.genre_actions.pack_forget()
+        if self._sorting_mode == "genre":
+            self.cleanup_outer.pack_forget()
+            self.genre_actions.pack(fill="x", padx=24, pady=(0, 10))
 
         self.shortcut_frame = self._build_shortcut_guide_panel(self._main_column)
         self.footer_outer = tk.Frame(self._main_column, bg=self.bg)
@@ -3993,6 +4111,328 @@ class App:
     def _on_auto_load_default_toggle(self) -> None:
         save_auto_load_default_folder(bool(self._var_auto_load_default.get()))
 
+    def _close_settings_dialog(self, top: tk.Toplevel) -> None:
+        try:
+            top.destroy()
+        except tk.TclError:
+            pass
+        self._settings_top = None
+        self.root.after(10, self._refresh_all_widget_chrome)
+
+    def _open_settings_dialog(self) -> None:
+        st = getattr(self, "_settings_top", None)
+        if st is not None:
+            try:
+                if st.winfo_exists():
+                    st.lift()
+                    return
+            except tk.TclError:
+                pass
+        self._prepare_native_dialog()
+        top = tk.Toplevel(self.root)
+        self._settings_top = top
+        top.title("Settings")
+        top.configure(bg=self.bg)
+        top.minsize(480, 420)
+        try:
+            top.transient(self.root)
+        except tk.TclError:
+            pass
+
+        def close() -> None:
+            self._close_settings_dialog(top)
+
+        top.protocol("WM_DELETE_WINDOW", close)
+
+        outer = tk.Frame(top, bg=self.bg)
+        outer.pack(fill="both", expand=True, padx=16, pady=14)
+
+        tk.Label(outer, text="Settings", bg=self.bg, fg=self.accent, font=("Helvetica", 14, "bold")).pack(anchor="w")
+
+        body = tk.Frame(outer, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
+        body.pack(fill="both", expand=True, pady=(10, 0))
+        inner = tk.Frame(body, bg=self.panel)
+        inner.pack(fill="both", expand=True, padx=12, pady=12)
+
+        tk.Label(inner, text="Default Music Folder", bg=self.panel, fg=self.fg, font=("Helvetica", 11, "bold")).pack(
+            anchor="w",
+        )
+        lbl_path = tk.Label(
+            inner,
+            text="",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="w",
+            justify="left",
+            wraplength=440,
+        )
+        lbl_path.pack(anchor="w", pady=(4, 2))
+        lbl_missing = tk.Label(
+            inner,
+            text="",
+            bg=self.panel,
+            fg=self.warning,
+            font=("Helvetica", 9),
+            anchor="w",
+            wraplength=440,
+        )
+        lbl_missing.pack(anchor="w", pady=(0, 6))
+
+        def refresh_folder_labels() -> None:
+            p = load_default_folder_path()
+            if not p:
+                lbl_path.configure(text="No default folder set", fg=self.muted)
+                lbl_missing.configure(text="")
+                return
+            display = p if len(p) <= 80 else "…" + p[-77:]
+            lbl_path.configure(text=f"Current: {display}", fg=self.muted)
+            try:
+                ok = Path(p).expanduser().resolve().is_dir()
+            except (OSError, RuntimeError):
+                ok = False
+            if ok:
+                lbl_missing.configure(text="")
+            else:
+                lbl_missing.configure(
+                    text="This folder is no longer available.",
+                    fg=self.warning,
+                )
+
+        refresh_folder_labels()
+
+        row_fold = tk.Frame(inner, bg=self.panel)
+        row_fold.pack(anchor="w", pady=(0, 10))
+
+        def on_set_def() -> None:
+            try:
+                self._prepare_native_dialog()
+                folder = filedialog.askdirectory(title="Choose default music folder", parent=top)
+                if not folder:
+                    return
+                path = Path(folder).resolve()
+                save_default_folder_path(path)
+                self._refresh_default_folder_label()
+                refresh_folder_labels()
+                if messagebox.askyesno(
+                    "Default folder",
+                    "Load this folder now?",
+                    parent=top,
+                ):
+                    self._load_folder_from_path(path, missing_message=self._default_folder_missing_message())
+            finally:
+                self.root.after(10, self._refresh_all_widget_chrome)
+
+        def on_clear_def() -> None:
+            save_default_folder_path(None)
+            self._refresh_default_folder_label()
+            refresh_folder_labels()
+
+        def on_load_def() -> None:
+            self._prepare_native_dialog()
+            p = load_default_folder_path()
+            if not p:
+                messagebox.showinfo(
+                    "Default folder",
+                    "No default folder is set. Use Set Default Folder first.",
+                    parent=top,
+                )
+                return
+            self._load_folder_from_path(Path(p), missing_message=self._default_folder_missing_message())
+            refresh_folder_labels()
+
+        b_set = tk.Button(
+            row_fold,
+            text="Set Default Folder",
+            command=on_set_def,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_set)
+        b_set.pack(side="left")
+        b_clear = tk.Button(
+            row_fold,
+            text="Clear Default Folder",
+            command=on_clear_def,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_clear)
+        b_clear.pack(side="left", padx=(8, 0))
+        b_load = tk.Button(
+            row_fold,
+            text="Load Default Folder",
+            command=on_load_def,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_load)
+        b_load.pack(side="left", padx=(8, 0))
+
+        tk.Checkbutton(
+            inner,
+            text="Auto-load default folder on startup",
+            variable=self._var_auto_load_default,
+            command=self._on_auto_load_default_toggle,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(6, 12))
+
+        sep = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep.pack_propagate(False)
+        sep.pack(fill="x", pady=(0, 10))
+
+        tk.Label(
+            inner,
+            text="Default start time (new tracks)",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w")
+        row_st = tk.Frame(inner, bg=self.panel)
+        row_st.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_st, text="Auto-play from:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        v_start = tk.StringVar(master=top, value=playback_sec_to_choice_label(self._user_playback_start_sec))
+
+        def on_start_change(*_a: object) -> None:
+            sec = playback_start_label_to_sec(v_start.get())
+            patch_user_settings(playback_start_seconds=sec)
+            self._user_playback_start_sec = float(sec)
+
+        om_start = tk.OptionMenu(row_st, v_start, *playback_start_choice_labels(), command=on_start_change)
+        self._style_tk_option_menu_transport(om_start)
+        om_start.pack(side="left", padx=(8, 0))
+
+        tk.Label(
+            inner,
+            text="Default mode on startup",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(10, 0))
+        row_mode = tk.Frame(inner, bg=self.panel)
+        row_mode.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_mode, text="Mode:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        v_mode = tk.StringVar(
+            master=top,
+            value="Tinder Mode" if read_user_settings()["default_mode_on_startup"] == "cleanup" else "Genre Mode",
+        )
+
+        def on_mode_change(*_a: object) -> None:
+            key: SortingMode = "cleanup" if v_mode.get() == "Tinder Mode" else "genre"
+            patch_user_settings(default_mode_on_startup=key)
+
+        om_mode = tk.OptionMenu(row_mode, v_mode, "Tinder Mode", "Genre Mode", command=on_mode_change)
+        self._style_tk_option_menu_transport(om_mode)
+        om_mode.pack(side="left", padx=(8, 0))
+
+        tk.Label(
+            inner,
+            text="Default track order",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(10, 0))
+        row_ord = tk.Frame(inner, bg=self.panel)
+        row_ord.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_ord, text="Order:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        v_ord = tk.StringVar(master=top)
+
+        def _order_label(o: TrackOrder) -> str:
+            return "Random" if o == "random" else "In Order"
+
+        v_ord.set(_order_label(self._track_order))
+
+        def on_ord_change(*_a: object) -> None:
+            order: TrackOrder = "random" if v_ord.get() == "Random" else "in_order"
+            if order == self._track_order:
+                return
+            if self._queue:
+                self._prepare_native_dialog()
+                if not messagebox.askyesno(
+                    "Reload track order?",
+                    "Reload track list with new order?",
+                    parent=top,
+                ):
+                    v_ord.set(_order_label(self._track_order))
+                    return
+            self._track_order = order
+            save_track_order_setting(order)
+            self._apply_order_toggle_chrome()
+            if self._queue:
+                self._reorder_loaded_queue_preserving_current()
+            self._refresh_all_widget_chrome()
+
+        om_ord = tk.OptionMenu(row_ord, v_ord, "Random", "In Order", command=on_ord_change)
+        self._style_tk_option_menu_transport(om_ord)
+        om_ord.pack(side="left", padx=(8, 0))
+
+        tk.Checkbutton(
+            inner,
+            text="Include subfolders when scanning",
+            variable=self._var_include_subfolders,
+            command=self._on_include_subfolders_toggle,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(8, 4))
+
+        v_help_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_help_guide_on_startup"]))
+
+        def on_help_su() -> None:
+            patch_user_settings(show_help_guide_on_startup=bool(v_help_su.get()))
+
+        tk.Checkbutton(
+            inner,
+            text="Show help guide on startup",
+            variable=v_help_su,
+            command=on_help_su,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(4, 4))
+
+        v_queue_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_queue_panel_on_startup"]))
+
+        def on_queue_su() -> None:
+            patch_user_settings(show_queue_panel_on_startup=bool(v_queue_su.get()))
+
+        tk.Checkbutton(
+            inner,
+            text="Show queue panel on startup",
+            variable=v_queue_su,
+            command=on_queue_su,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(4, 8))
+
+        btn_close = tk.Button(outer, text="Close", command=close, font=("Helvetica", 11, "bold"), padx=16, pady=6)
+        self._style_tk_button_transport_grey(btn_close)
+        btn_close.pack(anchor="e", pady=(12, 0))
+
+        self.root.after(10, self._refresh_all_widget_chrome)
+
     def _default_folder_missing_message(self) -> str:
         return "Default folder not found. Please set a new default folder."
 
@@ -4325,12 +4765,13 @@ class App:
         self._perf_log(f"track_load: {(time.perf_counter() - t_load0) * 1000.0:.1f}ms {path.name}")
         self._schedule_track_meta_preload()
 
-        if self._duration_sec > LONG_TRACK_SEC:
-            self._desired_start_sec = DEFAULT_START_SEC
-            self._playback_start_label = format_sec(DEFAULT_START_SEC)
-        else:
+        want = float(self._user_playback_start_sec)
+        if self._duration_sec <= 0.0 or self._duration_sec < want + 30.0:
             self._desired_start_sec = 0.0
             self._playback_start_label = "0:00"
+        else:
+            self._desired_start_sec = want
+            self._playback_start_label = format_sec(want)
 
         self._set_playback_start_line(self._playback_start_label)
         self._audio_offset_in_source = self._desired_start_sec
@@ -4338,16 +4779,15 @@ class App:
         self._draw_progress_bar(self._desired_start_sec)
 
         outro_sec = self._outro_jump_seconds()
-        if self._duration_sec >= 3.0 and abs(self._desired_start_sec - outro_sec) <= 0.75:
-            if (
-                abs(self._desired_start_sec - DEFAULT_START_SEC) <= 0.75
-                and self._duration_sec > LONG_TRACK_SEC
-            ):
-                self._jump_highlight_key = int(round(self._desired_start_sec))
+        ds = self._desired_start_sec
+        used_config_start = self._duration_sec > 0.0 and self._duration_sec >= want + 30.0
+        if self._duration_sec >= 3.0 and abs(ds - outro_sec) <= 0.75:
+            if used_config_start and abs(ds - want) <= 0.75:
+                self._jump_highlight_key = int(round(ds))
             else:
                 self._jump_highlight_key = "outro"
         else:
-            self._jump_highlight_key = int(round(self._desired_start_sec))
+            self._jump_highlight_key = int(round(ds))
 
         if not _which_mpv():
             self.lbl_seek_hint.configure(
