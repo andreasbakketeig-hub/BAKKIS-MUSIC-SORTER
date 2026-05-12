@@ -32,13 +32,15 @@ TrackOrder = Literal["random", "in_order"]
 from mutagen import File as MutagenFile
 from tkinter import filedialog, messagebox
 
-# Default ~1 : 1.1 (W:H), slightly taller than wide — fits full Genre Mode + shortcut panel without clipping.
-_DEFAULT_WIN_W = 1180
-_DEFAULT_WIN_H = 1300
-_WIN_MIN_W = 1000
+# Default landscape window; genre grid + right panel fit without main-window scrolling.
+_DEFAULT_WIN_W = 1380
+_DEFAULT_WIN_H = 900
+_WIN_MIN_W = 1200
 _WIN_MIN_H = 820
-# Horizontal reserve when queue sidebar is visible (panel width + outer padding); avoids clip vs. wide shortcut guide.
+# Sidebar reservations (queue/right · guide/left): used so main column wraplengths stay correct.
 _QUEUE_PANEL_WIDTH_RESERVE = 268
+_GUIDE_PANEL_WIDTH_RESERVE = 268
+_GUIDE_SIDEBAR_TEXT_WRAP = 220
 
 # Lowercase extensions including leading dot — single source of truth for scan / validation / playback checks.
 SUPPORTED_AUDIO_FORMATS = frozenset(
@@ -123,7 +125,7 @@ GENRE_PALETTE: tuple[tuple[str, str], ...] = (
     ("Orange", "#FF7A1A"),
     ("Pink", "#D65CFF"),
     ("Red", "#FF2D55"),
-    ("Yellow", "#FFD400"),
+    ("Yellow", "#FFF200"),
     ("Dark", "#2A2F36"),
 )
 GENRE_PALETTE_HEX_SET = {hx.upper() for _, hx in GENRE_PALETTE}
@@ -274,7 +276,7 @@ def _default_user_settings_blob() -> dict:
         "track_order_mode": "random",
         "track_order": "random",
         "include_subfolders": True,
-        "show_help_guide_on_startup": True,
+        "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
     }
 
@@ -305,7 +307,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
     data["track_order"] = data["track_order_mode"]
     data["auto_load_default_folder"] = bool(data.get("auto_load_default_folder", False))
     data["include_subfolders"] = bool(data.get("include_subfolders", True))
-    data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", True))
+    data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", False))
     data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
 
 
@@ -788,7 +790,7 @@ class App:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("BAKKIS MUSIC SORTER")
-        self.root.minsize(_WIN_MIN_W, _WIN_MIN_H)
+        self.root.minsize(_WIN_MIN_W + _QUEUE_PANEL_WIDTH_RESERVE, _WIN_MIN_H)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._center_main_window(_DEFAULT_WIN_W, _DEFAULT_WIN_H)
 
@@ -806,11 +808,11 @@ class App:
         self.teal_on_fg = "#000000"  # text on teal (Play, active jump, Keep tile)
         self.accent_btn_press = "#00B89A"
         self.accent_active = "#00C9A8"  # tile keyboard-flash highlight
-        self.archive_bg = "#9E1B1B"
-        self.archive_active = "#B32424"
+        self.archive_bg = "#FF2D55"
+        self.archive_active = "#D92648"
         self.archive_fg = "#FFFFFF"
-        self.favorite_bg = "#FFD400"
-        self.favorite_active = "#FFDB33"
+        self.favorite_bg = "#FFF200"
+        self.favorite_active = "#D9CE00"
         self.favorite_on_fg = "#000000"
         self.warning = "#E8A838"
         self.text_on_accent = "#000000"
@@ -842,8 +844,6 @@ class App:
         self._genre_labels, self._genre_colors = load_genre_config()
         self._genre_title_labels: list[tk.Label] = []
         self._genre_tile_inners: list[tk.Frame] = []
-        self._tile_skip_inner_genre: Optional[tk.Frame] = None
-        self._tile_undo_inner_genre: Optional[tk.Frame] = None
         self.cleanup_actions: Optional[tk.Frame] = None
         self.cleanup_outer: Optional[tk.Frame] = None
         self.genre_actions: Optional[tk.Frame] = None
@@ -912,19 +912,25 @@ class App:
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
         self._main_scroll_outer: Optional[tk.Frame] = None
-        self._main_scroll_canvas: Optional[tk.Canvas] = None
-        self._main_scrollbar: Optional[tk.Scrollbar] = None
-        self._main_scroll_inner_win_id: Optional[int] = None
+        self._main_panel: Optional[tk.Frame] = None
+        self._bottom_dock: Optional[tk.Frame] = None
         self._main_column: Optional[tk.Frame] = None
+        self._main_upper: Optional[tk.Frame] = None
+        self._main_action_shell: Optional[tk.Frame] = None
         self._queue_sidebar_outer: Optional[tk.Frame] = None
+        self._queue_sidebar_inner: Optional[tk.Frame] = None
+        self._queue_section_frame: Optional[tk.Frame] = None
+        self._sidebar_spring: Optional[tk.Frame] = None
         self._lbl_queue_now: Optional[tk.Label] = None
         self._lbl_queue_up: list[tk.Label] = []
         self._lbl_queue_recent: list[tk.Label] = []
         self._queue_panel_visible = False
         self.btn_toggle_queue: Optional[tk.Button] = None
+        self._guide_sidebar_outer: Optional[tk.Frame] = None
+        self._guide_sidebar_inner: Optional[tk.Frame] = None
+        self.btn_toggle_guide: Optional[tk.Button] = None
         self._footer_logo_photo: Optional[object] = None
         self._load_folder_ring: Optional[tk.Frame] = None
-        self.btn_set_default_folder: Optional[tk.Button] = None
         self.btn_load_default_folder: Optional[tk.Button] = None
         self.lbl_default_folder_path: Optional[tk.Label] = None
         self._flash_after_ids: dict[int, str] = {}
@@ -980,9 +986,11 @@ class App:
             rw = int(self.root.winfo_width())
         except tk.TclError:
             return
-        sidebar_reserve = (
-            _QUEUE_PANEL_WIDTH_RESERVE if getattr(self, "_queue_panel_visible", False) else 0
-        )
+        sidebar_reserve = 0
+        if self._queue_panel_visible:
+            sidebar_reserve += _QUEUE_PANEL_WIDTH_RESERVE
+        if self._shortcut_panel_visible:
+            sidebar_reserve += _GUIDE_PANEL_WIDTH_RESERVE
         inner = max(420, rw - 80 - sidebar_reserve)
         try:
             self.lbl_path.configure(wraplength=inner)
@@ -1009,12 +1017,18 @@ class App:
             pass
         try:
             if self.lbl_session_stats is not None:
-                sw = max(200, min(420, (rw - 96) // 2))
-                self.lbl_session_stats.configure(wraplength=sw)
+                self.lbl_session_stats.configure(wraplength=_GUIDE_SIDEBAR_TEXT_WRAP)
         except tk.TclError:
             pass
         try:
-            self.root.after_idle(self._sync_main_scroll_geometry)
+            if self._genre_title_labels:
+                cell_w = max(56, (inner - 40) // 3)
+                g_wrap = max(40, cell_w - 18)
+                for lab in self._genre_title_labels:
+                    try:
+                        lab.configure(wraplength=g_wrap)
+                    except tk.TclError:
+                        pass
         except tk.TclError:
             pass
 
@@ -1430,105 +1444,6 @@ class App:
         except tk.TclError:
             pass
 
-    def _sync_main_scroll_geometry(self, _event: object | None = None) -> None:
-        """Fit inner column width to canvas; show scrollbar only when content is taller than viewport."""
-        c = self._main_scroll_canvas
-        sb = self._main_scrollbar
-        if c is None:
-            return
-        try:
-            c.update_idletasks()
-            bbox = c.bbox("all")
-            if bbox:
-                c.configure(scrollregion=bbox)
-            total_h = (bbox[3] - bbox[1]) if bbox else 0
-            cv_h = c.winfo_height()
-            if sb is None:
-                return
-            need_scroll = total_h > cv_h + 8
-            try:
-                mapped = bool(sb.winfo_ismapped())
-            except tk.TclError:
-                mapped = False
-            if need_scroll and not mapped:
-                sb.pack(side="right", fill="y")
-            elif not need_scroll and mapped:
-                sb.pack_forget()
-        except tk.TclError:
-            pass
-
-    def _on_main_scroll_canvas_configure(self, event: tk.Event) -> None:
-        wid = self._main_scroll_inner_win_id
-        c = self._main_scroll_canvas
-        if c is None or wid is None:
-            return
-        try:
-            c.itemconfigure(wid, width=event.width)
-        except tk.TclError:
-            pass
-        self._sync_main_scroll_geometry()
-
-    def _pointer_over_main_scroll_canvas(self, x_root: int, y_root: int) -> bool:
-        c = self._main_scroll_canvas
-        if c is None:
-            return False
-        try:
-            x = int(c.winfo_rootx())
-            y = int(c.winfo_rooty())
-            w = int(c.winfo_width())
-            h = int(c.winfo_height())
-            return x <= x_root < x + max(w, 1) and y <= y_root < y + max(h, 1)
-        except tk.TclError:
-            return False
-
-    def _on_wheel_scroll_main_column(self, event: tk.Event) -> str | None:
-        if not self._pointer_over_main_scroll_canvas(event.x_root, event.y_root):
-            return None
-        sb = self._main_scrollbar
-        if sb is None:
-            return None
-        try:
-            if not sb.winfo_ismapped():
-                return None
-        except tk.TclError:
-            return None
-        c = self._main_scroll_canvas
-        if c is None:
-            return None
-        delta = getattr(event, "delta", 0)
-        if delta:
-            c.yview_scroll(int(-1 * (delta / 120)), "units")
-            return "break"
-        return None
-
-    def _on_button4_main_scroll(self, _event: tk.Event) -> str | None:
-        if not self._pointer_over_main_scroll_canvas(_event.x_root, _event.y_root):
-            return None
-        sb = self._main_scrollbar
-        if sb is None or not sb.winfo_ismapped():
-            return None
-        if self._main_scroll_canvas:
-            self._main_scroll_canvas.yview_scroll(-3, "units")
-            return "break"
-        return None
-
-    def _on_button5_main_scroll(self, _event: tk.Event) -> str | None:
-        if not self._pointer_over_main_scroll_canvas(_event.x_root, _event.y_root):
-            return None
-        sb = self._main_scrollbar
-        if sb is None or not sb.winfo_ismapped():
-            return None
-        if self._main_scroll_canvas:
-            self._main_scroll_canvas.yview_scroll(3, "units")
-            return "break"
-        return None
-
-    def _finalize_main_scroll_bindings(self) -> None:
-        self.root.bind_all("<MouseWheel>", self._on_wheel_scroll_main_column, add="+")
-        self.root.bind_all("<Button-4>", self._on_button4_main_scroll, add="+")
-        self.root.bind_all("<Button-5>", self._on_button5_main_scroll, add="+")
-        self.root.after_idle(self._sync_main_scroll_geometry)
-
     def _schedule_track_meta_preload(self) -> None:
         paths = [p for p in self._queue[1 : 1 + _PRELOAD_LOOKAHEAD] if p is not None]
         if not paths:
@@ -1903,12 +1818,14 @@ class App:
             if self._load_folder_ring is not None:
                 self._load_folder_ring.configure(bg=self.accent)
             self._style_tk_button_load_inner(self.btn_load)
-            if self.btn_set_default_folder is not None:
-                self._style_tk_button_transport_grey(self.btn_set_default_folder)
             if self.btn_load_default_folder is not None:
                 self._style_tk_button_transport_grey(self.btn_load_default_folder)
             if self.btn_settings is not None:
                 self._style_tk_button_transport_grey(self.btn_settings)
+            if self.btn_toggle_queue is not None:
+                self._style_tk_button_transport_grey(self.btn_toggle_queue)
+            if self.btn_toggle_guide is not None:
+                self._style_tk_button_transport_grey(self.btn_toggle_guide)
         except tk.TclError:
             pass
         try:
@@ -1916,8 +1833,16 @@ class App:
         except tk.TclError:
             pass
         try:
+            t_state = "normal" if self._tiles_enabled else "disabled"
+            undo_state = "normal" if (self._tiles_enabled or bool(self._undo_stack)) else "disabled"
+            self.btn_play.configure(state=t_state)
+            self.btn_replay.configure(state=t_state)
+            self.btn_skip.configure(state=t_state)
+            self.btn_undo.configure(state=undo_state)
             self._style_tk_button_transport_grey(self.btn_play)
             self._style_tk_button_transport_grey(self.btn_replay)
+            self._style_tk_button_transport_grey(self.btn_skip)
+            self._style_tk_button_transport_grey(self.btn_undo)
         except tk.TclError:
             pass
         sel: JumpUiKey = self._jump_highlight_key
@@ -1948,26 +1873,14 @@ class App:
             self._apply_mode_switch_chrome()
         except tk.TclError:
             pass
-        try:
-            self._style_tk_button_transport_grey(self.btn_edit_genres)
-        except (tk.TclError, AttributeError):
-            pass
-
     def _reapply_action_tiles(self) -> None:
-        """Reassert Keep/Archive/Favorite/Skip/Undo colors (Frames + Labels, not affected by *Button option_db)."""
+        """Reassert Keep/Archive/Favorite colors (Frames + Labels, not affected by *Button option_db)."""
         genre_inners = list(self._genre_tile_inners)
-        extras: list[Optional[tk.Frame]] = [
-            self._tile_skip_inner_genre,
-            self._tile_undo_inner_genre,
-        ]
         for inner in (
             self._tile_keep_inner,
             self._tile_archive_inner,
             self._tile_favorite_inner,
-            self._tile_skip_inner,
-            self._tile_undo_inner,
             *genre_inners,
-            *extras,
         ):
             if inner is None:
                 continue
@@ -2330,26 +2243,26 @@ class App:
             text=genre_name.strip().upper(),
             bg=bg,
             fg=fg,
-            font=("Helvetica", 12, "bold"),
+            font=("Helvetica", 10, "bold"),
             anchor="center",
             justify="center",
-            wraplength=130,
+            wraplength=72,
             highlightthickness=0,
             cursor="",
         )
-        tl.pack(fill="x", padx=4, pady=(11, 2))
+        tl.pack(fill="x", padx=3, pady=(6, 1))
         sc = tk.Label(
             inner,
             text=digit,
             bg=bg,
             fg=shortcut_fg,
-            font=("Helvetica", 13, "bold"),
+            font=("Helvetica", 12, "bold"),
             anchor="center",
             justify="center",
             highlightthickness=0,
             cursor="",
         )
-        sc.pack(fill="x", padx=4, pady=(1, 11))
+        sc.pack(fill="x", padx=3, pady=(0, 6))
         for w in (outer, inner, tl, sc):
             w.bind("<Button-1>", on_click)
 
@@ -2359,7 +2272,7 @@ class App:
         inner._tile_shortcut_fg = shortcut_fg  # type: ignore[attr-defined]
         inner._tile_widgets = (tl, sc)  # type: ignore[attr-defined]
         inner._is_genre_tile = True  # type: ignore[attr-defined]
-        inner.pack(fill="both", expand=True, padx=3, pady=0)
+        inner.pack(fill="both", expand=True, padx=2, pady=0)
         return outer, inner
 
     def _set_action_tile_enabled(self, inner: tk.Frame, on: bool) -> None:
@@ -2370,13 +2283,6 @@ class App:
         bg_n = str(getattr(inner, "_tile_bg", self.panel))
         fg_n = str(getattr(inner, "_tile_fg", self.fg))
         sc_fg = str(getattr(inner, "_tile_shortcut_fg", self.muted))
-        undo_cleanup = getattr(self, "_tile_undo_inner", None)
-        undo_genre = getattr(self, "_tile_undo_inner_genre", None)
-        if self._undo_stack and (
-            (undo_cleanup is not None and inner is undo_cleanup)
-            or (undo_genre is not None and inner is undo_genre)
-        ):
-            on = True
         if on:
             inner.configure(cursor="", bg=bg_n)
             for w in widgets:
@@ -2390,20 +2296,10 @@ class App:
             for w in widgets:
                 w.configure(bg=self.trough, fg=self.disabled_fg, highlightthickness=0)
 
-    def _toggle_shortcut_panel(self) -> None:
-        if self.shortcut_frame is None or self.footer_outer is None:
-            return
-        self._shortcut_panel_visible = not self._shortcut_panel_visible
-        if self._shortcut_panel_visible:
-            self.shortcut_frame.pack(fill="x", padx=24, pady=(12, 8), before=self.footer_outer)
-        else:
-            self.shortcut_frame.pack_forget()
-        self._refresh_all_widget_chrome()
-
     def _on_help_key(self, _e: object) -> Optional[str]:
         if not self._shortcuts_active():
             return None
-        self._toggle_shortcut_panel()
+        self._toggle_guide_panel_visibility()
         return "break"
 
     def _apply_dual_tile_selection_chrome(
@@ -2535,10 +2431,10 @@ class App:
         if self.cleanup_outer is not None and self.genre_actions is not None:
             if mode == "cleanup":
                 self.genre_actions.pack_forget()
-                self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 10))
+                self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 8))
             else:
                 self.cleanup_outer.pack_forget()
-                self.genre_actions.pack(fill="x", padx=24, pady=(0, 10))
+                self.genre_actions.pack(fill="both", expand=True, padx=24, pady=(0, 8))
         self._refresh_stats()
         self._refresh_session_stats()
         self._refresh_all_widget_chrome()
@@ -2570,6 +2466,17 @@ class App:
                 self._set_action_tile_enabled(inner, self._tiles_enabled)
             except tk.TclError:
                 pass
+
+    def _reset_genres_to_defaults_and_persist(self) -> None:
+        self._genre_labels = list(DEFAULT_GENRE_LABELS)
+        self._genre_colors = list(DEFAULT_GENRE_COLORS)
+        save_genre_config(self._genre_labels, self._genre_colors)
+        if self._music_root is not None:
+            ensure_genre_folders(self._music_root, self._genre_labels)
+        self._sync_genre_tile_titles()
+        self._apply_genre_tile_colors()
+        self._refresh_stats()
+        self.root.after(10, self._refresh_all_widget_chrome)
 
     def _open_edit_genres_dialog(self) -> None:
         self._prepare_native_dialog()
@@ -2707,13 +2614,9 @@ class App:
         top.geometry(f"{tw}x{th}+{x}+{y}")
 
     def _skip_flash_widget(self) -> Optional[tk.Misc]:
-        if self._sorting_mode == "genre" and self._tile_skip_inner_genre is not None:
-            return self._tile_skip_inner_genre
         return self.btn_skip
 
     def _undo_flash_widget(self) -> Optional[tk.Misc]:
-        if self._sorting_mode == "genre" and self._tile_undo_inner_genre is not None:
-            return self._tile_undo_inner_genre
         return self.btn_undo
 
     def _kbd_skip(self, keysym: str) -> Callable[[object], Optional[str]]:
@@ -2809,40 +2712,26 @@ class App:
 
         self._main_scroll_outer = tk.Frame(self._body, bg=self.bg)
         self._main_scroll_outer.pack(side="left", fill="both", expand=True)
+        # Main column + bottom dock: grid keeps the dock from overlapping the content area.
+        self._main_scroll_outer.grid_columnconfigure(0, weight=1)
+        self._main_scroll_outer.grid_rowconfigure(0, weight=1)
 
-        self._main_scroll_canvas = tk.Canvas(
-            self._main_scroll_outer,
-            bg=self.bg,
-            highlightthickness=0,
-            bd=0,
-        )
-        self._main_scrollbar = tk.Scrollbar(
-            self._main_scroll_outer,
-            orient="vertical",
-            command=self._main_scroll_canvas.yview,
-            bg=self.panel,
-            troughcolor=self.bg,
-            activebackground=self.btn_dark_active,
-            bd=0,
-            highlightthickness=0,
-            width=14,
-        )
-        self._main_scroll_canvas.configure(yscrollcommand=self._main_scrollbar.set)
+        self._main_panel = tk.Frame(self._main_scroll_outer, bg=self.bg)
+        self._main_panel.grid(row=0, column=0, sticky="nsew")
 
-        self._main_column = tk.Frame(self._main_scroll_canvas, bg=self.bg)
-        self._main_scroll_inner_win_id = self._main_scroll_canvas.create_window(
-            (0, 0),
-            window=self._main_column,
-            anchor="nw",
-        )
+        self._bottom_dock = tk.Frame(self._main_scroll_outer, bg=self.bg)
+        self._bottom_dock.grid(row=1, column=0, sticky="ew")
 
-        self._main_scroll_canvas.pack(side="left", fill="both", expand=True)
-        self._main_scrollbar.pack(side="right", fill="y")
+        self._main_column = tk.Frame(self._main_panel, bg=self.bg)
+        self._main_column.pack(fill="both", expand=True)
+        self._main_column.columnconfigure(0, weight=1)
+        self._main_column.rowconfigure(0, weight=1)
+        self._main_upper = tk.Frame(self._main_column, bg=self.bg)
+        self._main_upper.grid(row=0, column=0, sticky="nsew")
+        self._main_action_shell = tk.Frame(self._main_column, bg=self.bg)
+        self._main_action_shell.grid(row=1, column=0, sticky="ew")
 
-        self._main_column.bind("<Configure>", lambda _e: self._sync_main_scroll_geometry())
-        self._main_scroll_canvas.bind("<Configure>", self._on_main_scroll_canvas_configure)
-
-        top = tk.Frame(self._main_column, bg=self.bg)
+        top = tk.Frame(self._main_upper, bg=self.bg)
         top.pack(fill="x", padx=24, pady=(18, 10))
         # Equal side columns keep the title in the true horizontal center while resizing.
         top.columnconfigure(0, weight=1, uniform="top_hdr")
@@ -2851,40 +2740,13 @@ class App:
 
         top_left_col = tk.Frame(top, bg=self.bg)
         top_left_col.grid(row=0, column=0, sticky="nw")
+
         load_row = tk.Frame(top_left_col, bg=self.bg)
         load_row.pack(anchor="w", fill="x")
         self._load_folder_ring, self.btn_load = self._load_folder_button(load_row, self.pick_folder)
         self._load_folder_ring.pack(side="left")
-        self.chk_include_subfolders = tk.Checkbutton(
-            load_row,
-            text="Include subfolders",
-            variable=self._var_include_subfolders,
-            command=self._on_include_subfolders_toggle,
-            bg=self.bg,
-            fg=self.fg,
-            selectcolor=self.panel,
-            activebackground=self.bg,
-            activeforeground=self.fg,
-            highlightthickness=0,
-            highlightbackground=self.bg,
-            font=("Helvetica", 10),
-        )
-        self.chk_include_subfolders.pack(side="left", padx=(14, 0), anchor="w")
-
-        default_row = tk.Frame(top_left_col, bg=self.bg)
-        default_row.pack(anchor="w", pady=(10, 0), fill="x")
-        self.btn_set_default_folder = tk.Button(
-            default_row,
-            text="Set Default Folder",
-            command=self._on_set_default_folder,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(self.btn_set_default_folder)
-        self.btn_set_default_folder.pack(side="left")
         self.btn_load_default_folder = tk.Button(
-            default_row,
+            load_row,
             text="Load Default Folder",
             command=self._on_load_default_folder,
             font=("Helvetica", 10, "bold"),
@@ -2892,7 +2754,7 @@ class App:
             pady=5,
         )
         self._style_tk_button_transport_grey(self.btn_load_default_folder)
-        self.btn_load_default_folder.pack(side="left", padx=(8, 0))
+        self.btn_load_default_folder.pack(side="left", padx=(12, 0))
 
         self.lbl_default_folder_path = tk.Label(
             top_left_col,
@@ -2906,13 +2768,13 @@ class App:
         self.lbl_default_folder_path.pack(anchor="w", pady=(4, 0), fill="x")
         self._refresh_default_folder_label()
 
-        auto_default_row = tk.Frame(top_left_col, bg=self.bg)
-        auto_default_row.pack(anchor="w", pady=(6, 0), fill="x")
-        tk.Checkbutton(
-            auto_default_row,
-            text="Auto-load default folder on startup",
-            variable=self._var_auto_load_default,
-            command=self._on_auto_load_default_toggle,
+        sub_row = tk.Frame(top_left_col, bg=self.bg)
+        sub_row.pack(anchor="w", pady=(8, 0), fill="x")
+        self.chk_include_subfolders = tk.Checkbutton(
+            sub_row,
+            text="Include subfolders",
+            variable=self._var_include_subfolders,
+            command=self._on_include_subfolders_toggle,
             bg=self.bg,
             fg=self.fg,
             selectcolor=self.panel,
@@ -2921,7 +2783,8 @@ class App:
             highlightthickness=0,
             highlightbackground=self.bg,
             font=("Helvetica", 10),
-        ).pack(side="left", anchor="w")
+        )
+        self.chk_include_subfolders.pack(side="left", anchor="w")
 
         order_bar = tk.Frame(top_left_col, bg=self.bg)
         order_bar.pack(anchor="w", pady=(10, 0), fill="x")
@@ -2960,6 +2823,17 @@ class App:
         o_rnd.pack(side="left", padx=(0, 6), fill="x", expand=True)
         o_io.pack(side="left", fill="x", expand=True)
         self._apply_order_toggle_chrome()
+
+        self.btn_toggle_guide = tk.Button(
+            top_left_col,
+            text="Show Guide",
+            command=self._toggle_guide_panel_visibility,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(self.btn_toggle_guide)
+        self.btn_toggle_guide.pack(anchor="w", pady=(10, 0))
 
         title_mid = tk.Frame(top, bg=self.bg)
         title_mid.grid(row=0, column=1, sticky="")
@@ -3027,19 +2901,7 @@ class App:
         self._style_tk_button_transport_grey(self.btn_toggle_queue)
         self.btn_toggle_queue.pack(anchor="e", pady=(10, 0))
 
-        self.lbl_session_stats = tk.Label(
-            right_stack,
-            text="",
-            bg=self.bg,
-            fg=self.muted,
-            font=("Helvetica", 9),
-            justify="right",
-            anchor="e",
-            wraplength=320,
-        )
-        self.lbl_session_stats.pack(anchor="e", pady=(8, 0), fill="x")
-
-        status_above_progress = tk.Frame(self._main_column, bg=self.bg)
+        status_above_progress = tk.Frame(self._main_upper, bg=self.bg)
         status_above_progress.pack(fill="x", padx=24, pady=(2, 6))
         self.lbl_mode_header = tk.Label(
             status_above_progress,
@@ -3063,7 +2925,7 @@ class App:
         )
         self.lbl_stats.pack(fill="x", pady=(4, 0))
 
-        progress_row = tk.Frame(self._main_column, bg=self.bg)
+        progress_row = tk.Frame(self._main_upper, bg=self.bg)
         progress_row.pack(fill="x", padx=24, pady=(0, 6))
 
         self.lbl_elapsed = self._readonly_time_label(
@@ -3097,7 +2959,7 @@ class App:
         self.lbl_total.pack(side="left", padx=(12, 0))
 
         self.lbl_playback_start = self._readonly_time_label(
-            self._main_column,
+            self._main_upper,
             text="Playback start: 0:00",
             font=("Helvetica", 12, "bold"),
             width=None,
@@ -3108,7 +2970,7 @@ class App:
         self.root.after_idle(self._raise_time_text_above_scrubber)
 
         self.lbl_now_playing_tag = tk.Label(
-            self._main_column,
+            self._main_upper,
             text="",
             bg=self.bg,
             fg=self.accent,
@@ -3118,7 +2980,7 @@ class App:
             anchor="center",
         )
 
-        self._now_playing_main_wrap = tk.Frame(self._main_column, bg=self.bg)
+        self._now_playing_main_wrap = tk.Frame(self._main_upper, bg=self.bg)
         self._now_playing_main_wrap.pack(fill="x", pady=(0, 2))
         tk.Frame(self._now_playing_main_wrap, bg=self.bg).pack(side="left", fill="x", expand=True)
         self._now_playing_main_inner = tk.Frame(self._now_playing_main_wrap, bg=self.bg)
@@ -3128,7 +2990,7 @@ class App:
         self._set_now_playing_main_plain("Load a folder to begin")
 
         self.lbl_source_folder = tk.Label(
-            self._main_column,
+            self._main_upper,
             text="",
             bg=self.bg,
             fg=self.muted,
@@ -3140,7 +3002,7 @@ class App:
         self.lbl_source_folder.pack(fill="x", pady=(0, 2))
 
         self.lbl_path = tk.Label(
-            self._main_column,
+            self._main_upper,
             text="",
             bg=self.bg,
             fg=self.muted,
@@ -3151,7 +3013,7 @@ class App:
         self.lbl_path.pack(fill="x", padx=24, pady=(0, 5))
 
         self.lbl_track = self._readonly_time_label(
-            self._main_column,
+            self._main_upper,
             text="",
             font=("Helvetica", 12, "bold"),
             width=None,
@@ -3159,7 +3021,7 @@ class App:
         )
         self.lbl_track.pack(fill="x", pady=(0, 1))
 
-        jump = tk.Frame(self._main_column, bg=self.bg)
+        jump = tk.Frame(self._main_upper, bg=self.bg)
         jump.pack(fill="x", padx=24, pady=(0, 6))
         jl = tk.Label(jump, text="Jump to", bg=self.bg, fg=self.muted, font=("Helvetica", 10, "bold"))
         jl.pack(anchor="w", pady=(0, 6))
@@ -3235,28 +3097,65 @@ class App:
         )
         self.lbl_seek_hint.pack(anchor="w", pady=(8, 0))
 
-        transport = tk.Frame(self._main_column, bg=self.bg)
+        transport = tk.Frame(self._main_upper, bg=self.bg)
         transport.pack(fill="x", padx=24, pady=(8, 10))
-        self.btn_play = self._dj_button(transport, "Play", self.toggle_play, kind="transport", width=12, padx=14, pady=10)
-        self.btn_play.pack(side="left")
+        for uc in range(4):
+            transport.columnconfigure(uc, weight=1, uniform="utility_transport")
+        u_gap = 6
+        self.btn_play = self._dj_button(
+            transport,
+            "Play",
+            self.toggle_play,
+            kind="transport",
+            width=0,
+            padx=12,
+            pady=10,
+        )
+        self.btn_play.grid(row=0, column=0, sticky="nsew", padx=(0, u_gap))
         self.btn_replay = self._dj_button(
             transport,
             "Replay",
             self._replay_active_jump_point,
             kind="transport",
-            width=10,
+            width=0,
             padx=12,
             pady=10,
         )
-        self.btn_replay.pack(side="left", padx=(10, 0))
+        self.btn_replay.grid(row=0, column=1, sticky="nsew", padx=(0, u_gap))
+        self.btn_skip = self._dj_button(
+            transport,
+            "Skip",
+            self.skip_current,
+            kind="transport",
+            width=0,
+            padx=12,
+            pady=10,
+        )
+        self.btn_skip.grid(row=0, column=2, sticky="nsew", padx=(0, u_gap))
+        self.btn_undo = self._dj_button(
+            transport,
+            "Undo",
+            self.undo_last,
+            kind="transport",
+            width=0,
+            padx=12,
+            pady=10,
+        )
+        self.btn_undo.grid(row=0, column=3, sticky="nsew", padx=(0, 0))
 
-        self.cleanup_outer = tk.Frame(self._main_column, bg=self.bg)
-        self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 10))
+        self.cleanup_outer = tk.Frame(self._main_action_shell, bg=self.bg)
+        self.cleanup_outer.pack(fill="x", padx=24, pady=(0, 8))
         self.cleanup_actions = tk.Frame(self.cleanup_outer, bg=self.bg)
         self.cleanup_actions.pack(fill="x")
 
+        tinder_sort_row = tk.Frame(self.cleanup_actions, bg=self.bg)
+        tinder_sort_row.pack(fill="x")
+        for tc in range(3):
+            tinder_sort_row.columnconfigure(tc, weight=1, uniform="tinder_sort_col")
+        tinder_sort_row.rowconfigure(0, weight=1)
+
         o_k, self._tile_keep_inner = self._action_tile(
-            self.cleanup_actions,
+            tinder_sort_row,
             "😊",
             "KEEP",
             "→",
@@ -3266,73 +3165,56 @@ class App:
             "#1A1A1A",
             lambda: self.sort_current("keep"),
         )
-        o_k.pack(side="left", fill="both", expand=True)
+        o_k.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
         o_a, self._tile_archive_inner = self._action_tile(
-            self.cleanup_actions,
+            tinder_sort_row,
             "☹️",
             "ARCHIVE",
             "←",
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
-            "#FFCCCC",
+            "#1A1A1A",
             lambda: self.sort_current("archive"),
         )
-        o_a.pack(side="left", fill="both", expand=True)
+        o_a.grid(row=0, column=1, sticky="nsew", padx=3, pady=3)
         o_f, self._tile_favorite_inner = self._action_tile(
-            self.cleanup_actions,
+            tinder_sort_row,
             "🤩",
             "FAVORITE",
             "↑",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
-            "#333333",
+            "#1A1A1A",
             lambda: self.sort_current("favorites"),
         )
-        o_f.pack(side="left", fill="both", expand=True)
-        o_s, self._tile_skip_inner = self._action_tile(
-            self.cleanup_actions, "»", "SKIP", "Enter", self.skip_bg, self.skip_active, self.fg, self.muted, self.skip_current
-        )
-        o_s.pack(side="left", fill="both", expand=True)
-        o_u, self._tile_undo_inner = self._action_tile(
-            self.cleanup_actions,
-            "↶",
-            "UNDO",
-            "Z",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self.undo_last,
-            clickable_when_tiles_disabled=True,
-        )
-        o_u.pack(side="left", fill="both", expand=True)
+        o_f.grid(row=0, column=2, sticky="nsew", padx=3, pady=3)
 
         # Aliases for keyboard flash (tile inner frames)
         self.btn_keep = self._tile_keep_inner  # type: ignore[assignment]
         self.btn_archive = self._tile_archive_inner  # type: ignore[assignment]
         self.btn_favorite = self._tile_favorite_inner  # type: ignore[assignment]
-        self.btn_skip = self._tile_skip_inner  # type: ignore[assignment]
-        self.btn_undo = self._tile_undo_inner  # type: ignore[assignment]
 
-        self.genre_actions = tk.Frame(self._main_column, bg=self.bg)
-        genre_row_top = tk.Frame(self.genre_actions, bg=self.bg)
-        genre_row_top.pack(fill="x")
-        genre_row_bot = tk.Frame(self.genre_actions, bg=self.bg)
-        genre_row_bot.pack(fill="x", pady=(6, 0))
+        self.genre_actions = tk.Frame(self._main_action_shell, bg=self.bg)
+        genre_grid = tk.Frame(self.genre_actions, bg=self.bg)
+        genre_grid.pack(fill="both", expand=True)
+        for gr in range(3):
+            genre_grid.rowconfigure(gr, weight=1, uniform="genre_row")
+        for gc in range(3):
+            genre_grid.columnconfigure(gc, weight=1, uniform="genre_col")
         self._genre_tile_inners.clear()
         self._genre_title_labels.clear()
         for i in range(9):
             digit = str(i + 1)
-            parent_row = genre_row_top if i < 5 else genre_row_bot
+            row, col = divmod(i, 3)
             name = self._genre_labels[i]
             hx = self._genre_colors[i] if i < len(self._genre_colors) else DEFAULT_GENRE_COLORS[i]
             act = self._genre_tile_active_bg(hx)
             fg_m = _fg_for_genre_bg(hx)
             sc_m = _genre_shortcut_fg(fg_m)
             o_g, inn_g = self._genre_action_tile(
-                parent_row,
+                genre_grid,
                 name,
                 digit,
                 hx,
@@ -3341,65 +3223,35 @@ class App:
                 sc_m,
                 lambda idx=i: self.sort_current_genre(idx),
             )
-            o_g.pack(side="left", fill="both", expand=True)
+            o_g.grid(row=row, column=col, sticky="nsew", padx=3, pady=3)
             tw = getattr(inn_g, "_tile_widgets", ())
             if tw and isinstance(tw[0], tk.Label):
                 self._genre_title_labels.append(tw[0])
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
 
-        genre_bot = tk.Frame(self.genre_actions, bg=self.bg)
-        genre_bot.pack(fill="x", pady=(10, 0))
-        o_sg, self._tile_skip_inner_genre = self._action_tile(
-            genre_bot,
-            "»",
-            "SKIP",
-            "Enter",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self.skip_current,
-        )
-        o_sg.pack(side="left", fill="both", expand=True)
-        o_ug, self._tile_undo_inner_genre = self._action_tile(
-            genre_bot,
-            "↶",
-            "UNDO",
-            "Z",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self.undo_last,
-            clickable_when_tiles_disabled=True,
-        )
-        o_ug.pack(side="left", fill="both", expand=True, padx=(6, 0))
-        tk.Frame(genre_bot, bg=self.bg).pack(side="left", fill="x", expand=True)
-        self.btn_edit_genres = tk.Button(
-            genre_bot,
-            text="Edit Genres",
-            command=self._open_edit_genres_dialog,
-            font=("Helvetica", 11, "bold"),
-            padx=14,
-            pady=10,
-        )
-        self._style_tk_button_transport_grey(self.btn_edit_genres)
-        self.btn_edit_genres.pack(side="right")
+        tk.Label(
+            self.genre_actions,
+            text="Edit genres in Settings",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="center",
+        ).pack(fill="x", pady=(4, 0))
+
         self.genre_actions.pack_forget()
         if self._sorting_mode == "genre":
             self.cleanup_outer.pack_forget()
-            self.genre_actions.pack(fill="x", padx=24, pady=(0, 10))
-
-        self.shortcut_frame = self._build_shortcut_guide_panel(self._main_column)
-        self.footer_outer = tk.Frame(self._main_column, bg=self.bg)
-        self.footer_outer.pack(fill="x", padx=0, pady=(0, 6))
-        self._build_branding_footer(self.footer_outer)
-        if self._shortcut_panel_visible:
-            self.shortcut_frame.pack(fill="x", padx=24, pady=(12, 8), before=self.footer_outer)
+            self.genre_actions.pack(fill="both", expand=True, padx=24, pady=(0, 8))
 
         self._build_queue_sidebar()
-        self._finalize_main_scroll_bindings()
+        self._build_guide_sidebar()
+
+        self.footer_outer = tk.Frame(self._bottom_dock, bg=self.bg)
+        self.footer_outer.pack(fill="x", padx=0, pady=(0, 6))
+        self._build_branding_footer(self.footer_outer)
+
+        self._apply_guide_panel_visibility(self._shortcut_panel_visible)
 
     def _queue_ellipsis(self, text: str, max_chars: int = 36) -> str:
         s = text.strip()
@@ -3467,40 +3319,21 @@ class App:
 
     def _apply_queue_panel_visibility(self, visible: bool) -> None:
         self._queue_panel_visible = visible
-        outer = self._queue_sidebar_outer
-        main_area = self._main_scroll_outer
-        if main_area is None:
-            main_area = self._main_column
-        if outer is None or main_area is None:
-            return
-        try:
-            if visible:
-                # Pack fixed-width sidebar before the expanding column so Tk never assigns it 0 width
-                # when the shortcut guide forces a large main minimum width.
-                main_area.pack_forget()
-                outer.pack(side="right", fill="y", padx=(0, 16), pady=(18, 24))
-                main_area.pack(side="left", fill="both", expand=True)
-                try:
-                    outer.lift(main_area)
-                except tk.TclError:
-                    pass
-                if self.btn_toggle_queue is not None:
-                    self.btn_toggle_queue.configure(text="Hide Queue")
-                try:
-                    self.root.minsize(_WIN_MIN_W + _QUEUE_PANEL_WIDTH_RESERVE, _WIN_MIN_H)
-                except tk.TclError:
-                    pass
-            else:
-                outer.pack_forget()
-                if self.btn_toggle_queue is not None:
-                    self.btn_toggle_queue.configure(text="Show Queue")
-                try:
-                    self.root.minsize(_WIN_MIN_W, _WIN_MIN_H)
-                except tk.TclError:
-                    pass
-        except tk.TclError:
-            pass
+        if self.btn_toggle_queue is not None:
+            try:
+                self.btn_toggle_queue.configure(text="Hide Queue" if visible else "Show Queue")
+            except tk.TclError:
+                pass
+        if self._queue_sidebar_outer is not None:
+            try:
+                if visible:
+                    self._queue_sidebar_outer.pack(side="right", fill="y", padx=(0, 16), pady=(18, 24))
+                else:
+                    self._queue_sidebar_outer.pack_forget()
+            except tk.TclError:
+                pass
         self._refresh_queue_panel()
+        self._refresh_session_stats()
         self._update_content_wraplengths()
 
     def _toggle_queue_panel_visibility(self) -> None:
@@ -3512,25 +3345,63 @@ class App:
         self._toggle_queue_panel_visibility()
         return "break"
 
+    def _apply_guide_panel_visibility(self, visible: bool) -> None:
+        self._shortcut_panel_visible = visible
+        if self.btn_toggle_guide is not None:
+            try:
+                self.btn_toggle_guide.configure(text="Hide Guide" if visible else "Show Guide")
+            except tk.TclError:
+                pass
+        if self._guide_sidebar_outer is not None:
+            try:
+                if visible:
+                    if self._main_scroll_outer is not None:
+                        self._guide_sidebar_outer.pack(
+                            side="left",
+                            before=self._main_scroll_outer,
+                            fill="y",
+                            padx=(16, 0),
+                            pady=(18, 24),
+                        )
+                    else:
+                        self._guide_sidebar_outer.pack(
+                            side="left", fill="y", padx=(16, 0), pady=(18, 24)
+                        )
+                else:
+                    self._guide_sidebar_outer.pack_forget()
+            except tk.TclError:
+                pass
+        self._update_content_wraplengths()
+        self._refresh_all_widget_chrome()
+
+    def _toggle_guide_panel_visibility(self) -> None:
+        self._apply_guide_panel_visibility(not self._shortcut_panel_visible)
+
     def _build_queue_sidebar(self) -> None:
+        """Build the RIGHT sidebar (Queue + Session Stats). Initial visibility set by caller."""
         if self._body is None:
             return
-        outer = tk.Frame(self._body, bg=self.bg, width=236)
+        outer = tk.Frame(self._body, bg=self.bg, width=248)
         outer.pack_propagate(False)
         self._queue_sidebar_outer = outer
 
         inner = tk.Frame(outer, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
-        inner.pack(fill="both", expand=True, padx=(0, 4), pady=(18, 24))
+        inner.pack(fill="both", expand=True)
+        self._queue_sidebar_inner = inner
+
+        qf = tk.Frame(inner, bg=self.panel)
+        qf.pack(fill="x")
+        self._queue_section_frame = qf
 
         hdr_small = ("Helvetica", 8, "bold")
-        tk.Label(inner, text="QUEUE", bg=self.panel, fg=self.accent, font=("Helvetica", 10, "bold"), anchor="w").pack(
+        tk.Label(qf, text="QUEUE", bg=self.panel, fg=self.accent, font=("Helvetica", 10, "bold"), anchor="w").pack(
             fill="x", padx=10, pady=(10, 8)
         )
 
-        tk.Label(inner, text="NOW PLAYING", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+        tk.Label(qf, text="NOW PLAYING", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
             fill="x", padx=10, pady=(0, 4)
         )
-        now_box = tk.Frame(inner, bg=self.panel, highlightthickness=1, highlightbackground=self.accent)
+        now_box = tk.Frame(qf, bg=self.panel, highlightthickness=1, highlightbackground=self.accent)
         now_box.pack(fill="x", padx=10, pady=(0, 10))
         self._lbl_queue_now = tk.Label(
             now_box,
@@ -3544,10 +3415,10 @@ class App:
         )
         self._lbl_queue_now.pack(fill="x", padx=8, pady=8)
 
-        tk.Label(inner, text="UP NEXT", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+        tk.Label(qf, text="UP NEXT", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
             fill="x", padx=10, pady=(0, 4)
         )
-        up_wrap = tk.Frame(inner, bg=self.panel)
+        up_wrap = tk.Frame(qf, bg=self.panel)
         up_wrap.pack(fill="x", padx=10, pady=(0, 10))
         self._lbl_queue_up.clear()
         for _ in range(5):
@@ -3564,12 +3435,12 @@ class App:
             lb.pack(fill="x", pady=(0, 3))
             self._lbl_queue_up.append(lb)
 
-        tk.Frame(inner, height=1, bg=self.panel_border).pack(fill="x", padx=10, pady=(4, 8))
+        tk.Frame(qf, height=1, bg=self.panel_border).pack(fill="x", padx=10, pady=(4, 8))
 
-        tk.Label(inner, text="RECENTLY SORTED", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
+        tk.Label(qf, text="RECENTLY SORTED", bg=self.panel, fg=self.muted, font=hdr_small, anchor="w").pack(
             fill="x", padx=10, pady=(0, 4)
         )
-        rec_wrap = tk.Frame(inner, bg=self.panel)
+        rec_wrap = tk.Frame(qf, bg=self.panel)
         rec_wrap.pack(fill="x", padx=10, pady=(0, 12))
         self._lbl_queue_recent.clear()
         for _ in range(5):
@@ -3586,17 +3457,47 @@ class App:
             lb.pack(fill="x", pady=(0, 4))
             self._lbl_queue_recent.append(lb)
 
+        self._sidebar_spring = tk.Frame(inner, bg=self.panel)
+        self._sidebar_spring.pack(fill="both", expand=True)
+        self.lbl_session_stats = tk.Label(
+            inner,
+            text="",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            justify="left",
+            anchor="w",
+            wraplength=_GUIDE_SIDEBAR_TEXT_WRAP,
+        )
+        self.lbl_session_stats.pack(fill="x", padx=8, pady=(4, 10))
+
         self._refresh_queue_panel()
+
+    def _build_guide_sidebar(self) -> None:
+        """Build the LEFT sidebar (collapsible Help Guide). Initial visibility set by caller."""
+        if self._body is None:
+            return
+        outer = tk.Frame(self._body, bg=self.bg, width=248)
+        outer.pack_propagate(False)
+        self._guide_sidebar_outer = outer
+
+        inner = tk.Frame(outer, bg=self.bg)
+        inner.pack(fill="both", expand=True)
+        self._guide_sidebar_inner = inner
+
+        self.shortcut_frame = self._build_shortcut_guide_panel(inner)
+        self.shortcut_frame.pack(fill="both", expand=True)
 
     def _build_shortcut_guide_panel(self, parent: tk.Misc) -> tk.Frame:
         outer = tk.Frame(parent, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
         inner_pad = tk.Frame(outer, bg=self.panel)
-        inner_pad.pack(fill="both", expand=True, padx=16, pady=14)
-        hdr = ("Helvetica", 13, "bold")
-        body = ("Helvetica", 12)
-        meta = ("Helvetica", 10)
-        grid = tk.Frame(inner_pad, bg=self.panel)
-        grid.pack(fill="x")
+        inner_pad.pack(fill="both", expand=True, padx=10, pady=8)
+        hdr = ("Helvetica", 11, "bold")
+        body = ("Helvetica", 9)
+        meta = ("Helvetica", 8)
+        stack = tk.Frame(inner_pad, bg=self.panel)
+        stack.pack(fill="x")
+        wl = _GUIDE_SIDEBAR_TEXT_WRAP
         specs = [
             (
                 "▶ TINDER",
@@ -3609,13 +3510,13 @@ class App:
                     "⌃Z  Undo all (back to folder load)",
                 ],
             ),
-                (
+            (
                 "♪ PLAYBACK",
                 [
                     "Space  Play / Pause",
                     "↓  Replay from playback start",
                     "R  Replay active jump (preset / Outro / default start)",
-                    "Q  Show / hide queue panel",
+                    "Q  Show / hide queue list",
                 ],
             ),
             (
@@ -3643,13 +3544,13 @@ class App:
                     "1–9  Sort to genre folder",
                     "Enter  Skip · Z  Undo",
                     "⌃Z  Undo all",
-                    "Edit Genres saves labels + colors",
+                    "Edit genres in Settings (labels + colors)",
                 ],
             ),
         ]
-        for col, (title, lines) in enumerate(specs):
-            col_f = tk.Frame(grid, bg=self.panel)
-            col_f.grid(row=0, column=col, sticky="nw", padx=(0, 14), pady=0)
+        for _, (title, lines) in enumerate(specs):
+            col_f = tk.Frame(stack, bg=self.panel)
+            col_f.pack(fill="x", pady=(0, 10))
             tk.Label(col_f, text=title, bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
             for line in lines:
                 tk.Label(
@@ -3660,16 +3561,16 @@ class App:
                     font=body,
                     anchor="w",
                     justify="left",
-                ).pack(anchor="w", pady=(4, 0))
-        for c in range(5):
-            grid.columnconfigure(c, weight=1, uniform="help")
+                    wraplength=wl,
+                ).pack(anchor="w", pady=(2, 0), fill="x")
         tk.Label(
             inner_pad,
             text="Press H to hide or show this guide",
             bg=self.panel,
             fg=self.muted,
             font=meta,
-        ).pack(anchor="w", pady=(12, 0))
+            wraplength=wl,
+        ).pack(anchor="w", pady=(4, 0))
         return outer
 
     def _build_branding_footer(self, parent: tk.Misc) -> None:
@@ -3685,7 +3586,7 @@ class App:
                 from PIL import Image, ImageTk
 
                 img = Image.open(logo_path).convert("RGBA")
-                h = max(24, min(56, img.height))
+                h = max(22, min(34, img.height))
                 w = max(1, int(img.width * (h / float(img.height))))
                 try:
                     resample = Image.Resampling.LANCZOS
@@ -3764,7 +3665,7 @@ class App:
             self._flash_after_ids.pop(key, None)
             self._refresh_all_widget_chrome()
 
-        if btn is self.btn_play or btn is self.btn_replay:
+        if btn in (self.btn_play, self.btn_replay, self.btn_skip, self.btn_undo):
             t = self.time_text_fg
             btn.configure(
                 bg=self.transport_grey_active,
@@ -4004,15 +3905,8 @@ class App:
 
     def _set_buttons_enabled(self, on: bool) -> None:
         self._tiles_enabled = on
-        state = "normal" if on else "disabled"
         # Load folder must stay enabled so users can pick a folder when the queue is empty or finished.
         self.btn_load.configure(state="normal")
-        self.btn_play.configure(state=state)
-        self.btn_replay.configure(state=state)
-        try:
-            self.btn_edit_genres.configure(state="normal")
-        except (tk.TclError, AttributeError):
-            pass
         self._refresh_all_widget_chrome()
 
     def _genre_stats_text(self) -> str:
@@ -4427,6 +4321,65 @@ class App:
             font=("Helvetica", 10),
         ).pack(anchor="w", pady=(4, 8))
 
+        sep_genre = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_genre.pack_propagate(False)
+        sep_genre.pack(fill="x", pady=(0, 10))
+
+        tk.Label(
+            inner,
+            text="Genre settings",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            inner,
+            text="Edit genre labels and colors, or reset to defaults.",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            wraplength=440,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 8))
+
+        row_genre = tk.Frame(inner, bg=self.panel)
+        row_genre.pack(anchor="w", pady=(0, 8))
+
+        def on_edit_genres_from_settings() -> None:
+            self._open_edit_genres_dialog()
+
+        def on_reset_genres_defaults() -> None:
+            self._prepare_native_dialog()
+            if not messagebox.askyesno(
+                "Reset genres",
+                "Reset all genre names and colors to the app defaults? This saves immediately.",
+                parent=top,
+            ):
+                return
+            self._reset_genres_to_defaults_and_persist()
+
+        b_edit_genres = tk.Button(
+            row_genre,
+            text="Edit genre labels & colors",
+            command=on_edit_genres_from_settings,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_edit_genres)
+        b_edit_genres.pack(side="left")
+        b_reset_genres = tk.Button(
+            row_genre,
+            text="Reset genres to default",
+            command=on_reset_genres_defaults,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_reset_genres)
+        b_reset_genres.pack(side="left", padx=(8, 0))
+
         btn_close = tk.Button(outer, text="Close", command=close, font=("Helvetica", 11, "bold"), padx=16, pady=6)
         self._style_tk_button_transport_grey(btn_close)
         btn_close.pack(anchor="e", pady=(12, 0))
@@ -4441,7 +4394,7 @@ class App:
             return
         p = load_default_folder_path()
         if not p:
-            self.lbl_default_folder_path.configure(text="No default folder set", fg=self.muted)
+            self.lbl_default_folder_path.configure(text="No default folder selected", fg=self.muted)
             return
         display = p
         if len(display) > 72:
