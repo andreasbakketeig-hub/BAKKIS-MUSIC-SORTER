@@ -41,10 +41,10 @@ _WIN_MIN_H = 860
 # Shared horizontal inset for main-column blocks (header, progress, jump, transport, sort shells, footer).
 _CONTENT_GUTTER = 24
 # Fixed height for Swipe vs Grid swap zone — avoids vertical jump when switching modes (inner content fills).
-_ACTION_ZONE_FIXED_HEIGHT_PX = 392
+_ACTION_ZONE_FIXED_HEIGHT_PX = 280
 # Vertical rhythm between major blocks in the main column.
-_SECTION_GAP_Y_TIGHT = 4
-_SECTION_GAP_Y = 8
+_SECTION_GAP_Y_TIGHT = 3
+_SECTION_GAP_Y = 6
 # Sidebar reservations (queue/right · guide/left): used so main column wraplengths stay correct.
 _QUEUE_PANEL_WIDTH_RESERVE = 268
 _GUIDE_PANEL_WIDTH_RESERVE = 268
@@ -93,7 +93,7 @@ def _shortcut_caption_loose(s: str) -> str:
 
 
 # Unified action tile layout (utility bar · keep/archive/favorite · order · genre).
-_ACTION_TILE_ROW_GAP_PX = 10
+_ACTION_TILE_ROW_GAP_PX = 6
 _ACTION_TILE_FRAME_PAD_PX = 4
 _ACTION_TILE_GRID_GAP_PX = 6
 _SWIPE_SORT_GRID_PAD = 3
@@ -3205,11 +3205,10 @@ class App:
         )
         inner.columnconfigure(0, weight=1)
         inner.rowconfigure(0, weight=1)
-        inner.rowconfigure(4, weight=1)
-        ic.grid(row=1, column=0, sticky="")
-        tl.grid(row=2, column=0, sticky="", pady=(gap, gap))
-        sc.grid(row=3, column=0, sticky="")
-        for w in (outer, inner, ic, tl, sc):
+        inner.rowconfigure(3, weight=1)
+        tl.grid(row=1, column=0, sticky="", pady=(gap, 0))
+        sc.grid(row=2, column=0, sticky="", pady=(2, 0))
+        for w in (outer, inner, tl, sc):
             w.bind("<Button-1>", on_click)
             w.bind("<Enter>", lambda _e, inn=inner: self._on_unified_action_tile_enter(inn))
             w.bind("<Leave>", lambda _e, inn=inner: self._on_unified_action_tile_leave(inn))
@@ -3217,7 +3216,7 @@ class App:
         inner._tile_active_bg = active_bg  # type: ignore[attr-defined]
         inner._tile_fg = fg  # type: ignore[attr-defined]
         inner._tile_shortcut_fg = shortcut_fg  # type: ignore[attr-defined]
-        inner._tile_widgets = (ic, tl, sc)  # type: ignore[attr-defined]
+        inner._tile_widgets = (tl, sc)  # type: ignore[attr-defined]
         inner._genre_name_label = tl  # type: ignore[attr-defined]
         inner.pack(
             fill="both",
@@ -3494,10 +3493,10 @@ class App:
         if self.cleanup_outer is not None and self.genre_actions is not None:
             if mode == "swipe":
                 self.genre_actions.pack_forget()
-                self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
+                self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
             else:
                 self.cleanup_outer.pack_forget()
-                self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
+                self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
         self._refresh_stats()
         self._refresh_session_stats()
         self._refresh_all_widget_chrome()
@@ -3855,7 +3854,7 @@ class App:
         self._action_swap_host.pack(fill="both", expand=True)
 
         top = tk.Frame(self._main_upper, bg=self.bg)
-        top.pack(fill="x", padx=_CONTENT_GUTTER, pady=(10, 4))
+        top.pack(fill="x", padx=_CONTENT_GUTTER, pady=(6, 4))
         # Equal side columns keep the title in the true horizontal center while resizing.
         top.columnconfigure(0, weight=1, uniform="top_hdr")
         top.columnconfigure(1, weight=0)
@@ -3901,7 +3900,7 @@ class App:
         self._load_folder_ring.pack(side="left", fill="x", expand=True)
 
         def_row = tk.Frame(top_left_col, bg=self.bg)
-        def_row.pack(anchor="w", fill="x", pady=(8, 0))
+        def_row.pack(anchor="w", fill="x", pady=(5, 0))
         self.btn_load_default_folder = tk.Button(
             def_row,
             text="Load Default Folder",
@@ -3922,7 +3921,7 @@ class App:
             anchor="w",
             justify="left",
         )
-        self.lbl_default_folder_path.pack(anchor="w", pady=(4, 0), fill="x")
+        self.lbl_default_folder_path.pack(anchor="w", pady=(2, 0), fill="x")
         self._refresh_default_folder_label()
 
         self._hidden_chrome_host = tk.Frame(self.root, bg=self.bg)
@@ -4035,10 +4034,10 @@ class App:
         )
         player_card.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y))
         card_inner = tk.Frame(player_card, bg=self.bg)
-        card_inner.pack(fill="x", padx=12, pady=(10, 10))
+        card_inner.pack(fill="x", padx=12, pady=(8, 8))
 
         status_above_progress = tk.Frame(card_inner, bg=self.bg)
-        status_above_progress.pack(fill="x", pady=(0, 2))
+        status_above_progress.pack(fill="x", pady=(0, 1))
         self.lbl_stats = tk.Label(
             status_above_progress,
             text="",
@@ -4058,7 +4057,7 @@ class App:
             width=None,
             anchor="center",
         )
-        self.lbl_track.pack(fill="x", pady=(2, 0))
+        self.lbl_track.pack(fill="x", pady=(1, 0))
 
         self.lbl_now_playing_tag = tk.Label(
             card_inner,
@@ -4072,7 +4071,7 @@ class App:
         )
 
         self._now_playing_main_wrap = tk.Frame(card_inner, bg=self.bg)
-        self._now_playing_main_wrap.pack(fill="x", pady=(2, 4))
+        self._now_playing_main_wrap.pack(fill="x", pady=(1, 2))
         tk.Frame(self._now_playing_main_wrap, bg=self.bg).pack(side="left", fill="x", expand=True)
         self._now_playing_main_inner = tk.Frame(self._now_playing_main_wrap, bg=self.bg)
         self._now_playing_main_inner.pack(side="left")
@@ -4094,7 +4093,7 @@ class App:
 
         self.progress_canvas = tk.Canvas(
             progress_row,
-            height=28,
+            height=22,
             bg=self.trough,
             highlightthickness=1,
             highlightbackground=self.panel_border,
@@ -4116,7 +4115,7 @@ class App:
         self.root.after_idle(self._raise_time_text_above_scrubber)
 
         paths_strip = tk.Frame(card_inner, bg=self.bg)
-        paths_strip.pack(fill="x", pady=(4, 0))
+        paths_strip.pack(fill="x", pady=(2, 0))
         self.lbl_source_folder = tk.Label(
             paths_strip,
             text="",
@@ -4143,7 +4142,7 @@ class App:
 
         transport_bar = tk.Frame(self._main_upper, bg=self.bg)
         transport_bar.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y_TIGHT))
-        transport_bar.rowconfigure(0, minsize=72)
+        transport_bar.rowconfigure(0, minsize=62)
         u_uniform = "transport_util"
         for col in range(4):
             transport_bar.columnconfigure(col, weight=1, uniform=u_uniform)
@@ -4289,12 +4288,12 @@ class App:
             fg=self.warning,
             font=("Helvetica Neue", 10),
         )
-        self.lbl_seek_hint.pack(anchor="w", pady=(4, 0))
+        self.lbl_seek_hint.pack(anchor="w", pady=(2, 0))
 
         self._apply_mode_switch_chrome()
 
         self.cleanup_outer = tk.Frame(self._action_swap_host, bg=self.bg)
-        self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
+        self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
         self.cleanup_actions = tk.Frame(self.cleanup_outer, bg=self.bg)
         self.cleanup_actions.pack(fill="both", expand=True)
 
@@ -4396,61 +4395,12 @@ class App:
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
 
-        grid_kaf_row = tk.Frame(self.genre_actions, bg=self.bg)
-        grid_kaf_row.pack(fill="x", pady=(8, 2))
-        for gkc in range(3):
-            grid_kaf_row.columnconfigure(gkc, weight=1, uniform="grid_kaf_col")
-        _gk = _ACTION_TILE_GRID_GAP_PX
-        o_gkk, self._grid_kaf_keep_inner = self._action_tile(
-            grid_kaf_row,
-            "😊",
-            "KEEP",
-            "[→]",
-            self.accent,
-            self.accent_active,
-            self.teal_on_fg,
-            "#1A1A1A",
-            lambda: self.sort_current("keep"),
-        )
-        o_gkk.grid(row=0, column=0, sticky="nsew", padx=(0, _gk), pady=0)
-        o_gka, self._grid_kaf_archive_inner = self._action_tile(
-            grid_kaf_row,
-            "☹️",
-            "ARCHIVE",
-            "[↑]",
-            self.archive_bg,
-            self.archive_active,
-            self.archive_fg,
-            "#1A1A1A",
-            lambda: self.sort_current("archive"),
-        )
-        o_gka.grid(row=0, column=1, sticky="nsew", padx=(0, _gk), pady=0)
-        o_gkf, self._grid_kaf_favorite_inner = self._action_tile(
-            grid_kaf_row,
-            "🤩",
-            "FAVORITE",
-            "[←]",
-            self.favorite_bg,
-            self.favorite_active,
-            self.favorite_on_fg,
-            "#1A1A1A",
-            lambda: self.sort_current("favorites"),
-        )
-        o_gkf.grid(row=0, column=2, sticky="nsew", padx=(0, 0), pady=0)
-
-        tk.Label(
-            self.genre_actions,
-            text="Edit genres in Settings",
-            bg=self.bg,
-            fg=self.muted,
-            font=("Helvetica", 9),
-            anchor="center",
-        ).pack(fill="x", pady=(4, 0))
+        # Grid Mode: genre grid is the sole action area — no KAF row.
 
         self.genre_actions.pack_forget()
         if self._sorting_mode == "grid":
             self.cleanup_outer.pack_forget()
-            self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(4, 8))
+            self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
 
         self._build_queue_sidebar()
         self._build_guide_sidebar()
@@ -4822,10 +4772,10 @@ class App:
 
     def _build_branding_footer(self, parent: tk.Misc) -> None:
         footer = tk.Frame(parent, bg=self.bg, highlightthickness=0, cursor="")
-        footer.pack(fill="x", padx=_CONTENT_GUTTER, pady=(4, 8))
+        footer.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
 
         rule = tk.Frame(footer, height=1, bg=self.panel_border)
-        rule.pack(fill="x", pady=(6, 8))
+        rule.pack(fill="x", pady=(4, 6))
 
         logo_path = _bundle_dir() / "bakkislogo.png"
         if logo_path.is_file():
