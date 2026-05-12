@@ -1117,6 +1117,8 @@ class App:
         self.btn_dark_active = "#222831"
         self.btn_dark_active_fg = "#FFFFFF"
         self.disabled_fg = "#777777"
+        self.mode_status_tinder_fg = self.accent
+        self.mode_status_genre_fg = "#F4C842"
 
         self.root.configure(bg=self.bg)
         self._apply_global_tk_dark_defaults()
@@ -1519,10 +1521,6 @@ class App:
                 self.lbl_stats.configure(wraplength=inner)
             else:
                 self.lbl_stats.configure(wraplength=0)
-        except tk.TclError:
-            pass
-        try:
-            self.lbl_mode_header.configure(wraplength=inner)
         except tk.TclError:
             pass
         try:
@@ -2209,8 +2207,79 @@ class App:
             cursor="",
         )
 
+    def _mode_status_text(self, mode: SortingMode) -> str:
+        label = "TINDER MODE" if mode == "swipe" else "GENRE MODE"
+        return " ".join(label)
+
+    def _mode_status_fg(self, mode: SortingMode) -> str:
+        return self.mode_status_tinder_fg if mode == "swipe" else self.mode_status_genre_fg
+
+    def _refresh_mode_status_label(self) -> None:
+        if self.lbl_mode_header is None:
+            return
+        try:
+            self.lbl_mode_header.configure(
+                text=self._mode_status_text(self._sorting_mode),
+                fg=self._mode_status_fg(self._sorting_mode),
+            )
+        except tk.TclError:
+            pass
+
+    def _is_active_jump_label(self, lbl: tk.Label) -> bool:
+        sel = self._jump_highlight_key
+        if lbl is self._jump_btn_outro and sel == "outro":
+            return True
+        for sec, btn in self._preset_jump_buttons.items():
+            if btn is lbl and isinstance(sel, int) and sec == sel:
+                return True
+        return False
+
+    def _recompute_desired_start_and_highlight(self) -> None:
+        """Used by first track load and live Settings changes for default playback start."""
+        want = float(self._user_playback_start_sec)
+        if self._duration_sec <= 0.0 or self._duration_sec < want + 30.0:
+            self._desired_start_sec = 0.0
+            self._playback_start_label = "0:00"
+        else:
+            self._desired_start_sec = want
+            self._playback_start_label = format_sec(want)
+        self._set_playback_start_line(self._playback_start_label)
+        outro_sec = self._outro_jump_seconds()
+        ds = self._desired_start_sec
+        used_config_start = self._duration_sec > 0.0 and self._duration_sec >= want + 30.0
+        if self._duration_sec >= 3.0 and abs(ds - outro_sec) <= 0.75:
+            if used_config_start and abs(ds - want) <= 0.75:
+                self._jump_highlight_key = int(round(ds))
+            else:
+                self._jump_highlight_key = "outro"
+        else:
+            self._jump_highlight_key = int(round(ds))
+
+    def _apply_user_playback_start_change(self, new_sec: float) -> None:
+        new_sec = float(new_sec)
+        self._user_playback_start_sec = new_sec
+        patch_user_settings(playback_start_seconds=new_sec)
+        if self._current_path() is None:
+            self._refresh_all_widget_chrome()
+            return
+        self._recompute_desired_start_and_highlight()
+        if not self._is_playing:
+            self._audio_offset_in_source = self._desired_start_sec
+            self._set_elapsed_seconds(self._desired_start_sec)
+            self._draw_progress_bar(self._desired_start_sec)
+        self._refresh_all_widget_chrome()
+
     def _style_jump_label_idle(self, lbl: tk.Label) -> None:
         """Inactive jump tile: same contrast idea as sort tiles (dark panel + light text)."""
+        base = getattr(lbl, "_jump_base_text", None)
+        font_idle = getattr(lbl, "_jump_idle_font", None)
+        try:
+            if isinstance(base, str):
+                lbl.configure(text=base)
+            if font_idle is not None:
+                lbl.configure(font=font_idle)
+        except tk.TclError:
+            pass
         lbl.configure(
             bg=self.panel,
             fg=self.fg,
@@ -2220,8 +2289,17 @@ class App:
         )
 
     def _style_jump_label_active(self, lbl: tk.Label) -> None:
-        """Selected preset / Outro: teal tile + black text (readable on macOS)."""
+        """Selected preset / Outro: teal + START / time caption on the tile."""
         glow = "#00F0DC"
+        time_only = getattr(lbl, "_jump_time_only", None)
+        active_font = getattr(lbl, "_jump_active_font", None)
+        try:
+            if isinstance(time_only, str) and time_only:
+                lbl.configure(text=f"START\n{time_only}")
+                if active_font is not None:
+                    lbl.configure(font=active_font)
+        except tk.TclError:
+            pass
         lbl.configure(
             bg=self.accent,
             fg=self.teal_on_fg,
@@ -2231,6 +2309,15 @@ class App:
         )
 
     def _style_jump_label_disabled(self, lbl: tk.Label) -> None:
+        base = getattr(lbl, "_jump_base_text", None)
+        font_idle = getattr(lbl, "_jump_idle_font", None)
+        try:
+            if isinstance(base, str):
+                lbl.configure(text=base)
+            if font_idle is not None:
+                lbl.configure(font=font_idle)
+        except tk.TclError:
+            pass
         lbl.configure(
             bg=self.trough,
             fg=self.disabled_fg,
@@ -2451,15 +2538,13 @@ class App:
         self.lbl_total.configure(text=format_sec(sec), **self._time_display_label_kw())
 
     def _set_playback_start_line(self, time_part: str) -> None:
-        self.lbl_playback_start.configure(
-            text=f"Playback start: {time_part}",
-            **self._time_display_label_kw(),
-        )
+        """Legacy hook: playback start is shown on the active jump tile; keep for callers."""
+        del time_part  # unused — _playback_start_label is still updated by recompute paths
 
     def _reapply_time_display_labels(self) -> None:
         """Reassert colors without changing text (dialogs / focus / periodic tick)."""
         kw = self._time_display_label_kw()
-        for w in (self.lbl_elapsed, self.lbl_total, self.lbl_playback_start, self.lbl_track):
+        for w in (self.lbl_elapsed, self.lbl_total, self.lbl_track):
             try:
                 w.configure(**kw)
             except tk.TclError:
@@ -2568,6 +2653,9 @@ class App:
         tinder_delta_plus: bool = False,
     ) -> tk.Label:
         """Clickable Label tiles — macOS Tk Buttons often render unusable light-grey fills."""
+        idle_font = ("Helvetica", 13, "bold")
+        active_font = ("Helvetica", 11, "bold")
+
         def on_press(_e: object) -> None:
             if not self._tiles_enabled:
                 return
@@ -2587,7 +2675,7 @@ class App:
 
         opt: dict = dict(
             text=base_text,
-            font=("Helvetica", 13, "bold"),
+            font=idle_font,
             padx=12,
             pady=10,
             anchor="center",
@@ -2599,12 +2687,21 @@ class App:
             opt["width"] = width
         lbl = tk.Label(parent, **opt)
         lbl._jump_base_text = base_text  # type: ignore[attr-defined]
+        lbl._jump_idle_font = idle_font  # type: ignore[attr-defined]
+        lbl._jump_active_font = active_font  # type: ignore[attr-defined]
+        if tinder_target_sec is not None:
+            lbl._jump_time_only = format_sec(float(tinder_target_sec))  # type: ignore[attr-defined]
+        elif "Outro" in base_text:
+            lbl._jump_time_only = "Outro"  # type: ignore[attr-defined]
+        else:
+            lbl._jump_time_only = ""  # type: ignore[attr-defined]
         lbl.bind("<ButtonPress-1>", on_press)
         if hint_suffix:
 
             def _hint_enter(_e: object) -> None:
-                # In grid mode, keys 1–9 sort to tiles — do not show those digits on jump tiles.
                 if self._sorting_mode == "grid" and (hint_suffix or "").strip().isdigit():
+                    return
+                if self._is_active_jump_label(lbl):
                     return
                 try:
                     lbl.configure(text=base_text + hint_suffix)
@@ -2612,8 +2709,10 @@ class App:
                     pass
 
             def _hint_leave(_e: object) -> None:
+                if self._is_active_jump_label(lbl):
+                    return
                 try:
-                    lbl.configure(text=base_text)
+                    lbl.configure(text=base_text, font=idle_font)
                 except tk.TclError:
                     pass
 
@@ -2761,7 +2860,7 @@ class App:
             text=icon,
             bg=self.skip_bg,
             fg=self.fg,
-            font=_ACTION_TILE_ICON_FONT,
+            font=("Helvetica Neue", 24, "bold"),
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2772,7 +2871,7 @@ class App:
             text=sc_text,
             bg=self.skip_bg,
             fg=self.muted,
-            font=_ACTION_TILE_SHORTCUT_FONT,
+            font=("Helvetica", 10, "bold"),
             anchor="center",
             justify="center",
             highlightthickness=0,
@@ -2793,7 +2892,7 @@ class App:
             w.bind("<Enter>", lambda _e, o=outer: self._on_transport_utility_cell_enter(o))
             w.bind("<Leave>", lambda _e, o=outer: self._on_transport_utility_cell_leave(o))
 
-        inner.pack(fill="both", expand=True, padx=2, pady=4)
+        inner.pack(fill="both", expand=True, padx=6, pady=6)
         return outer, inner
 
     def _on_transport_utility_cell_press(self, outer: tk.Frame, _e: object) -> None:
@@ -3237,9 +3336,7 @@ class App:
         self._tinder_kb_jump_error_plus30 = False
         self._reset_jump_time_button_captions()
         if self.lbl_mode_header is not None:
-            self.lbl_mode_header.configure(
-                text="MODE: SWIPE" if mode == "swipe" else "MODE: GRID",
-            )
+            self._refresh_mode_status_label()
         self._apply_mode_switch_chrome()
         if self.cleanup_outer is not None and self.genre_actions is not None:
             if mode == "swipe":
@@ -3633,26 +3730,8 @@ class App:
         self.lbl_default_folder_path.pack(anchor="w", pady=(4, 0), fill="x")
         self._refresh_default_folder_label()
 
-        sub_row = tk.Frame(top_left_col, bg=self.bg)
-        sub_row.pack(anchor="w", pady=(8, 0), fill="x")
-        self.chk_include_subfolders = tk.Checkbutton(
-            sub_row,
-            text="Include subfolders",
-            variable=self._var_include_subfolders,
-            command=self._on_include_subfolders_toggle,
-            bg=self.bg,
-            fg=self.fg,
-            selectcolor=self.panel,
-            activebackground=self.bg,
-            activeforeground=self.fg,
-            highlightthickness=0,
-            highlightbackground=self.bg,
-            font=("Helvetica", 10),
-        )
-        self.chk_include_subfolders.pack(side="left", anchor="w")
-
         order_bar = tk.Frame(top_left_col, bg=self.bg)
-        order_bar.pack(anchor="w", pady=(10, 0), fill="x")
+        order_bar.pack(anchor="w", pady=(8, 0), fill="x")
         tk.Label(order_bar, text="Order:", bg=self.bg, fg=self.muted, font=("Helvetica", 10, "bold")).pack(
             side="left",
             padx=(0, 8),
@@ -3700,6 +3779,16 @@ class App:
 
         title_mid = tk.Frame(top, bg=self.bg)
         title_mid.grid(row=0, column=1, sticky="")
+        self.lbl_mode_header = tk.Label(
+            title_mid,
+            text=self._mode_status_text(self._sorting_mode),
+            bg=self.bg,
+            fg=self._mode_status_fg(self._sorting_mode),
+            font=("Helvetica", 11, "bold"),
+            anchor="center",
+            justify="center",
+        )
+        self.lbl_mode_header.pack(pady=(0, 4))
         titles = tk.Frame(title_mid, bg=self.bg)
         titles.pack()
         tk.Label(titles, text="BAKKIS", bg=self.bg, fg=self.fg, font=("Helvetica", 20, "bold")).pack(side="left")
@@ -3767,16 +3856,6 @@ class App:
 
         status_above_progress = tk.Frame(self._main_upper, bg=self.bg)
         status_above_progress.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
-        self.lbl_mode_header = tk.Label(
-            status_above_progress,
-            text="MODE: SWIPE" if self._sorting_mode == "swipe" else "MODE: GRID",
-            bg=self.bg,
-            fg=self.accent,
-            font=("Helvetica", 12, "bold"),
-            anchor="center",
-            justify="center",
-        )
-        self.lbl_mode_header.pack(fill="x")
         self.lbl_stats = tk.Label(
             status_above_progress,
             text="",
@@ -3787,51 +3866,16 @@ class App:
             anchor="center",
             wraplength=0,
         )
-        self.lbl_stats.pack(fill="x", pady=(4, 0))
+        self.lbl_stats.pack(fill="x")
 
-        progress_row = tk.Frame(self._main_upper, bg=self.bg)
-        progress_row.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 6))
-
-        self.lbl_elapsed = self._readonly_time_label(
-            progress_row,
-            text="0:00",
-            font=("Helvetica", 13, "bold"),
-            width=7,
-            anchor="e",
-        )
-        self.lbl_elapsed.pack(side="left", padx=(0, 12))
-
-        self.progress_canvas = tk.Canvas(
-            progress_row,
-            height=32,
-            bg=self.trough,
-            highlightthickness=1,
-            highlightbackground=self.panel_border,
-            bd=0,
-        )
-        self.progress_canvas.pack(side="left", fill="x", expand=True)
-        self.progress_canvas.bind("<Button-1>", self._on_progress_click)
-        self.progress_canvas.bind("<Configure>", self._on_progress_canvas_configure)
-
-        self.lbl_total = self._readonly_time_label(
-            progress_row,
-            text="0:00",
-            font=("Helvetica", 13, "bold"),
-            width=7,
-            anchor="w",
-        )
-        self.lbl_total.pack(side="left", padx=(12, 0))
-
-        self.lbl_playback_start = self._readonly_time_label(
+        self.lbl_track = self._readonly_time_label(
             self._main_upper,
-            text="Playback start: 0:00",
+            text="",
             font=("Helvetica", 12, "bold"),
             width=None,
             anchor="center",
         )
-        self.lbl_playback_start.pack(fill="x", pady=(0, 3))
-
-        self.root.after_idle(self._raise_time_text_above_scrubber)
+        self.lbl_track.pack(fill="x", pady=(4, 1))
 
         self.lbl_now_playing_tag = tk.Label(
             self._main_upper,
@@ -3876,14 +3920,40 @@ class App:
         )
         self.lbl_path.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 5))
 
-        self.lbl_track = self._readonly_time_label(
-            self._main_upper,
-            text="",
-            font=("Helvetica", 12, "bold"),
-            width=None,
-            anchor="center",
+        progress_row = tk.Frame(self._main_upper, bg=self.bg)
+        progress_row.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 6))
+
+        self.lbl_elapsed = self._readonly_time_label(
+            progress_row,
+            text="0:00",
+            font=("Helvetica", 13, "bold"),
+            width=7,
+            anchor="e",
         )
-        self.lbl_track.pack(fill="x", pady=(0, 1))
+        self.lbl_elapsed.pack(side="left", padx=(0, 12))
+
+        self.progress_canvas = tk.Canvas(
+            progress_row,
+            height=32,
+            bg=self.trough,
+            highlightthickness=1,
+            highlightbackground=self.panel_border,
+            bd=0,
+        )
+        self.progress_canvas.pack(side="left", fill="x", expand=True)
+        self.progress_canvas.bind("<Button-1>", self._on_progress_click)
+        self.progress_canvas.bind("<Configure>", self._on_progress_canvas_configure)
+
+        self.lbl_total = self._readonly_time_label(
+            progress_row,
+            text="0:00",
+            font=("Helvetica", 13, "bold"),
+            width=7,
+            anchor="w",
+        )
+        self.lbl_total.pack(side="left", padx=(12, 0))
+
+        self.root.after_idle(self._raise_time_text_above_scrubber)
 
         jump = tk.Frame(self._main_upper, bg=self.bg)
         jump.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, 4))
@@ -3962,12 +4032,12 @@ class App:
         self.lbl_seek_hint.pack(anchor="w", pady=(6, 0))
 
         transport_bar = tk.Frame(self._main_upper, bg=self.bg)
-        transport_bar.pack(fill="x", padx=_CONTENT_GUTTER, pady=(4, 6))
-        transport_bar.rowconfigure(0, minsize=88)
+        transport_bar.pack(fill="x", padx=_CONTENT_GUTTER, pady=(6, 8))
+        transport_bar.rowconfigure(0, minsize=104)
         u_uniform = "transport_util"
         for col in range(4):
             transport_bar.columnconfigure(col, weight=1, uniform=u_uniform)
-        u_gap = 8
+        u_gap = 10
 
         def _place_transport_cell(col: int, outer: tk.Frame) -> None:
             px = (0, u_gap) if col < 3 else (0, 0)
@@ -4433,11 +4503,14 @@ class App:
             (
                 "◆ MODE",
                 [
-                    "Utility bar: Play · Replay · Skip · Undo · Swipe · Grid",
+                    "Center: Tinder / Genre status above the title",
+                    "Transport: Play · Replay · Skip · Undo",
+                    "Header right: Swipe · Grid tiles",
                     "S or T  Swipe · G  Grid",
                     "1–9  Sort to grid folder (grid mode)",
                     "Enter  Skip · Z  Undo",
                     "⌃Z  Undo all",
+                    "Default start time: Settings — active jump tile shows START",
                     "Edit genres in Settings → Genre settings (labels, colors, folders)",
                 ],
             ),
@@ -5099,8 +5172,7 @@ class App:
 
         def on_start_change(*_a: object) -> None:
             sec = playback_start_label_to_sec(v_start.get())
-            patch_user_settings(playback_start_seconds=sec)
-            self._user_playback_start_sec = float(sec)
+            self._apply_user_playback_start_change(sec)
 
         om_start = tk.OptionMenu(row_st, v_start, *playback_start_choice_labels(), command=on_start_change)
         self._style_tk_option_menu_transport(om_start)
@@ -5924,29 +5996,10 @@ class App:
         self._perf_log(f"track_load: {(time.perf_counter() - t_load0) * 1000.0:.1f}ms {path.name}")
         self._schedule_track_meta_preload()
 
-        want = float(self._user_playback_start_sec)
-        if self._duration_sec <= 0.0 or self._duration_sec < want + 30.0:
-            self._desired_start_sec = 0.0
-            self._playback_start_label = "0:00"
-        else:
-            self._desired_start_sec = want
-            self._playback_start_label = format_sec(want)
-
-        self._set_playback_start_line(self._playback_start_label)
+        self._recompute_desired_start_and_highlight()
         self._audio_offset_in_source = self._desired_start_sec
         self._set_elapsed_seconds(self._desired_start_sec)
         self._draw_progress_bar(self._desired_start_sec)
-
-        outro_sec = self._outro_jump_seconds()
-        ds = self._desired_start_sec
-        used_config_start = self._duration_sec > 0.0 and self._duration_sec >= want + 30.0
-        if self._duration_sec >= 3.0 and abs(ds - outro_sec) <= 0.75:
-            if used_config_start and abs(ds - want) <= 0.75:
-                self._jump_highlight_key = int(round(ds))
-            else:
-                self._jump_highlight_key = "outro"
-        else:
-            self._jump_highlight_key = int(round(ds))
 
         if not _which_mpv():
             self.lbl_seek_hint.configure(
