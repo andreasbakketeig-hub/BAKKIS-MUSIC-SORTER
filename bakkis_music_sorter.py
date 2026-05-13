@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import re
 import uuid
 import queue
 import random
@@ -21,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from typing import Callable, Literal, Optional, Union
 
@@ -566,6 +568,7 @@ def _default_user_settings_blob() -> dict:
         "include_subfolders": True,
         "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
+        "add_date_to_created_sorting_folders": False,
         "volume": 80,
     }
 
@@ -605,6 +608,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
     data["include_subfolders"] = bool(data.get("include_subfolders", True))
     data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", False))
     data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
+    data["add_date_to_created_sorting_folders"] = bool(data.get("add_date_to_created_sorting_folders", False))
     try:
         vol = int(float(data.get("volume", 80)))
     except (TypeError, ValueError):
@@ -743,6 +747,14 @@ def save_include_subfolders_setting(on: bool) -> None:
     patch_user_settings(include_subfolders=bool(on))
 
 
+def load_add_date_to_created_sorting_folders() -> bool:
+    return bool(read_user_settings()["add_date_to_created_sorting_folders"])
+
+
+def save_add_date_to_created_sorting_folders_setting(on: bool) -> None:
+    patch_user_settings(add_date_to_created_sorting_folders=bool(on))
+
+
 def load_default_folder_path() -> Optional[str]:
     raw = read_user_settings().get("default_folder_path")
     if isinstance(raw, str):
@@ -829,11 +841,50 @@ def safe_genre_folder_name(label: str) -> str:
     return s[:120]
 
 
-def ensure_genre_folders(root: Path, folder_names: list[str]) -> None:
+_DATE_PREFIXED_SORT_SKIP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} - (.+)$")
+
+
+def format_created_sorting_folder_name(base: str, *, add_date: bool) -> str:
+    s = base.strip()
+    if not add_date:
+        return s
+    return f"{date.today().isoformat()} - {s}"
+
+
+def genre_sort_folder_leaf(raw_folder_entry: str, *, add_date: bool) -> str:
+    safe = safe_genre_folder_name(str(raw_folder_entry))
+    return format_created_sorting_folder_name(safe, add_date=add_date)
+
+
+def swipe_sort_folder_leaf(name: str, *, add_date: bool) -> str:
+    n = str(name).strip()
+    if not n:
+        n = "?"
+    return format_created_sorting_folder_name(n, add_date=add_date)
+
+
+def _should_skip_scan_dir_name(name: str, skip: frozenset[str]) -> bool:
+    if name.lower() in skip:
+        return True
+    if _should_skip_scan_subdirectory(name):
+        return True
+    m = _DATE_PREFIXED_SORT_SKIP_RE.match(name)
+    if m and m.group(1).lower() in skip:
+        return True
+    return False
+
+
+def ensure_genre_folders(
+    root: Path,
+    folder_names: list[str],
+    *,
+    add_date_to_created_sorting_folders: bool = False,
+) -> None:
     base = root / GENRES_NAME
     base.mkdir(parents=True, exist_ok=True)
     for raw in folder_names[:9]:
-        (base / safe_genre_folder_name(str(raw))).mkdir(parents=True, exist_ok=True)
+        leaf = genre_sort_folder_leaf(str(raw), add_date=add_date_to_created_sorting_folders)
+        (base / leaf).mkdir(parents=True, exist_ok=True)
 
 
 def iter_audio_files_under(
@@ -847,11 +898,7 @@ def iter_audio_files_under(
     skip = LEGACY_SKIP_SCAN_DIR_NAMES if skip_dir_names is None else skip_dir_names
     if recursive:
         for root, dirs, files in os.walk(root_folder, topdown=True):
-            dirs[:] = [
-                d
-                for d in dirs
-                if d.lower() not in skip and not _should_skip_scan_subdirectory(d)
-            ]
+            dirs[:] = [d for d in dirs if not _should_skip_scan_dir_name(d, skip)]
             for name in files:
                 if _should_ignore_scan_file(name):
                     continue
@@ -907,11 +954,17 @@ def build_track_relative_index(paths: list[Path], root: Path) -> dict[str, str]:
 def ensure_sort_folders(
     root: Path,
     swipe_output_folder_names: Optional[tuple[str, str, str]] = None,
+    *,
+    add_date_to_created_sorting_folders: bool = False,
 ) -> dict[str, Path]:
     if swipe_output_folder_names is None:
         swipe_output_folder_names = (KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME)
     kn, an, fn = swipe_output_folder_names
-    out = {"keep": root / kn, "archive": root / an, "favorites": root / fn}
+    ad = add_date_to_created_sorting_folders
+    lk = swipe_sort_folder_leaf(kn, add_date=ad)
+    la = swipe_sort_folder_leaf(an, add_date=ad)
+    lf = swipe_sort_folder_leaf(fn, add_date=ad)
+    out = {"keep": root / lk, "archive": root / la, "favorites": root / lf}
     for d in out.values():
         d.mkdir(parents=True, exist_ok=True)
     return out
@@ -1164,6 +1217,10 @@ class App:
         self._track_order: TrackOrder = load_track_order()
         self._user_playback_start_sec: float = float(load_playback_start_seconds())
         self._var_include_subfolders = tk.BooleanVar(master=self.root, value=load_include_subfolders())
+        self._var_add_date_to_created_sorting_folders = tk.BooleanVar(
+            master=self.root,
+            value=load_add_date_to_created_sorting_folders(),
+        )
         self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
         self._path_rel_to_music_root: dict[str, str] = {}
         self._apply_track_labels_from_preset_store()
@@ -1487,8 +1544,7 @@ class App:
             self._sync_swipe_tiles_from_preset()
             self._refresh_shortcut_guide_swipe_lines()
             if self._music_root is not None:
-                trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
-                self._folders = ensure_sort_folders(self._music_root, trip)  # type: ignore[arg-type]
+                self._refresh_sort_destination_paths()
             self._refresh_stats()
             top.destroy()
             self.root.after(10, self._refresh_all_widget_chrome)
@@ -2074,10 +2130,7 @@ class App:
                     root = scan_root
                     self._music_root = root
                     self._path_rel_to_music_root = build_track_relative_index(paths, root)
-                    sw = active_swipe_preset(self._mode_preset_store)
-                    trip = tuple(str(x) for x in sw["folders"][:3])
-                    self._folders = ensure_sort_folders(root, trip)
-                    ensure_genre_folders(root, list(active_grid_preset(self._mode_preset_store)["folders"][:9]))
+                    self._refresh_sort_destination_paths()
                     self._queue = paths
                     self._session_total = len(paths)
                     self._display_index = 1
@@ -3543,8 +3596,7 @@ class App:
         self._refresh_session_stats()
         self._refresh_all_widget_chrome()
         if self._music_root is not None:
-            trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
-            self._folders = ensure_sort_folders(self._music_root, trip)
+            self._refresh_sort_destination_paths()
 
     def _sync_genre_tile_titles(self) -> None:
         for i, lab in enumerate(self._genre_title_labels):
@@ -3594,7 +3646,7 @@ class App:
         self._apply_track_labels_from_preset_store()
         save_genre_config(self._genre_labels, self._genre_colors)
         if self._music_root is not None:
-            ensure_genre_folders(self._music_root, self._genre_folder_names)
+            self._refresh_sort_destination_paths()
         self._sync_genre_tile_titles()
         self._apply_genre_tile_colors()
         self._refresh_stats()
@@ -3733,7 +3785,7 @@ class App:
                 self._upsert_preset_in_store(blob)
             self._apply_track_labels_from_preset_store()
             if self._music_root is not None:
-                ensure_genre_folders(self._music_root, self._genre_folder_names)
+                self._refresh_sort_destination_paths()
             self._sync_genre_tile_titles()
             self._apply_genre_tile_colors()
             self._refresh_stats()
@@ -5207,6 +5259,22 @@ class App:
         self.btn_load.configure(state="normal")
         self._refresh_all_widget_chrome()
 
+    def _refresh_sort_destination_paths(self) -> None:
+        if self._music_root is None:
+            return
+        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
+        trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
+        self._folders = ensure_sort_folders(
+            self._music_root,
+            trip,
+            add_date_to_created_sorting_folders=add_date,
+        )
+        ensure_genre_folders(
+            self._music_root,
+            list(active_grid_preset(self._mode_preset_store)["folders"][:9]),
+            add_date_to_created_sorting_folders=add_date,
+        )
+
     def _genre_stats_text(self) -> str:
         """Per-genre file counts under GENRES/ plus queue length — single line, no newlines."""
         root = self._music_root
@@ -5214,10 +5282,11 @@ class App:
             return ""
         base_gen = root / GENRES_NAME
         parts: list[str] = []
+        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
         for idx in range(9):
             lab = self._genre_labels[idx]
             fn = self._genre_folder_names[idx] if idx < len(self._genre_folder_names) else safe_genre_folder_name(lab)
-            d = base_gen / safe_genre_folder_name(fn)
+            d = base_gen / genre_sort_folder_leaf(fn, add_date=add_date)
             n = _count_files_in_dir(d) if d.is_dir() else 0
             parts.append(f"{lab}: {n}")
         nq = len(self._queue)
@@ -5301,6 +5370,14 @@ class App:
 
     def _on_include_subfolders_toggle(self) -> None:
         save_include_subfolders_setting(bool(self._var_include_subfolders.get()))
+
+    def _on_add_date_to_created_sorting_folders_toggle(self) -> None:
+        def _commit() -> None:
+            save_add_date_to_created_sorting_folders_setting(bool(self._var_add_date_to_created_sorting_folders.get()))
+            self._refresh_sort_destination_paths()
+            self._refresh_stats()
+
+        self.root.after_idle(_commit)
 
     def _on_auto_load_default_toggle(self) -> None:
         save_auto_load_default_folder(bool(self._var_auto_load_default.get()))
@@ -5617,6 +5694,42 @@ class App:
             font=("Helvetica", 10),
         ).pack(anchor="w", pady=(8, 4))
 
+        sep_fn = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_fn.pack_propagate(False)
+        sep_fn.pack(fill="x", pady=(4, 10))
+
+        tk.Label(
+            inner,
+            text="Folder naming",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            inner,
+            text="Applies when the app creates sorting folders (not source folders). Format: YYYY-MM-DD - Folder Name.",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            wraplength=480,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 6))
+
+        tk.Checkbutton(
+            inner,
+            text="Add date to created sorting folders",
+            variable=self._var_add_date_to_created_sorting_folders,
+            command=self._on_add_date_to_created_sorting_folders_toggle,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(0, 8))
+
         v_help_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_help_guide_on_startup"]))
 
         def on_help_su() -> None:
@@ -5744,9 +5857,7 @@ class App:
             self._apply_genre_tile_colors()
             self._refresh_shortcut_guide_swipe_lines()
             if self._music_root is not None:
-                trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
-                self._folders = ensure_sort_folders(self._music_root, trip)
-                ensure_genre_folders(self._music_root, list(active_grid_preset(self._mode_preset_store)["folders"][:9]))
+                self._refresh_sort_destination_paths()
             self._refresh_stats()
             self.root.after(10, self._refresh_all_widget_chrome)
 
@@ -6613,7 +6724,8 @@ class App:
         fn = self._genre_folder_names[slot_index] if slot_index < len(self._genre_folder_names) else safe_genre_folder_name(
             self._genre_labels[slot_index],
         )
-        dest_dir = self._music_root / GENRES_NAME / safe_genre_folder_name(fn)
+        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
+        dest_dir = self._music_root / GENRES_NAME / genre_sort_folder_leaf(fn, add_date=add_date)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = _unique_destination(dest_dir, src.name)
         try:
