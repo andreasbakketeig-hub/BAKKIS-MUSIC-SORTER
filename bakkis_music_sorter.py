@@ -35,28 +35,31 @@ TrackOrder = Literal["random", "in_order"]
 from mutagen import File as MutagenFile
 from tkinter import filedialog, messagebox, simpledialog
 
-# Default landscape window; genre grid + right panel fit without main-window scrolling.
-_DEFAULT_WIN_W = 1300
-_WIN_MIN_W = 1200
+# Default window: 1.79:1 aspect ratio (1790×1000) — swipe tiles are near-square at this size.
+_DEFAULT_WIN_W = 1790
+_DEFAULT_WIN_H = 1000
+# Minimum resizable bounds — keeps all controls visible; maintains roughly the same ratio.
+_WIN_MIN_W = 1060
 # Shared horizontal inset for main-column blocks (header, progress, jump, transport, sort shells, footer).
 _CONTENT_GUTTER = 24
 # Fixed height for Swipe vs Grid swap zone — avoids vertical jump when switching modes (inner content fills).
-_ACTION_ZONE_FIXED_HEIGHT_PX = 280
+_ACTION_ZONE_FIXED_HEIGHT_PX = 340
 # Minimum pixel budget for the upper section (_main_upper: header + player + transport + jump).
 # Must be kept in sync if sections are added/removed from _main_upper.
-_UPPER_SECTION_MIN_H = 520
+_UPPER_SECTION_MIN_H = 330
 # Minimum pixel reservation for the bottom dock row (footer rule + logo).
 _DOCK_MIN_H = 50
-# Window height derived from components so the minimum is never accidentally smaller than content.
+# Minimum window height derived from layout components so nothing is ever clipped.
 # +38 accounts for macOS titlebar / window chrome.
-_WIN_MIN_H = _UPPER_SECTION_MIN_H + _ACTION_ZONE_FIXED_HEIGHT_PX + _DOCK_MIN_H + 38  # ≈ 888
-_DEFAULT_WIN_H = _WIN_MIN_H + 60  # comfortable launch size above minimum
+_WIN_MIN_H = _UPPER_SECTION_MIN_H + _ACTION_ZONE_FIXED_HEIGHT_PX + _DOCK_MIN_H + 38  # ≈ 758
 # Vertical rhythm between major blocks in the main column.
 _SECTION_GAP_Y_TIGHT = 3
 _SECTION_GAP_Y = 6
 # Each permanent side rail occupies this exact horizontal width.
 # Both rails are ALWAYS present so the center column never shifts.
 _RAIL_W = 264              # 16 px outer gutter + 248 px panel content
+_FOCUS_ANIM_STEPS = 8      # number of animation frames
+_FOCUS_ANIM_MS = 18        # ms per frame (~144 fps feel)
 _GUIDE_SIDEBAR_TEXT_WRAP = 228
 
 # Lowercase extensions including leading dot — single source of truth for scan / validation / playback checks.
@@ -1312,6 +1315,7 @@ class App:
         self.root.configure(bg=self.bg)
         self._apply_global_tk_dark_defaults()
         self._fullscreen = False
+        self._focus_mode: bool = False
 
         ensure_user_config_seeded_from_bundle()
 
@@ -1340,6 +1344,11 @@ class App:
             value=create_dated_sorting_sessions_enabled(),
         )
         self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
+        self._var_cleanup_empty_source_folders_after_sort = tk.BooleanVar(
+            master=self.root,
+            value=load_cleanup_empty_source_folders_after_sort(),
+        )
+        self._cleanup_empty_source_dir_warn_shown = False
         self._lbl_sort_output_preview: Optional[tk.Misc] = None
         self._path_rel_to_music_root: dict[str, str] = {}
         self._apply_track_labels_from_preset_store()
@@ -1366,6 +1375,7 @@ class App:
         self.lbl_mode_header: Optional[tk.Label] = None
         self.lbl_source_folder: Optional[tk.Label] = None
         self.lbl_session_stats: Optional[tk.Label] = None
+        self.lbl_footer_session: Optional[tk.Label] = None
         self.lbl_now_playing_tag: Optional[tk.Label] = None
         self._now_playing_main_wrap: Optional[tk.Frame] = None
         self._now_playing_main_inner: Optional[tk.Frame] = None
@@ -4127,7 +4137,7 @@ class App:
         # column.  The center column is always flanked by equal-width rails, so
         # the title is always at the true horizontal midpoint of the window.
         _hdr = tk.Frame(self._main_upper, bg=self.bg)
-        _hdr.pack(pady=(16, 4))
+        _hdr.pack(pady=(18, 10))
         self.lbl_mode_header = tk.Label(
             _hdr,
             text=self._mode_status_text(self._sorting_mode),
@@ -4151,7 +4161,7 @@ class App:
             highlightbackground=self.panel_border,
             highlightcolor=self.panel_border,
         )
-        player_card.pack(fill="x", padx=_CONTENT_GUTTER, pady=(_SECTION_GAP_Y_TIGHT, _SECTION_GAP_Y))
+        player_card.pack(fill="x", padx=_CONTENT_GUTTER, pady=(10, _SECTION_GAP_Y))
         card_inner = tk.Frame(player_card, bg=self.bg)
         card_inner.pack(fill="x", padx=12, pady=(8, 8))
 
@@ -4363,6 +4373,8 @@ class App:
             ("1:00", "  3", 60),
             ("1:30", "  4", 90),
             ("2:00", "  5", 120),
+            ("4:00", "  6", 240),
+            ("5:00", "  7", 300),
         ]:
             b = self._jump_time_button(
                 row1,
@@ -4375,26 +4387,7 @@ class App:
             self._jump_buttons.append(b)
             self._preset_jump_buttons[sec] = b
             b.pack(side="left", padx=(0, 4), fill="x", expand=True)
-
-        row2_presets = tk.Frame(jump, bg=self.bg)
-        row2_presets.pack(fill="x", pady=(4, 0))
-        for base, hint, sec in [
-            ("3:00", "  6", 180),
-            ("4:00", "  7", 240),
-            ("5:00", "  8", 300),
-        ]:
-            b = self._jump_time_button(
-                row2_presets,
-                base,
-                lambda s=sec: self.jump_to(float(s), jump_ui_key=s),
-                hint_suffix=hint,
-                width=0,
-                tinder_target_sec=float(sec),
-            )
-            self._jump_buttons.append(b)
-            self._preset_jump_buttons[sec] = b
-            b.pack(side="left", padx=(0, 4), fill="x", expand=True)
-        b_out = self._jump_time_button(row2_presets, "OUTRO", self.jump_to_outro, hint_suffix="  9", width=0)
+        b_out = self._jump_time_button(row1, "OUTRO", self.jump_to_outro, hint_suffix="  8", width=0)
         self._jump_buttons.append(b_out)
         self._jump_btn_outro = b_out
         b_out.pack(side="left", padx=(0, 0), fill="x", expand=True)
@@ -4455,7 +4448,7 @@ class App:
             tinder_sort_row,
             "😊",
             "KEEP",
-            "[1]  Swipe →",
+            "Swipe →",
             self.accent,
             self.accent_active,
             self.teal_on_fg,
@@ -4471,7 +4464,7 @@ class App:
             tinder_sort_row,
             "☹️",
             "ARCHIVE",
-            "[2]  Swipe ↑",
+            "Swipe ↑",
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
@@ -4487,7 +4480,7 @@ class App:
             tinder_sort_row,
             "🤩",
             "FAVORITE",
-            "[3]  Swipe ←",
+            "Swipe ←",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
@@ -4556,6 +4549,52 @@ class App:
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
 
+        # Compact KAF row for Grid Mode (smaller than Swipe mode tiles — default sizing)
+        _gkaf_row = tk.Frame(self.genre_actions, bg=self.bg)
+        _gkaf_row.pack(fill="x", pady=(_SWIPE_SORT_GRID_PAD, 0))
+        for _gkc in range(3):
+            _gkaf_row.columnconfigure(_gkc, weight=1, uniform="grid_kaf_col")
+        _sgp = _SWIPE_SORT_GRID_PAD
+
+        _gko_k, self._grid_kaf_keep_inner = self._action_tile(
+            _gkaf_row,
+            "😊",
+            "KEEP",
+            "[1]",
+            self.accent,
+            self.accent_active,
+            self.teal_on_fg,
+            "#1B3B38",
+            lambda: self.sort_current("keep"),
+        )
+        _gko_k.grid(row=0, column=0, sticky="nsew", padx=_sgp, pady=_sgp)
+
+        _gko_a, self._grid_kaf_archive_inner = self._action_tile(
+            _gkaf_row,
+            "☹️",
+            "ARCHIVE",
+            "[2]",
+            self.archive_bg,
+            self.archive_active,
+            self.archive_fg,
+            "#3B1B1B",
+            lambda: self.sort_current("archive"),
+        )
+        _gko_a.grid(row=0, column=1, sticky="nsew", padx=_sgp, pady=_sgp)
+
+        _gko_f, self._grid_kaf_favorite_inner = self._action_tile(
+            _gkaf_row,
+            "🤩",
+            "FAVORITE",
+            "[3]",
+            self.favorite_bg,
+            self.favorite_active,
+            self.favorite_on_fg,
+            "#3B3818",
+            lambda: self.sort_current("favorites"),
+        )
+        _gko_f.grid(row=0, column=2, sticky="nsew", padx=_sgp, pady=_sgp)
+
         tk.Label(
             self.genre_actions,
             text="Edit grid labels in Settings",
@@ -4564,8 +4603,6 @@ class App:
             font=("Helvetica", 9),
             anchor="center",
         ).pack(fill="x", pady=(4, 0))
-
-        # Grid Mode: genre grid is the sole action area — no KAF row.
 
         self.genre_actions.pack_forget()
         if self._sorting_mode == "grid":
@@ -4775,7 +4812,7 @@ class App:
             font=("Helvetica", 10, "bold"),
             anchor="w",
             justify="left",
-            wraplength=198,
+            wraplength=228,
         )
         self._lbl_queue_now.pack(fill="x", padx=8, pady=8)
 
@@ -4794,7 +4831,7 @@ class App:
                 font=("Helvetica", 9),
                 anchor="w",
                 justify="left",
-                wraplength=198,
+                wraplength=228,
             )
             lb.pack(fill="x", pady=(0, 3))
             self._lbl_queue_up.append(lb)
@@ -4816,7 +4853,7 @@ class App:
                 font=("Helvetica", 9),
                 anchor="w",
                 justify="left",
-                wraplength=198,
+                wraplength=228,
             )
             lb.pack(fill="x", pady=(0, 4))
             self._lbl_queue_recent.append(lb)
@@ -4930,22 +4967,7 @@ class App:
         right_grid.columnconfigure(0, weight=1, uniform="rrail_hdr")
         right_grid.columnconfigure(1, weight=1, uniform="rrail_hdr")
 
-        # ── Queue tile (full width) ───────────────────────────────────────
-        _o_q, self._tile_queue_inner = self._action_tile(
-            right_grid,
-            "☰",
-            "Queue",
-            "[Q]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self._toggle_queue_panel_visibility,
-            clickable_when_tiles_disabled=True,
-        )
-        _o_q.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, _ACTION_TILE_GRID_GAP_PX))
-
-        # ── Swipe | Grid tiles ────────────────────────────────────────────
+        # ── Swipe | Grid tiles (top row) ──────────────────────────────────
         _o_mc, self._tile_mode_cleanup_inner = self._action_tile(
             right_grid,
             "💘",
@@ -4970,8 +4992,23 @@ class App:
             lambda: self._set_sorting_mode("grid"),
             clickable_when_tiles_disabled=True,
         )
-        _o_mc.grid(row=1, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
-        _o_mg.grid(row=1, column=1, sticky="nsew")
+        _o_mc.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX), pady=(0, _ACTION_TILE_GRID_GAP_PX))
+        _o_mg.grid(row=0, column=1, sticky="nsew", pady=(0, _ACTION_TILE_GRID_GAP_PX))
+
+        # ── Queue tile (full width, bottom row) ───────────────────────────
+        _o_q, self._tile_queue_inner = self._action_tile(
+            right_grid,
+            "☰",
+            "Queue",
+            "[Q]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._toggle_queue_panel_visibility,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_q.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
         # Separator between rail_top and the queue panel — packed/unpacked by visibility logic.
         self._queue_sep = tk.Frame(self._right_rail, height=1, bg=self.panel_border)
@@ -5002,7 +5039,7 @@ class App:
         wl = _GUIDE_SIDEBAR_TEXT_WRAP
         self._guide_swipe_line_labels.clear()
         swipe_f = tk.Frame(stack, bg=self.panel)
-        swipe_f.pack(fill="x", pady=(0, 10))
+        swipe_f.pack(fill="x", pady=(0, 8))
         tk.Label(swipe_f, text="▶ SWIPE", bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
         swipe_intro = [
             f"{self._swipe_labels[0]} (→)",
@@ -5038,10 +5075,10 @@ class App:
             (
                 "⏱ JUMP TO",
                 [
-                    "Swipe mode: 1–9 jump",
+                    "Swipe mode: 1–8 jump",
                     "1–5  → 0:00 … 2:00",
-                    "6–8  → 3:00 … 5:00",
-                    "9  → Outro (last 60s)",
+                    "6–7  → 4:00 … 5:00",
+                    "8  → Outro (last 60s)",
                     "5  = 2:00 (long-track default)",
                     "Grid mode: use mouse here",
                 ],
@@ -5072,7 +5109,7 @@ class App:
         ]
         for _, (title, lines) in enumerate(specs):
             col_f = tk.Frame(stack, bg=self.panel)
-            col_f.pack(fill="x", pady=(0, 10))
+            col_f.pack(fill="x", pady=(0, 8))
             tk.Label(col_f, text=title, bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
             for line in lines:
                 tk.Label(
@@ -5100,15 +5137,24 @@ class App:
         footer.pack(fill="x", padx=_CONTENT_GUTTER, pady=(2, 6))
 
         rule = tk.Frame(footer, height=1, bg=self.panel_border)
-        rule.pack(fill="x", pady=(4, 6))
+        rule.pack(fill="x", pady=(4, 4))
 
+        # Fixed-height row so place coordinates are stable.
+        # Logo is placed at relx=0.5 (true center of footer width),
+        # session time at relx=1.0 (right edge) — neither affects the other.
+        row = tk.Frame(footer, bg=self.bg, height=28)
+        row.pack(fill="x")
+        row.pack_propagate(False)
+
+        # Logo or "BAKKIS" fallback text — placed at exact horizontal center
+        _logo_shown = False
         logo_path = _bundle_dir() / "bakkislogo.png"
         if logo_path.is_file():
             try:
                 from PIL import Image, ImageTk
 
                 img = Image.open(logo_path).convert("RGBA")
-                h = max(22, min(34, img.height))
+                h = max(18, min(26, img.height))
                 w = max(1, int(img.width * (h / float(img.height))))
                 try:
                     resample = Image.Resampling.LANCZOS
@@ -5117,24 +5163,49 @@ class App:
                 img = img.resize((w, h), resample)
                 self._footer_logo_photo = ImageTk.PhotoImage(img)
                 tk.Label(
-                    footer,
+                    row,
                     image=self._footer_logo_photo,
                     bg=self.bg,
                     highlightthickness=0,
                     cursor="",
-                ).pack(pady=(0, 4))
+                ).place(relx=0.5, rely=0.5, anchor="center")
+                _logo_shown = True
             except Exception:
                 self._footer_logo_photo = None
+        if not _logo_shown:
+            self._footer_logo_photo = None
+            tk.Label(
+                row,
+                text="BAKKIS",
+                bg=self.bg,
+                fg=self.fg,
+                font=("Helvetica", 11, "bold"),
+                highlightthickness=0,
+                cursor="",
+            ).place(relx=0.5, rely=0.5, anchor="center")
 
+        # Session time — right edge; updated by _refresh_session_stats
+        self.lbl_footer_session = tk.Label(
+            row,
+            text="",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            highlightthickness=0,
+            cursor="",
+        )
+        self.lbl_footer_session.place(relx=1.0, rely=0.5, anchor="e", x=-2)
+
+        # Subtitle
         tk.Label(
             footer,
             text="BAKKIS MUSIC SORTER",
             bg=self.bg,
             fg=self.muted,
-            font=("Helvetica", 10),
+            font=("Helvetica", 8),
             highlightthickness=0,
             cursor="",
-        ).pack(side="bottom", pady=(0, 6))
+        ).pack(anchor="center", pady=(0, 2))
 
     def _shortcuts_active(self) -> bool:
         """Ignore shortcuts while a system dialog or other toplevel has focus."""
@@ -5352,6 +5423,45 @@ class App:
             return "break"
         return None
 
+    def _set_focus_mode(self, on: bool) -> None:
+        if self._focus_mode == on:
+            return
+        self._focus_mode = on
+        target = 0 if on else _RAIL_W
+        current_left = self._body.grid_columnconfigure(0)["minsize"]
+        self._animate_focus(current_left, target, _FOCUS_ANIM_STEPS)
+
+    def _animate_focus(self, current: int, target: int, steps_left: int) -> None:
+        if steps_left <= 0 or self._body is None:
+            w = target
+            self._body.grid_columnconfigure(0, weight=0, minsize=w)
+            self._body.grid_columnconfigure(2, weight=0, minsize=w)
+            if target == 0:
+                if self._left_rail is not None:
+                    self._left_rail.grid_remove()
+                if self._right_rail is not None:
+                    self._right_rail.grid_remove()
+            else:
+                if self._left_rail is not None:
+                    self._left_rail.grid(row=0, column=0, sticky="nsew")
+                if self._right_rail is not None:
+                    self._right_rail.grid(row=0, column=2, sticky="nsew")
+            return
+        frac = (_FOCUS_ANIM_STEPS - steps_left + 1) / _FOCUS_ANIM_STEPS
+        w = int(current + (target - current) * frac)
+        self._body.grid_columnconfigure(0, weight=0, minsize=w)
+        self._body.grid_columnconfigure(2, weight=0, minsize=w)
+        self.root.after(_FOCUS_ANIM_MS, lambda: self._animate_focus(current, target, steps_left - 1))
+
+    def _toggle_focus_mode(self) -> None:
+        self._set_focus_mode(not self._focus_mode)
+
+    def _kbd_focus_mode(self, _e: object) -> Optional[str]:
+        if not self._shortcuts_active():
+            return None
+        self._toggle_focus_mode()
+        return "break"
+
     def _bind_keys(self) -> None:
         b = self.root.bind_all
         b("<space>", self._kbd("space", self.toggle_play, self.btn_play))
@@ -5416,6 +5526,7 @@ class App:
         b("<KeyPress-Q>", self._kbd_toggle_queue_panel)
         self.root.bind_all("<Command-f>", self._toggle_fullscreen)
         self.root.bind_all("<Command-F>", self._toggle_fullscreen)
+        self.root.bind("<Tab>", self._kbd_focus_mode, add="+")
         # Escape on main window only: leaves Toplevel dialogs so Cancel keeps default Escape behavior when focused there.
         self.root.bind("<Escape>", self._on_escape_key)
         self.root.bind("<FocusIn>", self._on_app_focus_in, add="+")
@@ -5546,6 +5657,8 @@ class App:
             return
         if not self._music_root:
             self.lbl_session_stats.configure(text="")
+            if self.lbl_footer_session is not None:
+                self.lbl_footer_session.configure(text="")
             return
         tot = (
             self._session_kept
@@ -5561,6 +5674,8 @@ class App:
             sess = f"{em}m" if es == 0 else f"{em}m {es}s"
         else:
             sess = f"{elapsed}s"
+        if self.lbl_footer_session is not None:
+            self.lbl_footer_session.configure(text=f"Session: {sess}")
         if tot <= 0:
             self.lbl_session_stats.configure(text=f"Session: {sess}", fg=self.muted)
             return
@@ -5596,6 +5711,58 @@ class App:
 
     def _on_include_subfolders_toggle(self) -> None:
         save_include_subfolders_setting(bool(self._var_include_subfolders.get()))
+
+    def _on_cleanup_empty_source_folders_toggle(self) -> None:
+        save_cleanup_empty_source_folders_after_sort_setting(
+            bool(self._var_cleanup_empty_source_folders_after_sort.get()),
+        )
+
+    def _warn_empty_source_cleanup_failure(self, what: str, p: Path, exc: OSError) -> None:
+        self._perf_log(f"empty_source_cleanup_{what}: {p} → {exc}")
+        if self._cleanup_empty_source_dir_warn_shown:
+            return
+        self._cleanup_empty_source_dir_warn_shown = True
+        self._prepare_native_dialog()
+        try:
+            messagebox.showwarning(
+                "Empty folder cleanup",
+                f"Could not clean up source folders ({what}):\n{p}\n\n{exc}",
+                parent=self.root,
+            )
+        except tk.TclError:
+            pass
+
+    def _try_cleanup_empty_source_parents_after_move(self, original_src_resolved: Path) -> list[Path]:
+        """Remove empty ancestors of the moved file under the music root; returns deleted dirs deepest-first."""
+        mr = self._music_root
+        if mr is None:
+            return []
+        deleted_deepest_first: list[Path] = []
+        chain = _source_empty_cleanup_chain_deepest_first(original_src_resolved, mr)
+        for d in chain:
+            ok, junk = _source_cleanup_dir_removable_now(d)
+            if not ok:
+                break
+            for jf in junk:
+                try:
+                    jf.unlink()
+                except OSError as e:
+                    self._warn_empty_source_cleanup_failure("unlink", jf, e)
+                    return deleted_deepest_first
+            try:
+                rest = list(d.iterdir())
+            except OSError as e:
+                self._warn_empty_source_cleanup_failure("list", d, e)
+                break
+            if rest:
+                break
+            try:
+                d.rmdir()
+                deleted_deepest_first.append(d.resolve())
+            except OSError as e:
+                self._warn_empty_source_cleanup_failure("rmdir", d, e)
+                break
+        return deleted_deepest_first
 
     def _on_create_dated_sorting_sessions_toggle(self) -> None:
         def _commit() -> None:
@@ -5682,11 +5849,20 @@ class App:
         except tk.TclError:
             pass
 
-        tk.Label(inner, text="Default Music Folder", bg=self.panel, fg=self.fg, font=("Helvetica", 11, "bold")).pack(
+        sec_general = tk.Frame(inner, bg=self.panel)
+        sec_general.pack(fill="x", anchor="w")
+        tk.Label(
+            sec_general,
+            text="GENERAL",
+            bg=self.panel,
+            fg=self.accent,
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+        tk.Label(sec_general, text="Default Music Folder", bg=self.panel, fg=self.fg, font=("Helvetica", 11, "bold")).pack(
             anchor="w",
         )
         lbl_path = tk.Label(
-            inner,
+            sec_general,
             text="",
             bg=self.panel,
             fg=self.muted,
@@ -5697,7 +5873,7 @@ class App:
         )
         lbl_path.pack(anchor="w", pady=(4, 2))
         lbl_missing = tk.Label(
-            inner,
+            sec_general,
             text="",
             bg=self.panel,
             fg=self.warning,
@@ -5729,7 +5905,7 @@ class App:
 
         refresh_folder_labels()
 
-        row_fold = tk.Frame(inner, bg=self.panel)
+        row_fold = tk.Frame(sec_general, bg=self.panel)
         row_fold.pack(anchor="w", pady=(0, 10))
 
         def on_set_def() -> None:
@@ -5801,7 +5977,7 @@ class App:
         b_load.pack(side="left", padx=(8, 0))
 
         tk.Checkbutton(
-            inner,
+            sec_general,
             text="Auto-load default folder on startup",
             variable=self._var_auto_load_default,
             command=self._on_auto_load_default_toggle,
@@ -5814,38 +5990,14 @@ class App:
             font=("Helvetica", 10),
         ).pack(anchor="w", pady=(6, 12))
 
-        sep = tk.Frame(inner, bg=self.panel_border, height=1)
-        sep.pack_propagate(False)
-        sep.pack(fill="x", pady=(0, 10))
-
         tk.Label(
-            inner,
-            text="Default start time (new tracks)",
-            bg=self.panel,
-            fg=self.fg,
-            font=("Helvetica", 11, "bold"),
-        ).pack(anchor="w")
-        row_st = tk.Frame(inner, bg=self.panel)
-        row_st.pack(anchor="w", pady=(6, 6))
-        tk.Label(row_st, text="Auto-play from:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
-        v_start = tk.StringVar(master=top, value=playback_sec_to_choice_label(self._user_playback_start_sec))
-
-        def on_start_change(*_a: object) -> None:
-            sec = playback_start_label_to_sec(v_start.get())
-            self._apply_user_playback_start_change(sec)
-
-        om_start = tk.OptionMenu(row_st, v_start, *playback_start_choice_labels(), command=on_start_change)
-        self._style_tk_option_menu_transport(om_start)
-        om_start.pack(side="left", padx=(8, 0))
-
-        tk.Label(
-            inner,
+            sec_general,
             text="Default mode on startup",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w", pady=(10, 0))
-        row_mode = tk.Frame(inner, bg=self.panel)
+        row_mode = tk.Frame(sec_general, bg=self.panel)
         row_mode.pack(anchor="w", pady=(6, 6))
         tk.Label(row_mode, text="Mode:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
         ini = read_user_settings()
@@ -5861,49 +6013,47 @@ class App:
         om_mode.pack(side="left", padx=(8, 0))
 
         tk.Label(
-            inner,
-            text="Startup preset (optional)",
+            sec_general,
+            text="Default start time (new tracks)",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w", pady=(10, 0))
-        row_sp = tk.Frame(inner, bg=self.panel)
-        row_sp.pack(anchor="w", pady=(6, 6))
-        tk.Label(row_sp, text="Preset:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
-        all_presets_list = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict)]
-        startup_labels = ["(none)"] + [format_preset_menu_label(p) for p in all_presets_list]
-        cur_sid = read_user_settings().get("startup_preset_id")
-        cur_startup_lbl = "(none)"
-        if isinstance(cur_sid, str) and cur_sid.strip():
-            cp = preset_by_id(self._mode_preset_store, cur_sid.strip())
-            if cp:
-                cur_startup_lbl = format_preset_menu_label(cp)
-        if cur_startup_lbl not in startup_labels:
-            cur_startup_lbl = "(none)"
-        v_sp = tk.StringVar(master=top, value=cur_startup_lbl)
+        row_st = tk.Frame(sec_general, bg=self.panel)
+        row_st.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_st, text="Auto-play from:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        v_start = tk.StringVar(master=top, value=playback_sec_to_choice_label(self._user_playback_start_sec))
 
-        def on_startup_preset(*_a: object) -> None:
-            lab = v_sp.get()
-            if lab == "(none)":
-                patch_user_settings(startup_preset_id=None)
-                return
-            for p in all_presets_list:
-                if format_preset_menu_label(p) == lab:
-                    patch_user_settings(startup_preset_id=str(p.get("id")))
-                    return
+        def on_start_change(*_a: object) -> None:
+            sec = playback_start_label_to_sec(v_start.get())
+            self._apply_user_playback_start_change(sec)
 
-        om_sp = tk.OptionMenu(row_sp, v_sp, *startup_labels, command=on_startup_preset)
-        self._style_tk_option_menu_transport(om_sp)
-        om_sp.pack(side="left", padx=(8, 0))
+        om_start = tk.OptionMenu(row_st, v_start, *playback_start_choice_labels(), command=on_start_change)
+        self._style_tk_option_menu_transport(om_start)
+        om_start.pack(side="left", padx=(8, 0))
+
+        sep_top = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_top.pack_propagate(False)
+        sep_top.pack(fill="x", pady=(0, 10))
+
+        sec_sort = tk.Frame(inner, bg=self.panel)
+        sec_sort.pack(fill="x", anchor="w")
+        tk.Label(
+            sec_sort,
+            text="SORTING",
+            bg=self.panel,
+            fg=self.accent,
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
         tk.Label(
-            inner,
+            sec_sort,
             text="Default track order",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w", pady=(10, 0))
-        row_ord = tk.Frame(inner, bg=self.panel)
+        row_ord = tk.Frame(sec_sort, bg=self.panel)
         row_ord.pack(anchor="w", pady=(6, 6))
         tk.Label(row_ord, text="Order:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
         v_ord = tk.StringVar(master=top)
@@ -5938,7 +6088,7 @@ class App:
         om_ord.pack(side="left", padx=(8, 0))
 
         tk.Checkbutton(
-            inner,
+            sec_sort,
             text="Include subfolders when scanning",
             variable=self._var_include_subfolders,
             command=self._on_include_subfolders_toggle,
@@ -5951,19 +6101,19 @@ class App:
             font=("Helvetica", 10),
         ).pack(anchor="w", pady=(8, 4))
 
-        sep_fn = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_fn = tk.Frame(sec_sort, bg=self.panel_border, height=1)
         sep_fn.pack_propagate(False)
         sep_fn.pack(fill="x", pady=(4, 10))
 
         tk.Label(
-            inner,
+            sec_sort,
             text="Sorted output (BAKKIS_SORTED)",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w")
         tk.Label(
-            inner,
+            sec_sort,
             text="Sorted files go under BAKKIS_SORTED/<preset>/[optional date folder]/<action>/… at the library root.",
             bg=self.panel,
             fg=self.muted,
@@ -5974,7 +6124,7 @@ class App:
         ).pack(anchor="w", pady=(4, 6))
 
         tk.Checkbutton(
-            inner,
+            sec_sort,
             text="Create Dated Sessions",
             variable=self._var_create_dated_sorting_sessions,
             command=self._on_create_dated_sorting_sessions_toggle,
@@ -5988,7 +6138,7 @@ class App:
         ).pack(anchor="w", pady=(0, 4))
 
         self._lbl_sort_output_preview = tk.Label(
-            inner,
+            sec_sort,
             text=self._sort_output_preview_text(),
             bg=self.panel,
             fg=self.muted,
@@ -5999,116 +6149,65 @@ class App:
         )
         self._lbl_sort_output_preview.pack(anchor="w", pady=(0, 8))
 
-        v_help_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_help_guide_on_startup"]))
+        sep_pres = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_pres.pack_propagate(False)
+        sep_pres.pack(fill="x", pady=(0, 10))
 
-        def on_help_su() -> None:
-            patch_user_settings(show_help_guide_on_startup=bool(v_help_su.get()))
-
-        tk.Checkbutton(
-            inner,
-            text="Show help guide on startup",
-            variable=v_help_su,
-            command=on_help_su,
+        sec_pres = tk.Frame(inner, bg=self.panel)
+        sec_pres.pack(fill="x", anchor="w")
+        tk.Label(
+            sec_pres,
+            text="PRESETS",
             bg=self.panel,
-            fg=self.fg,
-            selectcolor=self.panel,
-            activebackground=self.panel,
-            activeforeground=self.fg,
-            highlightthickness=0,
-            font=("Helvetica", 10),
-        ).pack(anchor="w", pady=(4, 4))
-
-        v_queue_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_queue_panel_on_startup"]))
-
-        def on_queue_su() -> None:
-            patch_user_settings(show_queue_panel_on_startup=bool(v_queue_su.get()))
-
-        tk.Checkbutton(
-            inner,
-            text="Show queue panel on startup",
-            variable=v_queue_su,
-            command=on_queue_su,
-            bg=self.panel,
-            fg=self.fg,
-            selectcolor=self.panel,
-            activebackground=self.panel,
-            activeforeground=self.fg,
-            highlightthickness=0,
-            font=("Helvetica", 10),
-        ).pack(anchor="w", pady=(4, 8))
-
-        sep_genre_st = tk.Frame(inner, bg=self.panel_border, height=1)
-        sep_genre_st.pack_propagate(False)
-        sep_genre_st.pack(fill="x", pady=(0, 10))
+            fg=self.accent,
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
         tk.Label(
-            inner,
-            text="Genre settings",
+            sec_pres,
+            text="Startup preset (optional)",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            inner,
-            text="Edit grid labels and colors, or reset the active grid preset to defaults.",
-            bg=self.panel,
-            fg=self.muted,
-            font=("Helvetica", 9),
-            wraplength=480,
-            justify="left",
-            anchor="w",
-        ).pack(anchor="w", pady=(4, 8))
+        ).pack(anchor="w", pady=(10, 0))
+        row_sp = tk.Frame(sec_pres, bg=self.panel)
+        row_sp.pack(anchor="w", pady=(6, 6))
+        tk.Label(row_sp, text="Preset:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
+        all_presets_list = [p for p in (self._mode_preset_store.get("presets") or []) if isinstance(p, dict)]
+        startup_labels = ["(none)"] + [format_preset_menu_label(p) for p in all_presets_list]
+        cur_sid = read_user_settings().get("startup_preset_id")
+        cur_startup_lbl = "(none)"
+        if isinstance(cur_sid, str) and cur_sid.strip():
+            cp = preset_by_id(self._mode_preset_store, cur_sid.strip())
+            if cp:
+                cur_startup_lbl = format_preset_menu_label(cp)
+        if cur_startup_lbl not in startup_labels:
+            cur_startup_lbl = "(none)"
+        v_sp = tk.StringVar(master=top, value=cur_startup_lbl)
 
-        row_genre_st = tk.Frame(inner, bg=self.panel)
-        row_genre_st.pack(anchor="w", pady=(0, 8))
-
-        def on_edit_genres_from_settings() -> None:
-            self._open_edit_genres_dialog()
-
-        def on_reset_genres_defaults() -> None:
-            self._prepare_native_dialog()
-            if not messagebox.askyesno(
-                "Reset genres",
-                "Reset the active grid preset to default names, colors, and folders? This saves immediately.",
-                parent=top,
-            ):
+        def on_startup_preset(*_a: object) -> None:
+            lab = v_sp.get()
+            if lab == "(none)":
+                patch_user_settings(startup_preset_id=None)
                 return
-            self._reset_genres_to_defaults_and_persist()
+            for p in all_presets_list:
+                if format_preset_menu_label(p) == lab:
+                    patch_user_settings(startup_preset_id=str(p.get("id")))
+                    return
 
-        b_edit_genres_st = tk.Button(
-            row_genre_st,
-            text="Edit genre labels & colors",
-            command=on_edit_genres_from_settings,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(b_edit_genres_st)
-        b_edit_genres_st.pack(side="left")
-        b_reset_genres_st = tk.Button(
-            row_genre_st,
-            text="Reset genres to default",
-            command=on_reset_genres_defaults,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(b_reset_genres_st)
-        b_reset_genres_st.pack(side="left", padx=(8, 0))
-
-        sep_mp = tk.Frame(inner, bg=self.panel_border, height=1)
-        sep_mp.pack_propagate(False)
-        sep_mp.pack(fill="x", pady=(0, 10))
+        om_sp = tk.OptionMenu(row_sp, v_sp, *startup_labels, command=on_startup_preset)
+        self._style_tk_option_menu_transport(om_sp)
+        om_sp.pack(side="left", padx=(8, 0))
 
         tk.Label(
-            inner,
+            sec_pres,
             text="Mode presets",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(10, 0))
         tk.Label(
-            inner,
+            sec_pres,
             text="Swipe presets set the three hotkey targets; grid presets define nine folders under GENRES/.",
             bg=self.panel,
             fg=self.muted,
@@ -6139,7 +6238,7 @@ class App:
         swipe_menu_labs = [format_preset_menu_label(p) for p in swipe_presets] or ["Swipe · Default"]
         grid_menu_labs = [format_preset_menu_label(p) for p in grid_presets] or ["Grid · Default"]
 
-        row_ap = tk.Frame(inner, bg=self.panel)
+        row_ap = tk.Frame(sec_pres, bg=self.panel)
         row_ap.pack(anchor="w", pady=(0, 4))
         tk.Label(row_ap, text="Swipe:", bg=self.panel, fg=self.muted, font=("Helvetica", 10)).pack(side="left")
         aid = str(self._mode_preset_store.get("active_swipe_preset_id") or "")
@@ -6185,7 +6284,7 @@ class App:
         self._style_tk_option_menu_transport(om_gr_act)
         om_gr_act.pack(side="left", padx=(6, 0))
 
-        row_edit = tk.Frame(inner, bg=self.panel)
+        row_edit = tk.Frame(sec_pres, bg=self.panel)
         row_edit.pack(anchor="w", pady=(6, 4))
 
         def on_edit_sw() -> None:
@@ -6215,7 +6314,7 @@ class App:
         self._style_tk_button_transport_grey(b_eg)
         b_eg.pack(side="left", padx=(0, 6))
 
-        row_cr = tk.Frame(inner, bg=self.panel)
+        row_cr = tk.Frame(sec_pres, bg=self.panel)
         row_cr.pack(anchor="w", pady=(6, 4))
 
         def new_sw() -> None:
@@ -6351,7 +6450,7 @@ class App:
             self._style_tk_button_transport_grey(bx)
             bx.pack(side="left", padx=(0, 4))
 
-        row_del = tk.Frame(inner, bg=self.panel)
+        row_del = tk.Frame(sec_pres, bg=self.panel)
         row_del.pack(anchor="w", pady=(4, 4))
         for txt, cmd in (
             ("Delete swipe", del_sw),
@@ -6362,6 +6461,177 @@ class App:
             bx = tk.Button(row_del, text=txt, command=cmd, font=("Helvetica", 9, "bold"), padx=6, pady=3)
             self._style_tk_button_transport_grey(bx)
             bx.pack(side="left", padx=(0, 4))
+
+        tk.Label(
+            sec_pres,
+            text="Genre settings",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(12, 0))
+        tk.Label(
+            sec_pres,
+            text="Edit grid labels and colors, or reset the active grid preset to defaults.",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            wraplength=480,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 8))
+
+        row_genre_st = tk.Frame(sec_pres, bg=self.panel)
+        row_genre_st.pack(anchor="w", pady=(0, 8))
+
+        def on_edit_genres_from_settings() -> None:
+            self._open_edit_genres_dialog()
+
+        def on_reset_genres_defaults() -> None:
+            self._prepare_native_dialog()
+            if not messagebox.askyesno(
+                "Reset genres",
+                "Reset the active grid preset to default names, colors, and folders? This saves immediately.",
+                parent=top,
+            ):
+                return
+            self._reset_genres_to_defaults_and_persist()
+
+        b_edit_genres_st = tk.Button(
+            row_genre_st,
+            text="Edit genre labels & colors",
+            command=on_edit_genres_from_settings,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_edit_genres_st)
+        b_edit_genres_st.pack(side="left")
+        b_reset_genres_st = tk.Button(
+            row_genre_st,
+            text="Reset genres to default",
+            command=on_reset_genres_defaults,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(b_reset_genres_st)
+        b_reset_genres_st.pack(side="left", padx=(8, 0))
+
+        sep_disp = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_disp.pack_propagate(False)
+        sep_disp.pack(fill="x", pady=(0, 10))
+
+        sec_disp = tk.Frame(inner, bg=self.panel)
+        sec_disp.pack(fill="x", anchor="w")
+        tk.Label(
+            sec_disp,
+            text="DISPLAY",
+            bg=self.panel,
+            fg=self.accent,
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+
+        v_queue_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_queue_panel_on_startup"]))
+
+        def on_queue_su() -> None:
+            patch_user_settings(show_queue_panel_on_startup=bool(v_queue_su.get()))
+
+        tk.Checkbutton(
+            sec_disp,
+            text="Show queue panel on startup",
+            variable=v_queue_su,
+            command=on_queue_su,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(4, 4))
+
+        v_help_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_help_guide_on_startup"]))
+
+        def on_help_su() -> None:
+            patch_user_settings(show_help_guide_on_startup=bool(v_help_su.get()))
+
+        tk.Checkbutton(
+            sec_disp,
+            text="Show help guide on startup",
+            variable=v_help_su,
+            command=on_help_su,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(4, 8))
+
+        sep_adv = tk.Frame(inner, bg=self.panel_border, height=1)
+        sep_adv.pack_propagate(False)
+        sep_adv.pack(fill="x", pady=(12, 10))
+
+        sec_adv = tk.Frame(inner, bg=self.panel)
+        sec_adv.pack(fill="x", anchor="w")
+        tk.Label(
+            sec_adv,
+            text="ADVANCED",
+            bg=self.panel,
+            fg=self.accent,
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        advanced_body = tk.Frame(sec_adv, bg=self.panel)
+
+        def toggle_advanced() -> None:
+            if advanced_body.winfo_ismapped():
+                advanced_body.pack_forget()
+                b_adv_toggle.configure(text="Advanced ▸")
+            else:
+                advanced_body.pack(fill="x", anchor="w", pady=(8, 0))
+                b_adv_toggle.configure(text="Advanced ▾")
+
+        b_adv_toggle = tk.Button(
+            sec_adv,
+            text="Advanced ▸",
+            command=toggle_advanced,
+            font=("Helvetica", 9, "bold"),
+            padx=8,
+            pady=3,
+        )
+        self._style_tk_button_transport_grey(b_adv_toggle)
+        b_adv_toggle.pack(anchor="w", pady=(0, 0))
+
+        tk.Label(
+            advanced_body,
+            text=(
+                "After a successful sort or skip, walk upward from the track's folder toward the library root and "
+                "remove folders that are empty once junk like .DS_Store is ignored; never deletes BAKKIS_SORTED or "
+                "the library root."
+            ),
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            wraplength=480,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 6))
+
+        tk.Checkbutton(
+            advanced_body,
+            text="Clean up empty source folders after sorting",
+            variable=self._var_cleanup_empty_source_folders_after_sort,
+            command=self._on_cleanup_empty_source_folders_toggle,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(0, 4))
 
         btn_close = tk.Button(outer, text="Close", command=close, font=("Helvetica", 11, "bold"), padx=16, pady=6)
         self._style_tk_button_transport_grey(btn_close)
@@ -6952,6 +7222,7 @@ class App:
         if not self._folders or not self._queue:
             return
         src = self._queue[0]
+        orig_resolved = src.resolve()
         prev_display = self._display_index
         dest_dir = self._folders[bucket]
         dest = _unique_destination(dest_dir, src.name)
@@ -6961,6 +7232,10 @@ class App:
         except OSError as e:
             messagebox.showerror("Could not move file", str(e), parent=self.root)
             return
+
+        deleted_dirs: list[Path] = []
+        if self._music_root and bool(self._var_cleanup_empty_source_folders_after_sort.get()):
+            deleted_dirs = self._try_cleanup_empty_source_parents_after_move(orig_resolved)
 
         sw = active_swipe_preset(self._mode_preset_store)
         labels = sw.get("labels") if isinstance(sw.get("labels"), list) else []
@@ -6983,6 +7258,7 @@ class App:
                 "session_date": self._undo_session_date_note(),
                 "moved_path": str(dest),
                 "original_path": str(src.resolve()),
+                "deleted_source_dirs": deleted_dirs,
             },
         )
         if bucket == "keep":
@@ -7003,6 +7279,7 @@ class App:
         if slot_index < 0 or slot_index > 8:
             return
         src = self._queue[0]
+        orig_resolved = src.resolve()
         prev_display = self._display_index
         fn = self._genre_folder_names[slot_index] if slot_index < len(self._genre_folder_names) else safe_genre_folder_name(
             self._genre_labels[slot_index],
@@ -7016,6 +7293,10 @@ class App:
         except OSError as e:
             messagebox.showerror("Could not move file", str(e), parent=self.root)
             return
+
+        deleted_dirs: list[Path] = []
+        if self._music_root and bool(self._var_cleanup_empty_source_folders_after_sort.get()):
+            deleted_dirs = self._try_cleanup_empty_source_parents_after_move(orig_resolved)
 
         grid = active_grid_preset(self._mode_preset_store)
         action_label = str(self._genre_labels[slot_index]).strip() or safe_output_segment(str(fn))
@@ -7033,6 +7314,7 @@ class App:
                 "session_date": self._undo_session_date_note(),
                 "moved_path": str(dest),
                 "original_path": str(src.resolve()),
+                "deleted_source_dirs": deleted_dirs,
             },
         )
         self._session_genre += 1
@@ -7049,6 +7331,7 @@ class App:
         if skipped_base is None:
             return
         src = self._queue[0]
+        orig_resolved = src.resolve()
         prev_display = self._display_index
         dest_dir = _skipped_destination_parent(skipped_base, src, self._music_root)
         try:
@@ -7063,6 +7346,10 @@ class App:
         except OSError as e:
             messagebox.showerror("Could not move file", str(e), parent=self.root)
             return
+
+        deleted_dirs: list[Path] = []
+        if self._music_root and bool(self._var_cleanup_empty_source_folders_after_sort.get()):
+            deleted_dirs = self._try_cleanup_empty_source_parents_after_move(orig_resolved)
 
         mode: SortingMode = self._sorting_mode
         p = active_grid_preset(self._mode_preset_store) if mode == "grid" else active_swipe_preset(self._mode_preset_store)
@@ -7080,6 +7367,7 @@ class App:
                 "session_date": self._undo_session_date_note(),
                 "moved_path": str(dest),
                 "original_path": str(src.resolve()),
+                "deleted_source_dirs": deleted_dirs,
             },
         )
         self._session_skipped += 1
@@ -7113,8 +7401,19 @@ class App:
 
         src: Path = item["from"]
         dst: Path = item["to"]
+        raw_deleted = item.get("deleted_source_dirs")
+        if not isinstance(raw_deleted, list):
+            raw_deleted = []
+        deleted_dirs_undo: list[Path] = []
+        for x in raw_deleted:
+            try:
+                deleted_dirs_undo.append(Path(x))
+            except (TypeError, ValueError):
+                continue
         try:
             self._stop_playback()
+            for dr in reversed(deleted_dirs_undo):
+                dr.mkdir(parents=True, exist_ok=True)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
         except OSError as e:
