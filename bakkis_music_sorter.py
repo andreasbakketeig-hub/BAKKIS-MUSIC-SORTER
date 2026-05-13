@@ -4000,7 +4000,10 @@ class App:
         self._apply_order_toggle_chrome()
 
         title_mid = tk.Frame(top, bg=self.bg)
-        title_mid.grid(row=0, column=1, sticky="")
+        # sticky="n": anchor to top of row so the title does not float down as
+        # the left column grows taller with load buttons.
+        # padx keeps breathing room between center and both side columns.
+        title_mid.grid(row=0, column=1, sticky="n", padx=20, pady=(6, 0))
         self.lbl_mode_header = tk.Label(
             title_mid,
             text=self._mode_status_text(self._sorting_mode),
@@ -4022,7 +4025,7 @@ class App:
         # 2-column grid mirrors left column: Queue spans both columns (row 0),
         # Swipe+Grid each take one column (row 1) — matching Guide+Settings layout.
         right_grid = tk.Frame(top_right_col, bg=self.bg)
-        right_grid.pack(anchor="ne", fill="x")
+        right_grid.pack(anchor="nw", fill="x")
         right_grid.columnconfigure(0, weight=1, uniform="rg_col")
         right_grid.columnconfigure(1, weight=1, uniform="rg_col")
 
