@@ -57,7 +57,7 @@ _SECTION_GAP_Y = 6
 # Each permanent side rail occupies this exact horizontal width.
 # Both rails are ALWAYS present so the center column never shifts.
 _RAIL_W = 264              # 16 px outer gutter + 248 px panel content
-_GUIDE_SIDEBAR_TEXT_WRAP = 220
+_GUIDE_SIDEBAR_TEXT_WRAP = 228
 
 # Lowercase extensions including leading dot — single source of truth for scan / validation / playback checks.
 SUPPORTED_AUDIO_FORMATS = frozenset(
@@ -136,10 +136,20 @@ LEGACY_SETTINGS_JSON = "bakkis_settings.json"
 KEEP_NAME = "KEEP"
 ARCHIVE_NAME = "ARCHIVE"
 FAVORITES_NAME = "FAVORITES"
+SKIPPED_NAME = "SKIPPED"
 GENRES_NAME = "GENRES"
+# All swipe / grid / skip output lives under ``<music_root>/BAKKIS_SORTED_NAME/…``.
+# Legacy flat roots (KEEP, GENRES, …) are no longer created; scan still ignores them if present.
+BAKKIS_SORTED_NAME = "BAKKIS_SORTED"
 MODE_PRESETS_JSON = "mode_presets.json"
 LEGACY_SKIP_SCAN_DIR_NAMES = frozenset(
-    {KEEP_NAME.lower(), ARCHIVE_NAME.lower(), FAVORITES_NAME.lower(), GENRES_NAME.lower()},
+    {
+        KEEP_NAME.lower(),
+        ARCHIVE_NAME.lower(),
+        FAVORITES_NAME.lower(),
+        SKIPPED_NAME.lower(),
+        GENRES_NAME.lower(),
+    },
 )
 
 
@@ -356,6 +366,8 @@ def active_grid_preset(store: dict) -> dict:
 
 def collect_skip_scan_dir_names(store: dict) -> frozenset[str]:
     out: set[str] = set(LEGACY_SKIP_SCAN_DIR_NAMES)
+    out.add(SKIPPED_NAME.lower())
+    out.add(BAKKIS_SORTED_NAME.lower())
     for p in store.get("presets") or []:
         if not isinstance(p, dict):
             continue
@@ -569,12 +581,15 @@ def _default_user_settings_blob() -> dict:
         "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
         "add_date_to_created_sorting_folders": False,
+        "create_dated_sorting_sessions": True,
         "volume": 80,
     }
 
 
 # Keys that must merge from disk even if an older build omitted them from defaults.
-_USER_SETTINGS_MERGE_FALLBACK_KEYS = frozenset({"add_date_to_created_sorting_folders"})
+_USER_SETTINGS_MERGE_FALLBACK_KEYS = frozenset(
+    {"add_date_to_created_sorting_folders", "create_dated_sorting_sessions"},
+)
 
 
 def _coerce_bool_jsonish(val: object) -> bool:
@@ -629,6 +644,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
     data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", False))
     data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
     data["add_date_to_created_sorting_folders"] = _coerce_bool_jsonish(data.get("add_date_to_created_sorting_folders", False))
+    data["create_dated_sorting_sessions"] = _coerce_bool_jsonish(data.get("create_dated_sorting_sessions", True))
     try:
         vol = int(float(data.get("volume", 80)))
     except (TypeError, ValueError):
@@ -772,12 +788,20 @@ def load_add_date_to_created_sorting_folders() -> bool:
 
 
 def add_date_prefixed_sort_folders_enabled() -> bool:
-    """True when newly created swipe / genre sort folders should get a ``YYYY-MM-DD - `` prefix."""
+    """Legacy setting (no longer drives output paths; see ``create_dated_sorting_sessions``)."""
     return _coerce_bool_jsonish(read_user_settings().get("add_date_to_created_sorting_folders", False))
 
 
 def save_add_date_to_created_sorting_folders_setting(on: bool) -> None:
     patch_user_settings(add_date_to_created_sorting_folders=_coerce_bool_jsonish(on))
+
+
+def create_dated_sorting_sessions_enabled() -> bool:
+    return _coerce_bool_jsonish(read_user_settings().get("create_dated_sorting_sessions", True))
+
+
+def save_create_dated_sorting_sessions_setting(on: bool) -> None:
+    patch_user_settings(create_dated_sorting_sessions=_coerce_bool_jsonish(on))
 
 
 def load_default_folder_path() -> Optional[str]:
@@ -866,6 +890,15 @@ def safe_genre_folder_name(label: str) -> str:
     return s[:120]
 
 
+def safe_output_segment(name: str) -> str:
+    """Sanitize a single path segment for preset / bucket / genre / Skipped folder names."""
+    s = str(name).strip().replace("/", "-").replace("\\", "-").replace(":", "-")
+    s = s.replace("\x00", "")
+    if not s:
+        s = "Preset"
+    return s[:120]
+
+
 _DATE_PREFIXED_SORT_SKIP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} - (.+)$")
 
 
@@ -889,6 +922,8 @@ def swipe_sort_folder_leaf(name: str, *, add_date: bool) -> str:
 
 
 def _should_skip_scan_dir_name(name: str, skip: frozenset[str]) -> bool:
+    if name.lower() == BAKKIS_SORTED_NAME.lower():
+        return True
     if name.lower() in skip:
         return True
     if _should_skip_scan_subdirectory(name):
@@ -899,17 +934,72 @@ def _should_skip_scan_dir_name(name: str, skip: frozenset[str]) -> bool:
     return False
 
 
-def ensure_genre_folders(
-    root: Path,
+def sorted_preset_session_root(music_root: Path, preset_display_name: str, *, dated_sessions: bool) -> Path:
+    """``BAKKIS_SORTED/<preset>/`` optionally with a trailing ``YYYY-MM-DD/`` session segment."""
+    base = music_root.resolve() / BAKKIS_SORTED_NAME / safe_output_segment(preset_display_name)
+    if dated_sessions:
+        return base / date.today().isoformat()
+    return base
+
+
+def ensure_grid_destination_folders(
+    music_root: Path,
+    grid_preset: dict,
     folder_names: list[str],
     *,
-    add_date_to_created_sorting_folders: bool = False,
+    dated_sessions: bool,
 ) -> None:
-    base = root / GENRES_NAME
-    base.mkdir(parents=True, exist_ok=True)
+    session_root = sorted_preset_session_root(
+        music_root,
+        str(grid_preset.get("name") or "Preset").strip() or "Preset",
+        dated_sessions=dated_sessions,
+    )
     for raw in folder_names[:9]:
-        leaf = genre_sort_folder_leaf(str(raw), add_date=add_date_to_created_sorting_folders)
-        (base / leaf).mkdir(parents=True, exist_ok=True)
+        leaf = safe_output_segment(str(raw).strip() or "?")
+        (session_root / leaf).mkdir(parents=True, exist_ok=True)
+
+
+def ensure_swipe_destination_folders(
+    music_root: Path,
+    swipe_preset: dict,
+    *,
+    dated_sessions: bool,
+) -> dict[str, Path]:
+    """Create keep / archive / favorites directories under the active swipe preset tree."""
+    session_root = sorted_preset_session_root(
+        music_root,
+        str(swipe_preset.get("name") or "Preset").strip() or "Preset",
+        dated_sessions=dated_sessions,
+    )
+    labels = swipe_preset.get("labels")
+    if not isinstance(labels, list):
+        labels = []
+    fallback = ("Keep", "Archive", "Favorite")
+    ls: list[str] = []
+    for i in range(3):
+        if i < len(labels) and str(labels[i]).strip():
+            ls.append(str(labels[i]).strip())
+        else:
+            ls.append(fallback[i])
+    out = {
+        "keep": session_root / safe_output_segment(ls[0]),
+        "archive": session_root / safe_output_segment(ls[1]),
+        "favorites": session_root / safe_output_segment(ls[2]),
+    }
+    for d in out.values():
+        d.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def skipped_sort_base(music_root: Path, store: dict, sorting_mode: SortingMode, *, dated_sessions: bool) -> Path:
+    """``…/Skipped`` directory for the active preset of the current sorting mode (swipe vs grid)."""
+    if sorting_mode == "grid":
+        p = active_grid_preset(store)
+    else:
+        p = active_swipe_preset(store)
+    name = str(p.get("name") or "Preset").strip() or "Preset"
+    session_root = sorted_preset_session_root(music_root, name, dated_sessions=dated_sessions)
+    return session_root / safe_output_segment("Skipped")
 
 
 def iter_audio_files_under(
@@ -976,23 +1066,12 @@ def build_track_relative_index(paths: list[Path], root: Path) -> dict[str, str]:
     return out
 
 
-def ensure_sort_folders(
-    root: Path,
-    swipe_output_folder_names: Optional[tuple[str, str, str]] = None,
-    *,
-    add_date_to_created_sorting_folders: bool = False,
-) -> dict[str, Path]:
-    if swipe_output_folder_names is None:
-        swipe_output_folder_names = (KEEP_NAME, ARCHIVE_NAME, FAVORITES_NAME)
-    kn, an, fn = swipe_output_folder_names
-    ad = add_date_to_created_sorting_folders
-    lk = swipe_sort_folder_leaf(kn, add_date=ad)
-    la = swipe_sort_folder_leaf(an, add_date=ad)
-    lf = swipe_sort_folder_leaf(fn, add_date=ad)
-    out = {"keep": root / lk, "archive": root / la, "favorites": root / lf}
-    for d in out.values():
-        d.mkdir(parents=True, exist_ok=True)
-    return out
+def _skipped_destination_parent(skipped_base: Path, src: Path, music_root: Path) -> Path:
+    """Directory under ``skipped_base`` for a skipped file, preserving relative parents from ``music_root``."""
+    rel = Path(_relative_path_posix(src.resolve(), music_root.resolve()))
+    if rel.parent == Path("."):
+        return skipped_base
+    return skipped_base / rel.parent
 
 
 def format_ms(ms: int) -> str:
@@ -1162,6 +1241,20 @@ def _count_files_in_dir(d: Path) -> int:
     return sum(1 for p in d.iterdir() if p.is_file())
 
 
+def _count_files_in_tree(d: Path) -> int:
+    """Count regular files under ``d`` recursively (e.g. skipped files in nested relative folders)."""
+    if not d.is_dir():
+        return 0
+    n = 0
+    try:
+        for p in d.rglob("*"):
+            if p.is_file():
+                n += 1
+    except OSError:
+        return 0
+    return n
+
+
 def _prune_stale_bakkis_tempfiles() -> None:
     """Remove old decoded preview WAVs left in the temp dir."""
     td = Path(tempfile.gettempdir())
@@ -1242,11 +1335,12 @@ class App:
         self._track_order: TrackOrder = load_track_order()
         self._user_playback_start_sec: float = float(load_playback_start_seconds())
         self._var_include_subfolders = tk.BooleanVar(master=self.root, value=load_include_subfolders())
-        self._var_add_date_to_created_sorting_folders = tk.BooleanVar(
+        self._var_create_dated_sorting_sessions = tk.BooleanVar(
             master=self.root,
-            value=load_add_date_to_created_sorting_folders(),
+            value=create_dated_sorting_sessions_enabled(),
         )
         self._var_auto_load_default = tk.BooleanVar(master=self.root, value=load_auto_load_default_folder())
+        self._lbl_sort_output_preview: Optional[tk.Misc] = None
         self._path_rel_to_music_root: dict[str, str] = {}
         self._apply_track_labels_from_preset_store()
         self._genre_title_labels: list[tk.Label] = []
@@ -1342,6 +1436,7 @@ class App:
         self._main_action_shell: Optional[tk.Frame] = None
         self._queue_sidebar_outer: Optional[tk.Frame] = None
         self._queue_sidebar_inner: Optional[tk.Frame] = None
+        self._queue_sep: Optional[tk.Frame] = None
         self._queue_section_frame: Optional[tk.Frame] = None
         self._sidebar_spring: Optional[tk.Frame] = None
         self._lbl_queue_now: Optional[tk.Label] = None
@@ -1350,6 +1445,7 @@ class App:
         self._queue_panel_visible = False
         self._guide_sidebar_outer: Optional[tk.Frame] = None
         self._guide_sidebar_inner: Optional[tk.Frame] = None
+        self._guide_sep: Optional[tk.Frame] = None
         self._footer_logo_photo: Optional[object] = None
         self._load_folder_ring: Optional[tk.Frame] = None
         self.btn_load_default_folder: Optional[tk.Button] = None
@@ -3996,77 +4092,7 @@ class App:
         self._action_swap_host = tk.Frame(self._main_action_shell, bg=self.bg)
         self._action_swap_host.pack(fill="both", expand=True)
 
-        top = tk.Frame(self._main_upper, bg=self.bg)
-        top.pack(fill="x", padx=_CONTENT_GUTTER, pady=(6, 4))
-        # Equal side columns keep the title in the true horizontal center while resizing.
-        top.columnconfigure(0, weight=1, uniform="top_hdr")
-        top.columnconfigure(1, weight=0)
-        top.columnconfigure(2, weight=1, uniform="top_hdr")
-
-        top_left_col = tk.Frame(top, bg=self.bg)
-        top_left_col.grid(row=0, column=0, sticky="nsew")
-
-        hdr_util = tk.Frame(top_left_col, bg=self.bg)
-        hdr_util.pack(anchor="w", fill="x")
-        for hu in range(2):
-            hdr_util.columnconfigure(hu, weight=1, uniform="hdr_util_col")
-        _o_gd, self._tile_guide_inner = self._action_tile(
-            hdr_util,
-            "📖",
-            "Guide",
-            "[H]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self._toggle_guide_panel_visibility,
-            clickable_when_tiles_disabled=True,
-        )
-        _o_st, self._tile_settings_inner = self._action_tile(
-            hdr_util,
-            "⚙️",
-            "Settings",
-            "[,]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self._open_settings_dialog,
-            clickable_when_tiles_disabled=True,
-        )
-        _o_gd.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
-        _o_st.grid(row=0, column=1, sticky="nsew")
-
-        load_row = tk.Frame(top_left_col, bg=self.bg)
-        load_row.pack(anchor="w", fill="x", pady=(_SECTION_GAP_Y, 0))
-        self._load_folder_ring, self.btn_load = self._load_folder_button(load_row, self.pick_folder)
-        self._load_folder_ring.pack(side="left", fill="x", expand=True)
-
-        def_row = tk.Frame(top_left_col, bg=self.bg)
-        def_row.pack(anchor="w", fill="x", pady=(5, 0))
-        self.btn_load_default_folder = tk.Button(
-            def_row,
-            text="Load Default Folder",
-            command=self._on_load_default_folder,
-            font=("Helvetica", 10, "bold"),
-            padx=10,
-            pady=5,
-        )
-        self._style_tk_button_transport_grey(self.btn_load_default_folder)
-        self.btn_load_default_folder.pack(side="left", fill="x", expand=True)
-
-        self.lbl_default_folder_path = tk.Label(
-            top_left_col,
-            text="",
-            bg=self.bg,
-            fg=self.muted,
-            font=("Helvetica", 9),
-            anchor="w",
-            justify="left",
-        )
-        self.lbl_default_folder_path.pack(anchor="w", pady=(2, 0), fill="x")
-        self._refresh_default_folder_label()
-
+        # Hidden host for Random / In-order toggle tiles (parented to root, never displayed).
         self._hidden_chrome_host = tk.Frame(self.root, bg=self.bg)
         o_rnd, self._tile_order_random_inner = self._action_tile(
             self._hidden_chrome_host,
@@ -4096,13 +4122,14 @@ class App:
         o_io.pack(side="left", fill="x", expand=True)
         self._apply_order_toggle_chrome()
 
-        title_mid = tk.Frame(top, bg=self.bg)
-        # sticky="n": anchor to top of row so the title does not float down as
-        # the left column grows taller with load buttons.
-        # padx keeps breathing room between center and both side columns.
-        title_mid.grid(row=0, column=1, sticky="n", padx=20, pady=(6, 0))
+        # ── Center header ─────────────────────────────────────────────────
+        # Packed without fill so pack() centers it naturally within the center
+        # column.  The center column is always flanked by equal-width rails, so
+        # the title is always at the true horizontal midpoint of the window.
+        _hdr = tk.Frame(self._main_upper, bg=self.bg)
+        _hdr.pack(pady=(16, 4))
         self.lbl_mode_header = tk.Label(
-            title_mid,
+            _hdr,
             text=self._mode_status_text(self._sorting_mode),
             bg=self.bg,
             fg=self._mode_status_fg(self._sorting_mode),
@@ -4111,61 +4138,11 @@ class App:
             justify="center",
         )
         self.lbl_mode_header.pack(pady=(0, 2))
-        titles = tk.Frame(title_mid, bg=self.bg)
-        titles.pack()
-        tk.Label(titles, text="BAKKIS", bg=self.bg, fg=self.fg, font=("Helvetica", 20, "bold")).pack(side="left")
-        tk.Label(titles, text=" ", bg=self.bg, font=("Helvetica", 5)).pack(side="left")
-        tk.Label(titles, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica", 20, "bold")).pack(side="left")
-
-        top_right_col = tk.Frame(top, bg=self.bg)
-        top_right_col.grid(row=0, column=2, sticky="nsew")
-        # 2-column grid mirrors left column: Queue spans both columns (row 0),
-        # Swipe+Grid each take one column (row 1) — matching Guide+Settings layout.
-        right_grid = tk.Frame(top_right_col, bg=self.bg)
-        right_grid.pack(anchor="nw", fill="x")
-        right_grid.columnconfigure(0, weight=1, uniform="rg_col")
-        right_grid.columnconfigure(1, weight=1, uniform="rg_col")
-
-        _o_q, self._tile_queue_inner = self._action_tile(
-            right_grid,
-            "☰",
-            "Queue",
-            "[Q]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            self._toggle_queue_panel_visibility,
-            clickable_when_tiles_disabled=True,
-        )
-        _o_q.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, _ACTION_TILE_GRID_GAP_PX))
-
-        _o_mc, self._tile_mode_cleanup_inner = self._action_tile(
-            right_grid,
-            "💘",
-            "Swipe",
-            "[S]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            lambda: self._set_sorting_mode("swipe"),
-            clickable_when_tiles_disabled=True,
-        )
-        _o_mg, self._tile_mode_genre_inner = self._action_tile(
-            right_grid,
-            "🎵",
-            "Grid",
-            "[G]",
-            self.skip_bg,
-            self.skip_active,
-            self.fg,
-            self.muted,
-            lambda: self._set_sorting_mode("grid"),
-            clickable_when_tiles_disabled=True,
-        )
-        _o_mc.grid(row=1, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
-        _o_mg.grid(row=1, column=1, sticky="nsew")
+        _title_row = tk.Frame(_hdr, bg=self.bg)
+        _title_row.pack()
+        tk.Label(_title_row, text="BAKKIS", bg=self.bg, fg=self.fg, font=("Helvetica", 20, "bold")).pack(side="left")
+        tk.Label(_title_row, text=" ", bg=self.bg, font=("Helvetica", 5)).pack(side="left")
+        tk.Label(_title_row, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica", 20, "bold")).pack(side="left")
 
         player_card = tk.Frame(
             self._main_upper,
@@ -4596,6 +4573,8 @@ class App:
             self.genre_actions.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
 
         self._build_queue_sidebar()
+        self._build_left_rail()
+        self._build_right_rail()
         self._build_guide_sidebar()
 
         self.footer_outer = tk.Frame(self._bottom_dock, bg=self.bg)
@@ -4615,15 +4594,23 @@ class App:
 
     def _describe_undo_for_recent_panel(self, item: dict) -> str:
         kind = item.get("kind")
-        if kind == "skip":
-            raw = item.get("path")
-            p = raw if isinstance(raw, Path) else Path(str(raw))
-            return f"↷ Skip · {self._queue_ellipsis(p.name)}"
         if kind == "move":
             raw = item.get("from")
             p = raw if isinstance(raw, Path) else Path(str(raw))
             name = self._queue_ellipsis(p.name)
             sb = item.get("session_bucket")
+            al_raw = item.get("action_label")
+            al = str(al_raw).strip() if isinstance(al_raw, str) else ""
+            if al:
+                if sb == "skipped":
+                    return f"↷ {al} · {name}"
+                if sb in ("keep", "archive", "favorites"):
+                    prefix = {"keep": "✓", "archive": "✕", "favorites": "★"}.get(str(sb), "•")
+                    return f"{prefix} {al} · {name}"
+                if sb in ("genre", "grid"):
+                    return f"{self._queue_ellipsis(al)} · {name}"
+            if sb == "skipped":
+                return f"↷ Skip · {name}"
             if sb == "keep":
                 return f"✓ Keep · {name}"
             if sb == "archive":
@@ -4696,15 +4683,19 @@ class App:
     def _apply_queue_panel_visibility(self, visible: bool) -> None:
         self._queue_panel_visible = visible
         self._sync_queue_tile_title()
-        # Show/hide the content inside the permanent right rail — the rail itself
-        # never moves, so the center column is never displaced.
+        # Show/hide the queue panel below the right-rail header.
+        # Top padding is small — the header already provides the 18 px top margin.
         if self._queue_sidebar_inner is not None:
             try:
                 if visible:
+                    if self._queue_sep is not None:
+                        self._queue_sep.pack(fill="x", padx=(0, 16), pady=(0, _SECTION_GAP_Y))
                     self._queue_sidebar_inner.pack(
-                        fill="both", expand=True, padx=(0, 16), pady=(18, 24)
+                        fill="both", expand=True, padx=(0, 16), pady=(0, 18)
                     )
                 else:
+                    if self._queue_sep is not None:
+                        self._queue_sep.pack_forget()
                     self._queue_sidebar_inner.pack_forget()
             except tk.TclError:
                 pass
@@ -4726,15 +4717,19 @@ class App:
     def _apply_guide_panel_visibility(self, visible: bool) -> None:
         self._shortcut_panel_visible = visible
         self._sync_guide_tile_title()
-        # Show/hide the content inside the permanent left rail — the rail itself
-        # never moves, so the center column is never displaced.
+        # Show/hide the guide panel below the left-rail header.
+        # Top padding is small — the header already provides the 18 px top margin.
         if self._guide_sidebar_inner is not None:
             try:
                 if visible:
+                    if self._guide_sep is not None:
+                        self._guide_sep.pack(fill="x", padx=(16, 0), pady=(0, _SECTION_GAP_Y))
                     self._guide_sidebar_inner.pack(
-                        fill="both", expand=True, padx=(16, 0), pady=(18, 24)
+                        fill="both", expand=True, padx=(16, 0), pady=(0, 18)
                     )
                 else:
+                    if self._guide_sep is not None:
+                        self._guide_sep.pack_forget()
                     self._guide_sidebar_inner.pack_forget()
             except tk.TclError:
                 pass
@@ -4842,6 +4837,145 @@ class App:
 
         self._refresh_queue_panel()
 
+    def _build_left_rail(self) -> None:
+        """Build the permanent left rail: Guide + Settings tiles, load buttons."""
+        if self._left_rail is None:
+            return
+
+        # Everything in the left rail shares the same 16 px left gutter.
+        rail_top = tk.Frame(self._left_rail, bg=self.bg)
+        rail_top.pack(fill="x", padx=(16, 0), pady=(18, _SECTION_GAP_Y))
+
+        # ── Guide | Settings tiles ────────────────────────────────────────
+        hdr_util = tk.Frame(rail_top, bg=self.bg)
+        hdr_util.pack(fill="x")
+        for hu in range(2):
+            hdr_util.columnconfigure(hu, weight=1, uniform="lrail_hdr")
+
+        _o_gd, self._tile_guide_inner = self._action_tile(
+            hdr_util,
+            "📖",
+            "Guide",
+            "[H]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._toggle_guide_panel_visibility,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_st, self._tile_settings_inner = self._action_tile(
+            hdr_util,
+            "⚙️",
+            "Settings",
+            "[,]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._open_settings_dialog,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_gd.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
+        _o_st.grid(row=0, column=1, sticky="nsew")
+
+        # ── Load Folder ───────────────────────────────────────────────────
+        load_row = tk.Frame(rail_top, bg=self.bg)
+        load_row.pack(fill="x", pady=(_SECTION_GAP_Y, 0))
+        self._load_folder_ring, self.btn_load = self._load_folder_button(load_row, self.pick_folder)
+        self._load_folder_ring.pack(fill="x", expand=True)
+
+        # ── Load Default Folder ───────────────────────────────────────────
+        def_row = tk.Frame(rail_top, bg=self.bg)
+        def_row.pack(fill="x", pady=(5, 0))
+        self.btn_load_default_folder = tk.Button(
+            def_row,
+            text="Load Default Folder",
+            command=self._on_load_default_folder,
+            font=("Helvetica", 10, "bold"),
+            padx=10,
+            pady=5,
+        )
+        self._style_tk_button_transport_grey(self.btn_load_default_folder)
+        self.btn_load_default_folder.pack(fill="x", expand=True)
+
+        self.lbl_default_folder_path = tk.Label(
+            rail_top,
+            text="",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="w",
+            justify="left",
+        )
+        self.lbl_default_folder_path.pack(anchor="w", pady=(2, 0), fill="x")
+        self._refresh_default_folder_label()
+
+        # Separator between rail_top and the guide panel — packed/unpacked by visibility logic.
+        self._guide_sep = tk.Frame(self._left_rail, height=1, bg=self.panel_border)
+
+    def _build_right_rail(self) -> None:
+        """Build the permanent right rail: Queue tile, Swipe + Grid tiles."""
+        if self._right_rail is None:
+            return
+
+        # Everything in the right rail shares the same 16 px right gutter.
+        rail_top = tk.Frame(self._right_rail, bg=self.bg)
+        rail_top.pack(fill="x", padx=(0, 16), pady=(18, _SECTION_GAP_Y))
+
+        # 2-column uniform grid mirrors left rail: Queue spans both (row 0),
+        # Swipe + Grid each take one column (row 1).
+        right_grid = tk.Frame(rail_top, bg=self.bg)
+        right_grid.pack(fill="x")
+        right_grid.columnconfigure(0, weight=1, uniform="rrail_hdr")
+        right_grid.columnconfigure(1, weight=1, uniform="rrail_hdr")
+
+        # ── Queue tile (full width) ───────────────────────────────────────
+        _o_q, self._tile_queue_inner = self._action_tile(
+            right_grid,
+            "☰",
+            "Queue",
+            "[Q]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            self._toggle_queue_panel_visibility,
+            clickable_when_tiles_disabled=True,
+        )
+        _o_q.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, _ACTION_TILE_GRID_GAP_PX))
+
+        # ── Swipe | Grid tiles ────────────────────────────────────────────
+        _o_mc, self._tile_mode_cleanup_inner = self._action_tile(
+            right_grid,
+            "💘",
+            "Swipe",
+            "[S]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            lambda: self._set_sorting_mode("swipe"),
+            clickable_when_tiles_disabled=True,
+        )
+        _o_mg, self._tile_mode_genre_inner = self._action_tile(
+            right_grid,
+            "🎵",
+            "Grid",
+            "[G]",
+            self.skip_bg,
+            self.skip_active,
+            self.fg,
+            self.muted,
+            lambda: self._set_sorting_mode("grid"),
+            clickable_when_tiles_disabled=True,
+        )
+        _o_mc.grid(row=1, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
+        _o_mg.grid(row=1, column=1, sticky="nsew")
+
+        # Separator between rail_top and the queue panel — packed/unpacked by visibility logic.
+        self._queue_sep = tk.Frame(self._right_rail, height=1, bg=self.panel_border)
+
     def _build_guide_sidebar(self) -> None:
         """Build the LEFT sidebar content inside the permanent left rail."""
         if self._left_rail is None:
@@ -4860,7 +4994,7 @@ class App:
         outer = tk.Frame(parent, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
         inner_pad = tk.Frame(outer, bg=self.panel)
         inner_pad.pack(fill="both", expand=True, padx=10, pady=8)
-        hdr = ("Helvetica", 11, "bold")
+        hdr = ("Helvetica", 10, "bold")
         body = ("Helvetica", 9)
         meta = ("Helvetica", 8)
         stack = tk.Frame(inner_pad, bg=self.panel)
@@ -5286,6 +5420,52 @@ class App:
         self.root.bind("<Escape>", self._on_escape_key)
         self.root.bind("<FocusIn>", self._on_app_focus_in, add="+")
 
+    def _skipped_sort_base_path(self) -> Optional[Path]:
+        if self._music_root is None:
+            return None
+        return skipped_sort_base(
+            self._music_root,
+            self._mode_preset_store,
+            self._sorting_mode,
+            dated_sessions=create_dated_sorting_sessions_enabled(),
+        )
+
+    def _genre_dest_dir(self, slot_index: int) -> Path:
+        assert self._music_root is not None
+        fn = (
+            self._genre_folder_names[slot_index]
+            if slot_index < len(self._genre_folder_names)
+            else safe_genre_folder_name(self._genre_labels[slot_index])
+        )
+        grid = active_grid_preset(self._mode_preset_store)
+        root = sorted_preset_session_root(
+            self._music_root,
+            str(grid.get("name") or "Preset").strip() or "Preset",
+            dated_sessions=create_dated_sorting_sessions_enabled(),
+        )
+        return root / safe_output_segment(str(fn).strip() or "?")
+
+    def _sort_output_preview_text(self) -> str:
+        """Short example paths for Settings (read-only)."""
+        dated = create_dated_sorting_sessions_enabled()
+        dpart = f"{date.today().isoformat()}/" if dated else ""
+        swipe = active_swipe_preset(self._mode_preset_store)
+        grid = active_grid_preset(self._mode_preset_store)
+        sn = safe_output_segment(str(swipe.get("name") or "Preset"))
+        gn = safe_output_segment(str(grid.get("name") or "Preset"))
+        sl0 = str((swipe.get("labels") or ["Keep"])[0]).strip() or "Keep"
+        leaf_sw = safe_output_segment(sl0)
+        leaf_gr = safe_output_segment("Techno")
+        sk = safe_output_segment("Skipped")
+        return (
+            f"BAKKIS_SORTED/{sn}/{dpart}{leaf_sw}/…/file.wav  ·  "
+            f"BAKKIS_SORTED/{gn}/{dpart}{leaf_gr}/…  ·  "
+            f"Skip → …/{sk}/…"
+        )
+
+    def _undo_session_date_note(self) -> Optional[str]:
+        return date.today().isoformat() if create_dated_sorting_sessions_enabled() else None
+
     def _on_app_focus_in(self, event: object) -> None:
         """After native dialogs, refresh button colors (macOS Tk white-button glitch)."""
         try:
@@ -5305,35 +5485,34 @@ class App:
     def _refresh_sort_destination_paths(self) -> None:
         if self._music_root is None:
             return
-        add_date = add_date_prefixed_sort_folders_enabled()
-        trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
-        self._folders = ensure_sort_folders(
+        dated = create_dated_sorting_sessions_enabled()
+        self._folders = ensure_swipe_destination_folders(
             self._music_root,
-            trip,
-            add_date_to_created_sorting_folders=add_date,
+            active_swipe_preset(self._mode_preset_store),
+            dated_sessions=dated,
         )
-        ensure_genre_folders(
+        ensure_grid_destination_folders(
             self._music_root,
+            active_grid_preset(self._mode_preset_store),
             list(active_grid_preset(self._mode_preset_store)["folders"][:9]),
-            add_date_to_created_sorting_folders=add_date,
+            dated_sessions=dated,
         )
 
     def _genre_stats_text(self) -> str:
-        """Per-genre file counts under GENRES/ plus queue length — single line, no newlines."""
+        """Per-genre file counts under the active grid preset tree plus queue length — single line, no newlines."""
         root = self._music_root
         if root is None:
             return ""
-        base_gen = root / GENRES_NAME
         parts: list[str] = []
-        add_date = add_date_prefixed_sort_folders_enabled()
         for idx in range(9):
             lab = self._genre_labels[idx]
-            fn = self._genre_folder_names[idx] if idx < len(self._genre_folder_names) else safe_genre_folder_name(lab)
-            d = base_gen / genre_sort_folder_leaf(fn, add_date=add_date)
+            d = self._genre_dest_dir(idx)
             n = _count_files_in_dir(d) if d.is_dir() else 0
             parts.append(f"{lab}: {n}")
         nq = len(self._queue)
-        return " · ".join(parts) + f"   ·   Queue: {nq}"
+        sk_root = self._skipped_sort_base_path()
+        n_skipped = _count_files_in_tree(sk_root) if sk_root and sk_root.is_dir() else 0
+        return " · ".join(parts) + f"   ·   Queue: {nq}   ·   Skipped: {n_skipped}"
 
     def _refresh_stats(self) -> None:
         if not self._music_root or not self._folders:
@@ -5346,8 +5525,10 @@ class App:
             k = _count_files_in_dir(self._folders["keep"])
             a = _count_files_in_dir(self._folders["archive"])
             f = _count_files_in_dir(self._folders["favorites"])
+            sk_root = self._skipped_sort_base_path()
+            sk = _count_files_in_tree(sk_root) if sk_root and sk_root.is_dir() else 0
             s0, s1, s2 = (self._swipe_labels + ["?", "?", "?"])[:3]
-            base = f"{s0}: {k}   {s1}: {a}   {s2}: {f}"
+            base = f"{s0}: {k}   {s1}: {a}   {s2}: {f}   Skipped: {sk}"
             self.lbl_stats.configure(text=base)
         self._update_content_wraplengths()
 
@@ -5406,6 +5587,8 @@ class App:
             self._session_favorites = max(0, self._session_favorites - 1)
         elif bucket in ("genre", "grid"):
             self._session_genre = max(0, self._session_genre - 1)
+        elif bucket == "skipped":
+            self._session_skipped = max(0, self._session_skipped - 1)
         self._refresh_session_stats()
 
     def _cleanup_temp_audio(self) -> None:
@@ -5414,24 +5597,24 @@ class App:
     def _on_include_subfolders_toggle(self) -> None:
         save_include_subfolders_setting(bool(self._var_include_subfolders.get()))
 
-    def _on_add_date_to_created_sorting_folders_toggle(self) -> None:
+    def _on_create_dated_sorting_sessions_toggle(self) -> None:
         def _commit() -> None:
             try:
                 self.root.update_idletasks()
             except tk.TclError:
                 pass
-            desired = bool(self._var_add_date_to_created_sorting_folders.get())
-            save_add_date_to_created_sorting_folders_setting(desired)
-            actual = add_date_prefixed_sort_folders_enabled()
+            desired = bool(self._var_create_dated_sorting_sessions.get())
+            save_create_dated_sorting_sessions_setting(desired)
+            actual = create_dated_sorting_sessions_enabled()
             if actual != desired:
                 try:
-                    self._var_add_date_to_created_sorting_folders.set(actual)
+                    self._var_create_dated_sorting_sessions.set(actual)
                 except tk.TclError:
                     pass
                 try:
                     messagebox.showwarning(
                         "Settings",
-                        "Could not save \"Add date to created sorting folders\".\n\n"
+                        "Could not save \"Create Dated Sessions\".\n\n"
                         f"Check write permissions for:\n{_settings_json_path()}",
                         parent=self.root,
                     )
@@ -5439,6 +5622,11 @@ class App:
                     pass
             self._refresh_sort_destination_paths()
             self._refresh_stats()
+            try:
+                if getattr(self, "_lbl_sort_output_preview", None) is not None:
+                    self._lbl_sort_output_preview.configure(text=self._sort_output_preview_text())
+            except tk.TclError:
+                pass
 
         self.root.after(50, _commit)
 
@@ -5451,6 +5639,7 @@ class App:
         except tk.TclError:
             pass
         self._settings_top = None
+        self._lbl_sort_output_preview = None
         self.root.after(10, self._refresh_all_widget_chrome)
 
     def _open_settings_dialog(self) -> None:
@@ -5489,7 +5678,7 @@ class App:
         inner.pack(fill="both", expand=True, padx=12, pady=12)
 
         try:
-            self._var_add_date_to_created_sorting_folders.set(add_date_prefixed_sort_folders_enabled())
+            self._var_create_dated_sorting_sessions.set(create_dated_sorting_sessions_enabled())
         except tk.TclError:
             pass
 
@@ -5768,14 +5957,14 @@ class App:
 
         tk.Label(
             inner,
-            text="Folder naming",
+            text="Sorted output (BAKKIS_SORTED)",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica", 11, "bold"),
         ).pack(anchor="w")
         tk.Label(
             inner,
-            text="Applies when the app creates sorting folders (not source folders). Format: YYYY-MM-DD - Folder Name.",
+            text="Sorted files go under BAKKIS_SORTED/<preset>/[optional date folder]/<action>/… at the library root.",
             bg=self.panel,
             fg=self.muted,
             font=("Helvetica", 9),
@@ -5786,9 +5975,9 @@ class App:
 
         tk.Checkbutton(
             inner,
-            text="Add date to created sorting folders",
-            variable=self._var_add_date_to_created_sorting_folders,
-            command=self._on_add_date_to_created_sorting_folders_toggle,
+            text="Create Dated Sessions",
+            variable=self._var_create_dated_sorting_sessions,
+            command=self._on_create_dated_sorting_sessions_toggle,
             bg=self.panel,
             fg=self.fg,
             selectcolor=self.panel,
@@ -5796,7 +5985,19 @@ class App:
             activeforeground=self.fg,
             highlightthickness=0,
             font=("Helvetica", 10),
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 4))
+
+        self._lbl_sort_output_preview = tk.Label(
+            inner,
+            text=self._sort_output_preview_text(),
+            bg=self.panel,
+            fg=self.muted,
+            font=("Menlo", 9),
+            wraplength=520,
+            justify="left",
+            anchor="w",
+        )
+        self._lbl_sort_output_preview.pack(anchor="w", pady=(0, 8))
 
         v_help_su = tk.BooleanVar(master=top, value=bool(read_user_settings()["show_help_guide_on_startup"]))
 
@@ -6761,6 +6962,14 @@ class App:
             messagebox.showerror("Could not move file", str(e), parent=self.root)
             return
 
+        sw = active_swipe_preset(self._mode_preset_store)
+        labels = sw.get("labels") if isinstance(sw.get("labels"), list) else []
+        bi = {"keep": 0, "archive": 1, "favorites": 2}[bucket]
+        if bi < len(labels) and str(labels[bi]).strip():
+            action_label = str(labels[bi]).strip()
+        else:
+            action_label = ["Keep", "Archive", "Favorite"][bi]
+        preset_name = str(sw.get("name") or "").strip()
         self._undo_stack.append(
             {
                 "kind": "move",
@@ -6768,6 +6977,12 @@ class App:
                 "to": src.resolve(),
                 "prev_display": prev_display,
                 "session_bucket": bucket,
+                "preset_name": preset_name,
+                "sorting_mode": "swipe",
+                "action_label": action_label,
+                "session_date": self._undo_session_date_note(),
+                "moved_path": str(dest),
+                "original_path": str(src.resolve()),
             },
         )
         if bucket == "keep":
@@ -6792,8 +7007,7 @@ class App:
         fn = self._genre_folder_names[slot_index] if slot_index < len(self._genre_folder_names) else safe_genre_folder_name(
             self._genre_labels[slot_index],
         )
-        add_date = add_date_prefixed_sort_folders_enabled()
-        dest_dir = self._music_root / GENRES_NAME / genre_sort_folder_leaf(fn, add_date=add_date)
+        dest_dir = self._genre_dest_dir(slot_index)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = _unique_destination(dest_dir, src.name)
         try:
@@ -6803,6 +7017,9 @@ class App:
             messagebox.showerror("Could not move file", str(e), parent=self.root)
             return
 
+        grid = active_grid_preset(self._mode_preset_store)
+        action_label = str(self._genre_labels[slot_index]).strip() or safe_output_segment(str(fn))
+        preset_name = str(grid.get("name") or "").strip()
         self._undo_stack.append(
             {
                 "kind": "move",
@@ -6810,6 +7027,12 @@ class App:
                 "to": src.resolve(),
                 "prev_display": prev_display,
                 "session_bucket": "grid",
+                "preset_name": preset_name,
+                "sorting_mode": "grid",
+                "action_label": action_label,
+                "session_date": self._undo_session_date_note(),
+                "moved_path": str(dest),
+                "original_path": str(src.resolve()),
             },
         )
         self._session_genre += 1
@@ -6820,19 +7043,50 @@ class App:
         self.load_current_track(autoplay=True)
 
     def skip_current(self) -> None:
-        if not self._queue:
+        if not self._music_root or not self._queue:
             return
+        skipped_base = self._skipped_sort_base_path()
+        if skipped_base is None:
+            return
+        src = self._queue[0]
         prev_display = self._display_index
-        skipped = self._queue[0]
-        self._stop_playback()
-        self._queue.pop(0)
-        if self._queue:
-            self._display_index += 1
+        dest_dir = _skipped_destination_parent(skipped_base, src, self._music_root)
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("Could not create folder", str(e), parent=self.root)
+            return
+        dest = _unique_destination(dest_dir, src.name)
+        try:
+            self._stop_playback()
+            shutil.move(str(src), str(dest))
+        except OSError as e:
+            messagebox.showerror("Could not move file", str(e), parent=self.root)
+            return
+
+        mode: SortingMode = self._sorting_mode
+        p = active_grid_preset(self._mode_preset_store) if mode == "grid" else active_swipe_preset(self._mode_preset_store)
+        preset_name = str(p.get("name") or "").strip()
         self._undo_stack.append(
-            {"kind": "skip", "path": skipped.resolve(), "prev_display": prev_display},
+            {
+                "kind": "move",
+                "from": dest,
+                "to": src.resolve(),
+                "prev_display": prev_display,
+                "session_bucket": "skipped",
+                "preset_name": preset_name,
+                "sorting_mode": mode,
+                "action_label": "Skipped",
+                "session_date": self._undo_session_date_note(),
+                "moved_path": str(dest),
+                "original_path": str(src.resolve()),
+            },
         )
         self._session_skipped += 1
         self._refresh_session_stats()
+        self._queue.pop(0)
+        if self._queue:
+            self._display_index += 1
         self.load_current_track(autoplay=True)
 
     def undo_all_to_session_start(self) -> None:
@@ -6853,26 +7107,6 @@ class App:
         item = self._undo_stack.pop()
         kind = item.get("kind")
 
-        if kind == "skip":
-            raw = item["path"]
-            p = raw if isinstance(raw, Path) else Path(raw)
-            p = p.resolve()
-            if not p.is_file():
-                messagebox.showerror(
-                    "Could not undo",
-                    f"The skipped file is no longer at:\n{p}",
-                    parent=self.root,
-                )
-                self._undo_stack.append(item)
-                return
-            self._stop_playback()
-            self._queue.insert(0, p)
-            self._display_index = int(item["prev_display"])
-            self._session_skipped = max(0, self._session_skipped - 1)
-            self._refresh_session_stats()
-            self.load_current_track(autoplay=autoplay)
-            return
-
         if kind != "move":
             self._undo_stack.append(item)
             return
@@ -6891,7 +7125,7 @@ class App:
         self._queue.insert(0, dst.resolve())
         self._display_index = int(item["prev_display"])
         sb = item.get("session_bucket")
-        if sb in ("keep", "archive", "favorites", "genre", "grid"):
+        if sb in ("keep", "archive", "favorites", "genre", "grid", "skipped"):
             self._session_undo_bucket(sb)
         self.load_current_track(autoplay=autoplay)
 
