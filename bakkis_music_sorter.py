@@ -4113,7 +4113,7 @@ class App:
         u_uniform = "transport_util"
         for col in range(4):
             transport_bar.columnconfigure(col, weight=1, uniform=u_uniform)
-        u_gap = 10
+        u_gap = _SWIPE_SORT_GRID_PAD
 
         def _place_transport_cell(col: int, outer: tk.Frame) -> None:
             px = (0, u_gap) if col < 3 else (0, 0)
