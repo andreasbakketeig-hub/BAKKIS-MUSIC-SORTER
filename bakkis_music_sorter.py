@@ -54,9 +54,9 @@ _DEFAULT_WIN_H = _WIN_MIN_H + 60  # comfortable launch size above minimum
 # Vertical rhythm between major blocks in the main column.
 _SECTION_GAP_Y_TIGHT = 3
 _SECTION_GAP_Y = 6
-# Sidebar reservations (queue/right · guide/left): used so main column wraplengths stay correct.
-_QUEUE_PANEL_WIDTH_RESERVE = 268
-_GUIDE_PANEL_WIDTH_RESERVE = 268
+# Each permanent side rail occupies this exact horizontal width.
+# Both rails are ALWAYS present so the center column never shifts.
+_RAIL_W = 264              # 16 px outer gutter + 248 px panel content
 _GUIDE_SIDEBAR_TEXT_WRAP = 220
 
 # Lowercase extensions including leading dot — single source of truth for scan / validation / playback checks.
@@ -573,6 +573,26 @@ def _default_user_settings_blob() -> dict:
     }
 
 
+# Keys that must merge from disk even if an older build omitted them from defaults.
+_USER_SETTINGS_MERGE_FALLBACK_KEYS = frozenset({"add_date_to_created_sorting_folders"})
+
+
+def _coerce_bool_jsonish(val: object) -> bool:
+    """Interpret JSON / hand-edited settings booleans reliably (``bool("false")`` is wrong in Python)."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("", "0", "false", "no", "off", "null", "none"):
+            return False
+        if s in ("1", "true", "yes", "on"):
+            return True
+        return False
+    return bool(val)
+
+
 def _normalize_user_settings_dict(data: dict) -> None:
     """Coerce loaded/patched settings in place; safe defaults for missing or invalid keys."""
     defaults = _default_user_settings_blob()
@@ -608,7 +628,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
     data["include_subfolders"] = bool(data.get("include_subfolders", True))
     data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", False))
     data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
-    data["add_date_to_created_sorting_folders"] = bool(data.get("add_date_to_created_sorting_folders", False))
+    data["add_date_to_created_sorting_folders"] = _coerce_bool_jsonish(data.get("add_date_to_created_sorting_folders", False))
     try:
         vol = int(float(data.get("volume", 80)))
     except (TypeError, ValueError):
@@ -639,7 +659,7 @@ def read_user_settings() -> dict:
                 raw = {}
     data = dict(_default_user_settings_blob())
     for k, v in raw.items():
-        if k in data or k == "default_folder_path":
+        if k in data or k == "default_folder_path" or k in _USER_SETTINGS_MERGE_FALLBACK_KEYS:
             data[k] = v
     _normalize_user_settings_dict(data)
     return data
@@ -748,11 +768,16 @@ def save_include_subfolders_setting(on: bool) -> None:
 
 
 def load_add_date_to_created_sorting_folders() -> bool:
-    return bool(read_user_settings()["add_date_to_created_sorting_folders"])
+    return add_date_prefixed_sort_folders_enabled()
+
+
+def add_date_prefixed_sort_folders_enabled() -> bool:
+    """True when newly created swipe / genre sort folders should get a ``YYYY-MM-DD - `` prefix."""
+    return _coerce_bool_jsonish(read_user_settings().get("add_date_to_created_sorting_folders", False))
 
 
 def save_add_date_to_created_sorting_folders_setting(on: bool) -> None:
-    patch_user_settings(add_date_to_created_sorting_folders=bool(on))
+    patch_user_settings(add_date_to_created_sorting_folders=_coerce_bool_jsonish(on))
 
 
 def load_default_folder_path() -> Optional[str]:
@@ -1307,6 +1332,8 @@ class App:
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
+        self._left_rail: Optional[tk.Frame] = None
+        self._right_rail: Optional[tk.Frame] = None
         self._main_scroll_outer: Optional[tk.Frame] = None
         self._main_panel: Optional[tk.Frame] = None
         self._bottom_dock: Optional[tk.Frame] = None
@@ -1580,11 +1607,9 @@ class App:
             rw = int(self.root.winfo_width())
         except tk.TclError:
             return
-        sidebar_reserve = 0
-        if self._queue_panel_visible:
-            sidebar_reserve += _QUEUE_PANEL_WIDTH_RESERVE
-        if self._shortcut_panel_visible:
-            sidebar_reserve += _GUIDE_PANEL_WIDTH_RESERVE
+        # Both rails are always present at the same fixed width, so the center
+        # column width is constant regardless of panel content visibility.
+        sidebar_reserve = 2 * _RAIL_W
         inner = max(420, rw - 80 - sidebar_reserve)
         try:
             self.lbl_path.configure(wraplength=inner)
@@ -3918,8 +3943,28 @@ class App:
         self._body = tk.Frame(self.root, bg=self.bg)
         self._body.pack(fill="both", expand=True)
 
-        self._main_scroll_outer = tk.Frame(self._body, bg=self.bg)
-        self._main_scroll_outer.pack(side="left", fill="both", expand=True)
+        # ── Permanent 3-column shell ─────────────────────────────────────────
+        # Both rails are ALWAYS present at the same fixed width so the center
+        # column sits at the true horizontal midpoint of the window at all times,
+        # regardless of whether sidebar content is shown or hidden.
+        self._body.grid_columnconfigure(0, weight=0, minsize=_RAIL_W)
+        self._body.grid_columnconfigure(1, weight=1)
+        self._body.grid_columnconfigure(2, weight=0, minsize=_RAIL_W)
+        self._body.grid_rowconfigure(0, weight=1)
+
+        self._left_rail = tk.Frame(self._body, bg=self.bg, width=_RAIL_W)
+        self._left_rail.grid(row=0, column=0, sticky="nsew")
+        self._left_rail.grid_propagate(False)
+
+        _center_col = tk.Frame(self._body, bg=self.bg)
+        _center_col.grid(row=0, column=1, sticky="nsew")
+
+        self._right_rail = tk.Frame(self._body, bg=self.bg, width=_RAIL_W)
+        self._right_rail.grid(row=0, column=2, sticky="nsew")
+        self._right_rail.grid_propagate(False)
+
+        self._main_scroll_outer = tk.Frame(_center_col, bg=self.bg)
+        self._main_scroll_outer.pack(fill="both", expand=True)
         # Main column + bottom dock: grid keeps the dock from overlapping the content area.
         self._main_scroll_outer.grid_columnconfigure(0, weight=1)
         self._main_scroll_outer.grid_rowconfigure(0, weight=1)
@@ -4651,12 +4696,16 @@ class App:
     def _apply_queue_panel_visibility(self, visible: bool) -> None:
         self._queue_panel_visible = visible
         self._sync_queue_tile_title()
-        if self._queue_sidebar_outer is not None:
+        # Show/hide the content inside the permanent right rail — the rail itself
+        # never moves, so the center column is never displaced.
+        if self._queue_sidebar_inner is not None:
             try:
                 if visible:
-                    self._queue_sidebar_outer.pack(side="right", fill="y", padx=(0, 16), pady=(18, 24))
+                    self._queue_sidebar_inner.pack(
+                        fill="both", expand=True, padx=(0, 16), pady=(18, 24)
+                    )
                 else:
-                    self._queue_sidebar_outer.pack_forget()
+                    self._queue_sidebar_inner.pack_forget()
             except tk.TclError:
                 pass
         self._refresh_queue_panel()
@@ -4677,23 +4726,16 @@ class App:
     def _apply_guide_panel_visibility(self, visible: bool) -> None:
         self._shortcut_panel_visible = visible
         self._sync_guide_tile_title()
-        if self._guide_sidebar_outer is not None:
+        # Show/hide the content inside the permanent left rail — the rail itself
+        # never moves, so the center column is never displaced.
+        if self._guide_sidebar_inner is not None:
             try:
                 if visible:
-                    if self._main_scroll_outer is not None:
-                        self._guide_sidebar_outer.pack(
-                            side="left",
-                            before=self._main_scroll_outer,
-                            fill="y",
-                            padx=(16, 0),
-                            pady=(18, 24),
-                        )
-                    else:
-                        self._guide_sidebar_outer.pack(
-                            side="left", fill="y", padx=(16, 0), pady=(18, 24)
-                        )
+                    self._guide_sidebar_inner.pack(
+                        fill="both", expand=True, padx=(16, 0), pady=(18, 24)
+                    )
                 else:
-                    self._guide_sidebar_outer.pack_forget()
+                    self._guide_sidebar_inner.pack_forget()
             except tk.TclError:
                 pass
         self._update_content_wraplengths()
@@ -4703,16 +4745,18 @@ class App:
         self._apply_guide_panel_visibility(not self._shortcut_panel_visible)
 
     def _build_queue_sidebar(self) -> None:
-        """Build the RIGHT sidebar (Queue + Session Stats). Initial visibility set by caller."""
-        if self._body is None:
+        """Build the RIGHT sidebar content inside the permanent right rail."""
+        if self._right_rail is None:
             return
-        outer = tk.Frame(self._body, bg=self.bg, width=248)
-        outer.pack_propagate(False)
-        self._queue_sidebar_outer = outer
+        # The rail IS the outer container.
+        self._queue_sidebar_outer = self._right_rail
 
-        inner = tk.Frame(outer, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
+        # content_wrap is packed/pack_forgotten by _apply_queue_panel_visibility.
+        content_wrap = tk.Frame(self._right_rail, bg=self.bg)
+        self._queue_sidebar_inner = content_wrap
+
+        inner = tk.Frame(content_wrap, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
         inner.pack(fill="both", expand=True)
-        self._queue_sidebar_inner = inner
 
         qf = tk.Frame(inner, bg=self.panel)
         qf.pack(fill="x")
@@ -4799,19 +4843,18 @@ class App:
         self._refresh_queue_panel()
 
     def _build_guide_sidebar(self) -> None:
-        """Build the LEFT sidebar (collapsible Help Guide). Initial visibility set by caller."""
-        if self._body is None:
+        """Build the LEFT sidebar content inside the permanent left rail."""
+        if self._left_rail is None:
             return
-        outer = tk.Frame(self._body, bg=self.bg, width=248)
-        outer.pack_propagate(False)
-        self._guide_sidebar_outer = outer
+        # The rail IS the outer container — no separate sized frame needed.
+        self._guide_sidebar_outer = self._left_rail
 
-        inner = tk.Frame(outer, bg=self.bg)
-        inner.pack(fill="both", expand=True)
+        inner = tk.Frame(self._left_rail, bg=self.bg)
         self._guide_sidebar_inner = inner
 
         self.shortcut_frame = self._build_shortcut_guide_panel(inner)
         self.shortcut_frame.pack(fill="both", expand=True)
+        # Visibility (pack / pack_forget) is applied by _apply_guide_panel_visibility.
 
     def _build_shortcut_guide_panel(self, parent: tk.Misc) -> tk.Frame:
         outer = tk.Frame(parent, bg=self.panel, highlightthickness=1, highlightbackground=self.panel_border)
@@ -5262,7 +5305,7 @@ class App:
     def _refresh_sort_destination_paths(self) -> None:
         if self._music_root is None:
             return
-        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
+        add_date = add_date_prefixed_sort_folders_enabled()
         trip = tuple(str(x) for x in active_swipe_preset(self._mode_preset_store)["folders"][:3])
         self._folders = ensure_sort_folders(
             self._music_root,
@@ -5282,7 +5325,7 @@ class App:
             return ""
         base_gen = root / GENRES_NAME
         parts: list[str] = []
-        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
+        add_date = add_date_prefixed_sort_folders_enabled()
         for idx in range(9):
             lab = self._genre_labels[idx]
             fn = self._genre_folder_names[idx] if idx < len(self._genre_folder_names) else safe_genre_folder_name(lab)
@@ -5373,11 +5416,31 @@ class App:
 
     def _on_add_date_to_created_sorting_folders_toggle(self) -> None:
         def _commit() -> None:
-            save_add_date_to_created_sorting_folders_setting(bool(self._var_add_date_to_created_sorting_folders.get()))
+            try:
+                self.root.update_idletasks()
+            except tk.TclError:
+                pass
+            desired = bool(self._var_add_date_to_created_sorting_folders.get())
+            save_add_date_to_created_sorting_folders_setting(desired)
+            actual = add_date_prefixed_sort_folders_enabled()
+            if actual != desired:
+                try:
+                    self._var_add_date_to_created_sorting_folders.set(actual)
+                except tk.TclError:
+                    pass
+                try:
+                    messagebox.showwarning(
+                        "Settings",
+                        "Could not save \"Add date to created sorting folders\".\n\n"
+                        f"Check write permissions for:\n{_settings_json_path()}",
+                        parent=self.root,
+                    )
+                except tk.TclError:
+                    pass
             self._refresh_sort_destination_paths()
             self._refresh_stats()
 
-        self.root.after_idle(_commit)
+        self.root.after(50, _commit)
 
     def _on_auto_load_default_toggle(self) -> None:
         save_auto_load_default_folder(bool(self._var_auto_load_default.get()))
@@ -5424,6 +5487,11 @@ class App:
         body.pack(fill="both", expand=True, pady=(10, 0))
         inner = tk.Frame(body, bg=self.panel)
         inner.pack(fill="both", expand=True, padx=12, pady=12)
+
+        try:
+            self._var_add_date_to_created_sorting_folders.set(add_date_prefixed_sort_folders_enabled())
+        except tk.TclError:
+            pass
 
         tk.Label(inner, text="Default Music Folder", bg=self.panel, fg=self.fg, font=("Helvetica", 11, "bold")).pack(
             anchor="w",
@@ -6724,7 +6792,7 @@ class App:
         fn = self._genre_folder_names[slot_index] if slot_index < len(self._genre_folder_names) else safe_genre_folder_name(
             self._genre_labels[slot_index],
         )
-        add_date = bool(self._var_add_date_to_created_sorting_folders.get())
+        add_date = add_date_prefixed_sort_folders_enabled()
         dest_dir = self._music_root / GENRES_NAME / genre_sort_folder_leaf(fn, add_date=add_date)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = _unique_destination(dest_dir, src.name)
