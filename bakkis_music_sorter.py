@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import os
 import re
 import uuid
@@ -17,11 +18,13 @@ import queue
 import random
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import wave
 from datetime import date
 from pathlib import Path
 from typing import Callable, Literal, Optional, Union
@@ -129,10 +132,6 @@ def _norm_swipe_archive_hotkey(val: object) -> SwipeArchiveHotkey:
     """Which vertical arrow triggers Archive in Swipe mode (default: down)."""
     s = str(val or "").strip().lower()
     return "up" if s == "up" else "down"
-
-
-def _swipe_archive_arrow_glyph(hotkey: SwipeArchiveHotkey) -> str:
-    return "↑" if hotkey == "up" else "↓"
 
 
 def _shortcut_caption_loose(s: str) -> str:
@@ -632,6 +631,7 @@ def _default_user_settings_blob() -> dict:
         "cleanup_empty_source_folders_after_sort": False,
         "volume": 80,
         "swipe_archive_hotkey": "down",
+        "sort_confirmation_sound": True,
     }
 
 
@@ -707,6 +707,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
         vol = 80
     data["volume"] = max(0, min(100, vol))
     data["swipe_archive_hotkey"] = _norm_swipe_archive_hotkey(data.get("swipe_archive_hotkey"))
+    data["sort_confirmation_sound"] = _coerce_bool_jsonish(data.get("sort_confirmation_sound", True))
 
 
 def read_user_settings() -> dict:
@@ -766,6 +767,99 @@ def patch_user_settings(**kwargs: object) -> dict:
     _normalize_user_settings_dict(data)
     write_user_settings_blob(data)
     return data
+
+
+_SORT_CONFIRMATION_WAV_NAME = "_bakkis_sort_click.wav"
+
+
+def _sort_confirmation_click_wav_path() -> Path:
+    return _user_config_dir() / _SORT_CONFIRMATION_WAV_NAME
+
+
+def _ensure_sort_confirmation_click_wav() -> Optional[Path]:
+    """Write a short soft percussive tick once (PCM WAV); separate audio pipeline from mpv."""
+    path = _sort_confirmation_click_wav_path()
+    try:
+        if path.is_file() and path.stat().st_size > 64:
+            return path
+    except OSError:
+        pass
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sr = 48000
+        n_frames = max(1, int(sr * 0.036))
+        with wave.open(str(tmp_path), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            for i in range(n_frames):
+                t = i / sr
+                atk = 1.0 - math.exp(-t * 4200.0)
+                env = atk * math.exp(-t * 92.0)
+                tick = (
+                    0.46 * math.sin(2 * math.pi * 2120.0 * t)
+                    + 0.17 * math.sin(2 * math.pi * 4240.0 * t + 0.6)
+                    + 0.09 * math.sin(2 * math.pi * 6360.0 * t + 1.05)
+                )
+                sample = env * tick * 3400.0
+                iv = int(max(-32767, min(32767, sample)))
+                wf.writeframes(struct.pack("<h", iv))
+        os.replace(tmp_path, path)
+        return path
+    except OSError:
+        try:
+            if tmp_path.is_file():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        return None
+
+
+def play_sort_confirmation_sound_async() -> None:
+    """Fire-and-forget subtle confirmation tick after a successful sort or skip."""
+    if not _coerce_bool_jsonish(read_user_settings().get("sort_confirmation_sound", True)):
+        return
+    wav_path = _ensure_sort_confirmation_click_wav()
+    if wav_path is None:
+        return
+    ap = str(wav_path.resolve())
+
+    def _run() -> None:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["afplay", "-v", "0.13", ap],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    close_fds=True,
+                    start_new_session=True,
+                )
+                return
+            if sys.platform.startswith("linux"):
+                for argv in (["paplay", ap], ["aplay", "-q", ap]):
+                    try:
+                        subprocess.Popen(
+                            argv,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL,
+                            close_fds=True,
+                            start_new_session=True,
+                        )
+                        return
+                    except OSError:
+                        continue
+                return
+            if sys.platform == "win32":
+                import winsound
+
+                winsound.PlaySound(ap, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def playback_start_choice_labels() -> tuple[str, ...]:
@@ -1374,6 +1468,80 @@ def get_duration_seconds(path: Path) -> float:
     return _read_track_meta_uncached(path)[0]
 
 
+# Embedded cover over the scrub row (``place()`` only — no grid/pack layout changes).
+_COVER_ART_THUMB_PX = 54
+_COVER_ART_MAX_EMBED_BYTES = 5 * 1024 * 1024
+
+
+def _album_art_bytes_uncached(path: Path) -> Optional[bytes]:
+    """Return raw bytes of first plausible embedded cover image, if any."""
+    try:
+        audio = MutagenFile(str(path))
+    except Exception:
+        return None
+    if audio is None:
+        return None
+    pics = getattr(audio, "pictures", None)
+    if pics:
+        try:
+            chosen = pics[0]
+            for pic in pics:
+                if getattr(pic, "type", None) == 3:
+                    chosen = pic
+                    break
+            raw = getattr(chosen, "data", None)
+            if raw and isinstance(raw, (bytes, bytearray)):
+                rb = bytes(raw)
+                return rb if len(rb) <= _COVER_ART_MAX_EMBED_BYTES else None
+        except Exception:
+            pass
+    tags = getattr(audio, "tags", None)
+    if not tags:
+        return None
+    try:
+        covr = tags.get("covr")
+        if covr:
+            b0 = covr[0]
+            rb = (
+                bytes(b0)
+                if isinstance(b0, (bytes, memoryview))
+                else bytes(getattr(b0, "data", b"") or b"")
+            )
+            if rb and len(rb) <= _COVER_ART_MAX_EMBED_BYTES:
+                return rb
+    except Exception:
+        pass
+    apics: list[object] = []
+    ga = getattr(tags, "getall", None)
+    if callable(ga):
+        try:
+            apics.extend(ga("APIC"))
+        except Exception:
+            pass
+    if not apics and hasattr(tags, "keys"):
+        try:
+            for k in tags.keys():  # type: ignore[attr-defined]
+                ks = str(k)
+                if ks.startswith("APIC"):
+                    apics.append(tags[k])  # type: ignore[index]
+        except Exception:
+            pass
+    apic_pick: Optional[object] = None
+    for fr in apics:
+        if getattr(fr, "type", None) == 3:
+            apic_pick = fr
+            break
+    if apic_pick is None and apics:
+        apic_pick = apics[0]
+    if apic_pick is not None:
+        d = getattr(apic_pick, "data", None)
+        if d and isinstance(d, (bytes, bytearray)):
+            rb = bytes(d)
+            if len(rb) <= _COVER_ART_MAX_EMBED_BYTES:
+                return rb
+    return None
+
+
 def _count_files_in_dir(d: Path) -> int:
     if not d.is_dir():
         return 0
@@ -1788,6 +1956,9 @@ class App:
         self._volume: int = max(0, min(100, int(float(read_user_settings().get("volume", 80)))))
         self._vol_canvas: Optional[tk.Canvas] = None
         self._vol_icon: Optional[tk.Label] = None
+        self._album_cover_lab: Optional[tk.Label] = None
+        self._album_cover_photo: Optional[object] = None  # ImageTk.PhotoImage — retained for Tk
+        self._album_cover_session_id: int = 0
         self._tinder_kb_jump_error_digit: Optional[int] = None
         self._tinder_kb_jump_error_plus30: bool = False
         # Which jump control shows teal (last preset used from UI/keyboard, or default on new track)
@@ -1921,14 +2092,13 @@ class App:
         return "↓  Replay from playback start"
 
     def _apply_swipe_archive_hotkey_chrome(self) -> None:
-        """Refresh Archive shortcut hints after ``swipe_archive_hotkey`` changes or at startup."""
+        """Refresh Favorite shortcut hints after ``swipe_archive_hotkey`` changes or at startup."""
         hk = load_swipe_archive_hotkey()
-        ch = _swipe_archive_arrow_glyph(hk)
         fav_ch = "↓" if hk == "up" else "↑"
         sc = getattr(self._tile_archive_inner, "_tile_shortcut_label", None)
         if sc is not None:
             try:
-                sc.configure(text=_shortcut_caption_loose(ch))
+                sc.configure(text=_shortcut_caption_loose("→"))
             except tk.TclError:
                 pass
         scf = getattr(self._tile_favorite_inner, "_tile_shortcut_label", None)
@@ -1945,15 +2115,17 @@ class App:
                 pass
 
     def _refresh_shortcut_guide_swipe_lines(self) -> None:
-        arh = _swipe_archive_arrow_glyph(load_swipe_archive_hotkey())
         fav_ar = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         lines = [
-            f"{self._swipe_labels[0]} (→)",
-            f"{self._swipe_labels[1]} ({arh})",
+            f"{self._swipe_labels[0]} (←)",
+            f"{self._swipe_labels[1]} (→)",
             f"{self._swipe_labels[2]} ({fav_ar})",
             "Enter  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
+            "Gestures (Swipe mode)",
+            "Drag release or trackpad flick — player strip or SORT tiles",
+            f"← {self._swipe_labels[0]} · → {self._swipe_labels[1]} · ↑ {self._swipe_labels[2]} · ↓ Skip",
         ]
         for i, lb in enumerate(self._guide_swipe_line_labels):
             if i < len(lines):
@@ -2016,11 +2188,9 @@ class App:
         colors_e: list[tk.Entry] = []
         folders_e: list[tk.Entry] = []
         sah = load_swipe_archive_hotkey()
-        arh = _swipe_archive_arrow_glyph(sah)
-        arch_word = "Down" if sah == "down" else "Up"
         fav_word = "Up" if sah == "down" else "Down"
         fav_g = "↑" if sah == "down" else "↓"
-        row_titles = ("Right → keep", f"{arch_word} {arh} archive", f"{fav_word} {fav_g} favorites")
+        row_titles = ("Left ← keep", "Right → archive", f"{fav_word} {fav_g} favorites")
         for i in range(3):
             row = tk.Frame(top, bg=self.bg)
             row.pack(fill="x", padx=14, pady=4)
@@ -3092,6 +3262,89 @@ class App:
         try:
             self.lbl_elapsed.lift(self.progress_canvas)
             self.lbl_total.lift(self.progress_canvas)
+        except tk.TclError:
+            pass
+
+    def _hide_album_cover_overlay(self) -> None:
+        self._album_cover_photo = None
+        lb = self._album_cover_lab
+        if lb is None:
+            return
+        try:
+            lb.place_forget()
+            lb.configure(image="")
+        except tk.TclError:
+            pass
+
+    def _bump_cover_session_and_clear_widget(self) -> int:
+        """Invalidate in-flight loaders and remove any visible cover before loading a new file."""
+        self._album_cover_session_id += 1
+        self._hide_album_cover_overlay()
+        self._raise_time_text_above_scrubber()
+        return self._album_cover_session_id
+
+    def _invalidate_album_cover_loaders_and_hide(self) -> None:
+        self._bump_cover_session_and_clear_widget()
+
+    def _spawn_album_cover_load(self, resolved: Path, sid: int) -> None:
+        ps = str(resolved)
+
+        def work() -> None:
+            rb: Optional[bytes] = None
+            try:
+                rb = _album_art_bytes_uncached(Path(ps))
+            except Exception:
+                rb = None
+            self.root.after(0, lambda: self._apply_album_cover_from_bytes(rb, sid))
+
+        threading.Thread(target=work, name="bakcover", daemon=True).start()
+
+    def _apply_album_cover_from_bytes(self, raw: Optional[bytes], sid: int) -> None:
+        if sid != self._album_cover_session_id:
+            return
+        lb = self._album_cover_lab
+        if lb is None:
+            return
+        if not raw:
+            self._hide_album_cover_overlay()
+            self._raise_time_text_above_scrubber()
+            return
+        try:
+            from io import BytesIO
+
+            from PIL import Image, ImageTk
+
+            img = Image.open(BytesIO(raw))
+            img = img.convert("RGBA")
+            img.thumbnail((_COVER_ART_THUMB_PX, _COVER_ART_THUMB_PX), Image.Resampling.LANCZOS)
+            tk_img = ImageTk.PhotoImage(img)
+        except Exception:
+            self._hide_album_cover_overlay()
+            self._raise_time_text_above_scrubber()
+            return
+        self._album_cover_photo = tk_img
+        try:
+            lb.configure(image=tk_img)
+        except tk.TclError:
+            self._album_cover_photo = None
+            return
+        self._layout_album_cover_overlay()
+        self._raise_time_text_above_scrubber()
+
+    def _layout_album_cover_overlay(self) -> None:
+        """Overlay only: ``place`` on player card — top-left; matches ``card_inner`` pack inset (padx/pady)."""
+        lb = self._album_cover_lab
+        card = self._swipe_player_card_ref
+        if lb is None or card is None or self._album_cover_photo is None:
+            return
+        tw = _COVER_ART_THUMB_PX
+        # Mirrors card_inner.pack(padx=12, pady=(8, 8)) so art sits flush with inner content bounds.
+        x_inset, y_inset = 12, 8
+        try:
+            card.update_idletasks()
+            lb.place(in_=card, x=x_inset, y=y_inset, width=tw, height=tw)
+            lb.configure(bg=self.bg)
+            lb.lift()
         except tk.TclError:
             pass
 
@@ -4691,6 +4944,13 @@ class App:
             bd=0,
             cursor="fleur",
         )
+        self._album_cover_lab = tk.Label(
+            player_card,
+            bg=self.bg,
+            bd=0,
+            highlightthickness=0,
+        )
+        player_card.bind("<Configure>", lambda _e: self._layout_album_cover_overlay())
         card_inner = tk.Frame(player_card, bg=self.bg)
         card_inner.pack(fill="x", padx=12, pady=(8, 8))
 
@@ -4973,7 +5233,7 @@ class App:
             tinder_sort_row,
             "✓",
             "KEEP",
-            "→",
+            "←",
             self.accent,
             self.accent_active,
             self.teal_on_fg,
@@ -4987,9 +5247,9 @@ class App:
         o_k.grid(row=0, column=0, sticky="nsew", padx=_sgp, pady=_sgp)
         o_a, self._tile_archive_inner = self._action_tile(
             tinder_sort_row,
-            "↓",
+            "→",
             "ARCHIVE",
-            _swipe_archive_arrow_glyph(load_swipe_archive_hotkey()),
+            "→",
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
@@ -5554,15 +5814,17 @@ class App:
         swipe_f = tk.Frame(stack, bg=self.panel)
         swipe_f.pack(fill="x", pady=(0, 8))
         tk.Label(swipe_f, text="▶ SWIPE", bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
-        arh = _swipe_archive_arrow_glyph(load_swipe_archive_hotkey())
         farh = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         swipe_intro = [
-            f"{self._swipe_labels[0]} (→)",
-            f"{self._swipe_labels[1]} ({arh})",
+            f"{self._swipe_labels[0]} (←)",
+            f"{self._swipe_labels[1]} (→)",
             f"{self._swipe_labels[2]} ({farh})",
             "Enter  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
+            "Gestures (Swipe mode)",
+            "Drag release or trackpad flick — player strip or SORT tiles",
+            f"← {self._swipe_labels[0]} · → {self._swipe_labels[1]} · ↑ {self._swipe_labels[2]} · ↓ Skip",
         ]
         for line in swipe_intro:
             lb = tk.Label(
@@ -5616,6 +5878,7 @@ class App:
                     "U  Random order · O  In order (also in Settings → Default track order)",
                     "1–9  Sort to grid folder (grid mode)",
                     "Enter  Skip · Z  Undo",
+                    "Swipe mode: drag / trackpad flick on player strip or SORT tiles (see ▶ SWIPE)",
                     "⌃Z  Undo all",
                     "Default start time: Settings — active jump tile shows START",
                     "Edit genres in Settings → Genre settings (labels, colors, folders)",
@@ -6001,25 +6264,61 @@ class App:
         except tk.TclError:
             return 0, 0
 
-    def _pointer_over_player_card(self) -> bool:
-        """Whether the mouse pointer is currently over the player card (scroll-swipe hit test)."""
-        card = self._swipe_player_card_ref
-        if card is None:
+    def _xy_in_widget_rect(self, px: int, py: int, w: Optional[tk.Misc]) -> bool:
+        if w is None:
             return False
         try:
-            px, py = self.root.winfo_pointerxy()
-            cx = card.winfo_rootx()
-            cy = card.winfo_rooty()
-            cw = card.winfo_width()
-            ch = card.winfo_height()
+            cx = w.winfo_rootx()
+            cy = w.winfo_rooty()
+            cw = w.winfo_width()
+            ch = w.winfo_height()
             return cx <= px < cx + cw and cy <= py < cy + ch
         except tk.TclError:
             return False
 
+    def _screen_xy_in_swipe_gesture_zone(self, px: int, py: int) -> bool:
+        """Player strip or (Swipe mode only) the SORT tiles block including margins."""
+        if self._xy_in_widget_rect(px, py, self._swipe_player_card_ref):
+            return True
+        if self._sorting_mode != "swipe":
+            return False
+        co = self.cleanup_outer
+        if co is None:
+            return False
+        try:
+            if not co.winfo_ismapped():
+                return False
+        except tk.TclError:
+            return False
+        return self._xy_in_widget_rect(px, py, co)
+
+    def _pointer_over_swipe_gesture_zone(self) -> bool:
+        """Live pointer position — used for scroll-swipe hit testing."""
+        try:
+            px, py = self.root.winfo_pointerxy()
+        except tk.TclError:
+            return False
+        return self._screen_xy_in_swipe_gesture_zone(px, py)
+
+    def _widget_on_swipe_keep_archive_favorite_tile(self, w: Optional[tk.Misc]) -> bool:
+        """True if w is inside a Keep / Archive / Favorite tile (those fire on ButtonPress)."""
+        if w is None:
+            return False
+        targets = {x for x in (self._tile_keep_inner, self._tile_archive_inner, self._tile_favorite_inner) if x is not None}
+        cur = w
+        while cur is not None:
+            if cur in targets:
+                return True
+            try:
+                cur = cur.master  # type: ignore[assignment]
+            except tk.TclError:
+                break
+        return False
+
     # Overlay colors (direction → fill hex, label text)
     _SWIPE_DIR_STYLE: dict = {
-        "right": ("#00D6B4", "→"),
-        "left":  ("#FF2D55", "←"),
+        "left":  ("#00D6B4", "←"),
+        "right": ("#FF2D55", "→"),
         "up":    ("#FFF200", "↑"),
         "down":  ("#888888", "↓"),
     }
@@ -6038,8 +6337,8 @@ class App:
         sw = active_swipe_preset(self._mode_preset_store)
         labels = sw.get("labels") or []
         mapping = {
-            "right": labels[0] if len(labels) > 0 else "Keep",
-            "left":  labels[1] if len(labels) > 1 else "Archive",
+            "left":  labels[0] if len(labels) > 0 else "Keep",
+            "right": labels[1] if len(labels) > 1 else "Archive",
             "up":    labels[2] if len(labels) > 2 else "Favorite",
             "down":  "Skip",
         }
@@ -6115,27 +6414,20 @@ class App:
                 pass
 
     def _on_swipe_press(self, event: object) -> None:
-        """Record drag start if click originates within the player card area."""
+        """Record drag start if click originates on the player strip or SORT tiles (Swipe mode)."""
         if self._sorting_mode != "swipe":
             return
         if not self._tiles_enabled:
             return
-        card = self._swipe_player_card_ref
-        if card is None:
-            return
-        # Ignore presses on the progress bar or volume slider (they have their own drag handlers)
         w = getattr(event, "widget", None)
+        # Ignore presses on the progress bar or volume slider (they have their own drag handlers)
         if w is self.progress_canvas or w is self._vol_canvas:
             return
-        try:
-            cx = card.winfo_rootx()
-            cy = card.winfo_rooty()
-            cw = card.winfo_width()
-            ch = card.winfo_height()
-            rx, ry = self._event_screen_xy(event)
-        except tk.TclError:
+        # Tile chrome sorts on ButtonPress — avoid starting a competing swipe-drag there.
+        if self._widget_on_swipe_keep_archive_favorite_tile(w):
             return
-        if cx <= rx < cx + cw and cy <= ry < cy + ch:
+        rx, ry = self._event_screen_xy(event)
+        if self._screen_xy_in_swipe_gesture_zone(rx, ry):
             self._swipe_drag_active = True
             self._swipe_drag_start_x = rx
             self._swipe_drag_start_y = ry
@@ -6165,10 +6457,10 @@ class App:
         if self._sorting_mode != "swipe" or not self._tiles_enabled:
             return
 
-        if direction == "right":
+        if direction == "left":
             self.sort_current("keep")
             self._flash_control(self.btn_keep)
-        elif direction == "left":
+        elif direction == "right":
             self.sort_current("archive")
             self._flash_control(self.btn_archive)
         elif direction == "up":
@@ -6208,7 +6500,7 @@ class App:
         if not self._shortcuts_active():
             return
         # MouseWheel events on macOS often lack usable x_root/y_root — use live pointer position.
-        if not self._pointer_over_player_card():
+        if not self._pointer_over_swipe_gesture_zone():
             return
 
         delta: float = float(getattr(event, "delta", 0))
@@ -6259,7 +6551,7 @@ class App:
         if abs(dx) >= abs(dy):
             if abs(dx) < thr:
                 return
-            if dx > 0:
+            if dx < 0:
                 self.sort_current("keep")
                 self._flash_control(self.btn_keep)
             else:
@@ -6282,8 +6574,8 @@ class App:
         b("<space>", self._kbd("space", self.toggle_play, self.btn_play))
         b("<Return>", self._kbd_skip("Return"))
         b("<KP_Enter>", self._kbd_skip("KP_Enter"))
-        b("<Right>", self._kbd_cleanup_sort("Right", "keep", self.btn_keep))
-        b("<Left>", self._kbd_cleanup_sort("Left", "archive", self.btn_archive))
+        b("<Left>", self._kbd_cleanup_sort("Left", "keep", self.btn_keep))
+        b("<Right>", self._kbd_cleanup_sort("Right", "archive", self.btn_archive))
         b("<Up>", self._kbd_swipe_up_arrow("Up"))
         b("<Down>", self._kbd_down_favorite_replay_or_swipe_archive("Down"))
         b("<KeyPress-s>", self._kbd("s", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
@@ -6948,7 +7240,7 @@ class App:
 
         tk.Label(
             sec_sort,
-            text="Swipe mode: Archive arrow key",
+            text="Swipe mode: ↑ / ↓ (Favorite vs Archive)",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica Neue", 11, "bold"),
@@ -6968,7 +7260,7 @@ class App:
         om_sah.pack(side="left", padx=(8, 0))
         tk.Label(
             sec_sort,
-            text="Down = Archive by default; Up = Favorite. Swap to Up = Archive and Down = Favorite. Left always Archive. R replays from the chosen start in Swipe; ↓ still replays in Grid.",
+            text="Keyboard and gestures: ← / left = Keep, → / right = Archive. The menu above swaps which vertical key (↑ vs ↓) is Archive vs Favorite (default: ↓ Archive, ↑ Favorite). R replays from the chosen start in Swipe; ↓ still replays in Grid.",
             bg=self.panel,
             fg=self.muted,
             font=("Helvetica Neue", 9),
@@ -7443,6 +7735,25 @@ class App:
             activeforeground=self.fg,
             highlightthickness=0,
             font=("Helvetica Neue", 10),
+        ).pack(anchor="w", pady=(4, 4))
+
+        v_sort_click = tk.BooleanVar(master=top, value=bool(read_user_settings().get("sort_confirmation_sound", True)))
+
+        def on_sort_click() -> None:
+            patch_user_settings(sort_confirmation_sound=bool(v_sort_click.get()))
+
+        tk.Checkbutton(
+            sec_disp,
+            text="Soft click sound when sorting or skipping",
+            variable=v_sort_click,
+            command=on_sort_click,
+            bg=self.panel,
+            fg=self.fg,
+            selectcolor=self.panel,
+            activebackground=self.panel,
+            activeforeground=self.fg,
+            highlightthickness=0,
+            font=("Helvetica Neue", 10),
         ).pack(anchor="w", pady=(4, 8))
 
         sep_adv = tk.Frame(content, bg=self.panel_border, height=1)
@@ -7816,6 +8127,7 @@ class App:
         self.lbl_seek_hint.configure(text="")
 
         if path is None:
+            self._invalidate_album_cover_loaders_and_hide()
             self._jump_highlight_key = 0
             self._set_now_playing_main_plain("Done — all tracks reviewed")
             self.lbl_track.configure(text="")
@@ -7830,6 +8142,7 @@ class App:
             return
 
         if not path_has_supported_audio_format(path):
+            self._invalidate_album_cover_loaders_and_hide()
             self._skip_track_after_playback_error(
                 f"This file type is not supported:\n\n{path.name}\n\n"
                 f"Supported formats: {supported_audio_formats_display()}\n\n"
@@ -7851,6 +8164,8 @@ class App:
         self.lbl_path.configure(text=str(path))
 
         dur, title_disp, bpm_s, key_s = self._get_track_meta(path)
+        sid = self._bump_cover_session_and_clear_widget()
+        self._spawn_album_cover_load(path.resolve(), sid)
         self._duration_sec = dur
         self._apply_track_identity_header(title_disp, bpm_s, key_s)
         self._set_total_seconds(self._duration_sec)
@@ -8067,6 +8382,7 @@ class App:
             self.lbl_path.configure(wraplength=wcv)
         except tk.TclError:
             pass
+        self._layout_album_cover_overlay()
 
     def _on_progress_click(self, event: object) -> None:
         if self._current_path() is None or self._duration_sec <= 0:
@@ -8161,6 +8477,7 @@ class App:
         self._queue.pop(0)
         if self._queue:
             self._display_index += 1
+        play_sort_confirmation_sound_async()
         self.load_current_track(autoplay=True)
 
     def sort_current_genre(self, slot_index: int) -> None:
@@ -8212,6 +8529,7 @@ class App:
         self._queue.pop(0)
         if self._queue:
             self._display_index += 1
+        play_sort_confirmation_sound_async()
         self.load_current_track(autoplay=True)
 
     def skip_current(self) -> None:
@@ -8265,6 +8583,7 @@ class App:
         self._queue.pop(0)
         if self._queue:
             self._display_index += 1
+        play_sort_confirmation_sound_async()
         self.load_current_track(autoplay=True)
 
     def undo_all_to_session_start(self) -> None:
