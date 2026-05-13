@@ -129,7 +129,7 @@ def _link_cursor() -> str:
 
 
 def _norm_swipe_archive_hotkey(val: object) -> SwipeArchiveHotkey:
-    """Which vertical arrow triggers Archive in Swipe mode (default: down)."""
+    """Stored preference: if ``up``, the ↑ arrow sorts to Archive; if ``down``, ↑ sorts to Favorite (↓ is always Skip)."""
     s = str(val or "").strip().lower()
     return "up" if s == "up" else "down"
 
@@ -2087,14 +2087,17 @@ class App:
             self._genre_folder_names.append(safe_genre_folder_name(self._genre_labels[len(self._genre_folder_names)]))
 
     def _playback_replay_guide_line(self) -> str:
-        if load_swipe_archive_hotkey() == "down":
-            return "R  Replay from playback start  ·  ↓ in Grid mode"
-        return "↓  Replay from playback start"
+        return "R  Replay from playback start"
+
+    def _guide_swipe_favorite_line(self) -> str:
+        """One guide line for Favorite: ↑ key only sorts here when Up = Favorite in settings."""
+        if load_swipe_archive_hotkey() == "up":
+            return f"{self._swipe_labels[2]} (swipe ↑)"
+        return f"{self._swipe_labels[2]} (↑)"
 
     def _apply_swipe_archive_hotkey_chrome(self) -> None:
         """Refresh Favorite shortcut hints after ``swipe_archive_hotkey`` changes or at startup."""
-        hk = load_swipe_archive_hotkey()
-        fav_ch = "↓" if hk == "up" else "↑"
+        fav_ch = "↑"
         sc = getattr(self._tile_archive_inner, "_tile_shortcut_label", None)
         if sc is not None:
             try:
@@ -2115,12 +2118,11 @@ class App:
                 pass
 
     def _refresh_shortcut_guide_swipe_lines(self) -> None:
-        fav_ar = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         lines = [
             f"{self._swipe_labels[0]} (←)",
             f"{self._swipe_labels[1]} (→)",
-            f"{self._swipe_labels[2]} ({fav_ar})",
-            "Enter  Skip",
+            self._guide_swipe_favorite_line(),
+            "↓  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
             "Gestures (Swipe mode)",
@@ -2187,10 +2189,7 @@ class App:
         labels_e: list[tk.Entry] = []
         colors_e: list[tk.Entry] = []
         folders_e: list[tk.Entry] = []
-        sah = load_swipe_archive_hotkey()
-        fav_word = "Up" if sah == "down" else "Down"
-        fav_g = "↑" if sah == "down" else "↓"
-        row_titles = ("Left ← keep", "Right → archive", f"{fav_word} {fav_g} favorites")
+        row_titles = ("Left ← keep", "Right → archive", "Favorite (↑ swipe)")
         for i in range(3):
             row = tk.Frame(top, bg=self.bg)
             row.pack(fill="x", padx=14, pady=4)
@@ -4695,27 +4694,6 @@ class App:
 
         return handler
 
-    def _kbd_down_favorite_replay_or_swipe_archive(self, keysym: str) -> Callable[[object], Optional[str]]:
-        def handler(_e: object) -> Optional[str]:
-            if not self._shortcuts_active():
-                return None
-            if self._suppress_key_repeat(keysym):
-                return "break"
-            if self._sorting_mode != "swipe":
-                self._replay_from_playback_start()
-                self._flash_control(self.btn_play)
-                return "break"
-            hk = load_swipe_archive_hotkey()
-            if hk == "down":
-                self.sort_current("archive")
-                self._flash_control(self.btn_archive)
-            else:
-                self.sort_current("favorites")
-                self._flash_control(self.btn_favorite)
-            return "break"
-
-        return handler
-
     def _dispatch_digit_key(self, digit_1_to_9: int, _e: object) -> Optional[str]:
         if not self._shortcuts_active():
             return None
@@ -5122,7 +5100,7 @@ class App:
             transport_bar,
             "▷",
             "Skip",
-            "[Enter]",
+            "[↓]",
             self.skip_current,
             role="skip",
         )
@@ -5265,7 +5243,7 @@ class App:
             tinder_sort_row,
             "★",
             "FAVORITE",
-            "↑" if load_swipe_archive_hotkey() == "down" else "↓",
+            "↑",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
@@ -5814,12 +5792,11 @@ class App:
         swipe_f = tk.Frame(stack, bg=self.panel)
         swipe_f.pack(fill="x", pady=(0, 8))
         tk.Label(swipe_f, text="▶ SWIPE", bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
-        farh = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         swipe_intro = [
             f"{self._swipe_labels[0]} (←)",
             f"{self._swipe_labels[1]} (→)",
-            f"{self._swipe_labels[2]} ({farh})",
-            "Enter  Skip",
+            self._guide_swipe_favorite_line(),
+            "↓  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
             "Gestures (Swipe mode)",
@@ -5877,7 +5854,7 @@ class App:
                     "S or T  Swipe mode · G  Grid mode",
                     "U  Random order · O  In order (also in Settings → Default track order)",
                     "1–9  Sort to grid folder (grid mode)",
-                    "Enter  Skip · Z  Undo",
+                    "↓  Skip · Z  Undo",
                     "Swipe mode: drag / trackpad flick on player strip or SORT tiles (see ▶ SWIPE)",
                     "⌃Z  Undo all",
                     "Default start time: Settings — active jump tile shows START",
@@ -6165,13 +6142,6 @@ class App:
             return "break"
 
         return handler
-
-    def _replay_from_playback_start(self) -> None:
-        path = self._current_path()
-        if path is None:
-            return
-        start = self._desired_start_sec
-        self._play_from_position(path, start)
 
     def _replay_active_jump_point(self) -> None:
         path = self._current_path()
@@ -6551,7 +6521,12 @@ class App:
         if abs(dx) >= abs(dy):
             if abs(dx) < thr:
                 return
-            if dx < 0:
+            # macOS trackpad: horizontal wheel delta is inverted vs click-drag (dx = release−press).
+            if sys.platform == "darwin":
+                go_keep = dx > 0
+            else:
+                go_keep = dx < 0
+            if go_keep:
                 self.sort_current("keep")
                 self._flash_control(self.btn_keep)
             else:
@@ -6572,12 +6547,10 @@ class App:
     def _bind_keys(self) -> None:
         b = self.root.bind_all
         b("<space>", self._kbd("space", self.toggle_play, self.btn_play))
-        b("<Return>", self._kbd_skip("Return"))
-        b("<KP_Enter>", self._kbd_skip("KP_Enter"))
+        b("<Down>", self._kbd_skip("Down"))
         b("<Left>", self._kbd_cleanup_sort("Left", "keep", self.btn_keep))
         b("<Right>", self._kbd_cleanup_sort("Right", "archive", self.btn_archive))
         b("<Up>", self._kbd_swipe_up_arrow("Up"))
-        b("<Down>", self._kbd_down_favorite_replay_or_swipe_archive("Down"))
         b("<KeyPress-s>", self._kbd("s", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
         b("<KeyPress-S>", self._kbd("S", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
         b("<KeyPress-t>", self._kbd("t", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
@@ -7240,27 +7213,27 @@ class App:
 
         tk.Label(
             sec_sort,
-            text="Swipe mode: ↑ / ↓ (Favorite vs Archive)",
+            text="Swipe mode: Up arrow (↑) sorts to",
             bg=self.panel,
             fg=self.fg,
             font=("Helvetica Neue", 11, "bold"),
         ).pack(anchor="w", pady=_SETTINGS_SUBHEAD_TOP_PADY)
         row_sah = tk.Frame(sec_sort, bg=self.panel)
         row_sah.pack(anchor="w", pady=_SETTINGS_SUBHEAD_GAP_AFTER_TITLE)
-        tk.Label(row_sah, text="Arrow:", bg=self.panel, fg=self.muted, font=("Helvetica Neue", 10)).pack(side="left")
-        v_sah = tk.StringVar(master=top, value="Down" if load_swipe_archive_hotkey() == "down" else "Up")
+        tk.Label(row_sah, text="Target:", bg=self.panel, fg=self.muted, font=("Helvetica Neue", 10)).pack(side="left")
+        v_sah = tk.StringVar(master=top, value="Archive" if load_swipe_archive_hotkey() == "up" else "Favorite")
 
         def on_swipe_archive_hotkey_change(*_a: object) -> None:
-            key: SwipeArchiveHotkey = "down" if v_sah.get() == "Down" else "up"
+            key: SwipeArchiveHotkey = "up" if v_sah.get() == "Archive" else "down"
             patch_user_settings(swipe_archive_hotkey=key)
             self._apply_swipe_archive_hotkey_chrome()
 
-        om_sah = tk.OptionMenu(row_sah, v_sah, "Down", "Up", command=on_swipe_archive_hotkey_change)
+        om_sah = tk.OptionMenu(row_sah, v_sah, "Favorite", "Archive", command=on_swipe_archive_hotkey_change)
         self._style_tk_option_menu_transport(om_sah)
         om_sah.pack(side="left", padx=(8, 0))
         tk.Label(
             sec_sort,
-            text="Keyboard and gestures: ← / left = Keep, → / right = Archive. The menu above swaps which vertical key (↑ vs ↓) is Archive vs Favorite (default: ↓ Archive, ↑ Favorite). R replays from the chosen start in Swipe; ↓ still replays in Grid.",
+            text="Keyboard and gestures: ← Keep, → Archive, ↓ Skip, ↑ uses the target above (Archive or Favorite). Swipe directions match. R replays from the chosen start.",
             bg=self.panel,
             fg=self.muted,
             font=("Helvetica Neue", 9),
