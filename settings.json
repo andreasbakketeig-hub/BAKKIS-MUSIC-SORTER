@@ -9,5 +9,9 @@
   "include_subfolders": true,
   "show_help_guide_on_startup": true,
   "show_queue_panel_on_startup": true,
-  "volume": 100
+  "add_date_to_created_sorting_folders": true,
+  "create_dated_sorting_sessions": false,
+  "cleanup_empty_source_folders_after_sort": false,
+  "volume": 100,
+  "swipe_archive_hotkey": "down"
 }

@@ -32,6 +32,7 @@ ButtonKind = Literal["panel", "accent", "archive", "favorite", "transport"]
 JumpUiKey = Union[int, Literal["outro"]]
 SortingMode = Literal["swipe", "grid"]
 TrackOrder = Literal["random", "in_order"]
+SwipeArchiveHotkey = Literal["up", "down"]
 from mutagen import File as MutagenFile
 from tkinter import filedialog, messagebox, simpledialog
 
@@ -63,6 +64,8 @@ _BODY_RAIL_COL_UNIFORM = "side_rails"
 _FOCUS_ANIM_STEPS = 8      # number of animation frames
 _FOCUS_ANIM_MS = 18        # ms per frame (~144 fps feel)
 _GUIDE_SIDEBAR_TEXT_WRAP = 228
+# One ``root.after`` drives every `_MarqueeLabel` — avoids stacked timers (main + queue).
+_MARQUEE_GLOBAL_TICK_MS = 62
 
 # Settings dialog layout (spacing / geometry only — no settings keys).
 _SETTINGS_DLG_MIN_W = 720
@@ -111,6 +114,25 @@ def supported_audio_formats_display() -> str:
 
 
 _HAIR_SPACE = "\u200a"  # HAIR SPACE — subtle faux letter-spacing (Tk has no CSS tracking).
+
+# macOS Aqua (Tk 8.6+): ``pointinghand`` is the closed pointing finger (browser/IDE-style).
+# ``pointerhand`` / ``PointingHand`` are not valid Tk cursor specs on 8.6.x. Elsewhere: ``hand2``.
+_LINK_CURSOR: str = "pointinghand" if sys.platform == "darwin" else "hand2"
+
+
+def _link_cursor() -> str:
+    """Tk cursor name for clickable tiles, labels, and similar hotspots."""
+    return _LINK_CURSOR
+
+
+def _norm_swipe_archive_hotkey(val: object) -> SwipeArchiveHotkey:
+    """Which vertical arrow triggers Archive in Swipe mode (default: down)."""
+    s = str(val or "").strip().lower()
+    return "up" if s == "up" else "down"
+
+
+def _swipe_archive_arrow_glyph(hotkey: SwipeArchiveHotkey) -> str:
+    return "↑" if hotkey == "up" else "↓"
 
 
 def _shortcut_caption_loose(s: str) -> str:
@@ -609,6 +631,7 @@ def _default_user_settings_blob() -> dict:
         "create_dated_sorting_sessions": True,
         "cleanup_empty_source_folders_after_sort": False,
         "volume": 80,
+        "swipe_archive_hotkey": "down",
     }
 
 
@@ -683,6 +706,7 @@ def _normalize_user_settings_dict(data: dict) -> None:
     except (TypeError, ValueError):
         vol = 80
     data["volume"] = max(0, min(100, vol))
+    data["swipe_archive_hotkey"] = _norm_swipe_archive_hotkey(data.get("swipe_archive_hotkey"))
 
 
 def read_user_settings() -> dict:
@@ -712,6 +736,10 @@ def read_user_settings() -> dict:
             data[k] = v
     _normalize_user_settings_dict(data)
     return data
+
+
+def load_swipe_archive_hotkey() -> SwipeArchiveHotkey:
+    return _norm_swipe_archive_hotkey(read_user_settings().get("swipe_archive_hotkey"))
 
 
 def write_user_settings_blob(data: dict) -> None:
@@ -1384,33 +1412,50 @@ def _prune_stale_bakkis_tempfiles() -> None:
 class _MarqueeLabel(tk.Canvas):
     """Canvas-based single-line label that scrolls when text overflows its width.
 
-    Usage:
-        w = _MarqueeLabel(parent, bg=bg_color, height=30)
-        w.pack(fill="x")
-        w.set_segments([("Hello long title", ("Helvetica Neue", 22, "bold"), "#ffffff")])
+    ``App._marquee_tick`` advances every instance from one ``root.after`` loop.
+    Scrolling uses ``move(tag, …)`` on grouped canvas items plus seam jumps.
     """
 
-    _SPEED: float = 40.0    # pixels per second
-    _START_DELAY_MS: int = 2200  # ms before first scroll
-    _GAP_PX: int = 80            # gap between end and restart of loop text
-    _TICK_MS: int = 40           # animation interval (~25 fps)
+    _SPEED: float = 42.0  # px/s — tuned for ``_MARQUEE_GLOBAL_TICK_MS``
+    _START_DELAY_MS: int = 2200
+    _GAP_PX: int = 80
+    _CONFIGURE_DEBOUNCE_MS: int = 48
 
-    def __init__(self, parent: tk.Misc, *, bg: str, height: int = 34, **kw: object) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        bg: str,
+        height: int = 34,
+        app: Optional[object] = None,
+        tick_gate: Optional[Callable[[], bool]] = None,
+        **kw: object,
+    ) -> None:
         super().__init__(parent, bg=bg, bd=0, highlightthickness=0, height=height, **kw)
         self._bg = bg
+        self._app = app
+        self._tick_gate = tick_gate
         self._segments: list[tuple[str, tuple, str]] = []
         self._seg_widths: list[int] = []
         self._total_w: int = 0
         self._canvas_w: int = 1
-        self._scroll_x: float = 0.0
         self._needs_scroll: bool = False
         self._paused: bool = False
-        self._after_id: Optional[int] = None
         self._delay_id: Optional[int] = None
+        self._cfg_after_id: Optional[int] = None
         self._last_t: float = 0.0
+        self._scroll_tag: str = ""
+        self._scroll_loop_w: int = 0
+        self._scroll_y: int = 0
+        self._scroll_active: bool = False
+        self._pan_accum: float = 0.0
+        self._haul_fract: float = 0.0
+        self._font_measure_cache: dict[tuple, object] = {}
         self.bind("<Configure>", lambda _e: self._on_configure())
         self.bind("<Enter>", lambda _e: self._set_paused(True))
         self.bind("<Leave>", lambda _e: self._set_paused(False))
+        if app is not None:
+            app._register_marquee(self)  # type: ignore[attr-defined]
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -1418,21 +1463,74 @@ class _MarqueeLabel(tk.Canvas):
         """Set display content.  segments = list of (text, font_tuple, color_hex)."""
         self._segments = segments
         self._cancel_all()
-        self._scroll_x = 0.0
         self.after_idle(self._measure_and_draw)
 
     def set_text(self, text: str, font: tuple, color: str) -> None:
         """Convenience wrapper for a single-color segment."""
         self.set_segments([(text, font, color)])
 
+    # ── Driven by App._marquee_tick ─────────────────────────────────────────────
+
+    def _advance(self, now: float) -> None:
+        if not self._needs_scroll or not self._scroll_active:
+            return
+        if not self._scroll_tag:
+            return
+        if self._paused:
+            self._last_t = now
+            return
+        if self._tick_gate is not None and not self._tick_gate():
+            self._last_t = now
+            return
+        try:
+            if not self.winfo_ismapped():
+                self._last_t = now
+                return
+            if int(self.winfo_viewable()) == 0:
+                self._last_t = now
+                return
+        except tk.TclError:
+            return
+
+        dt = now - self._last_t
+        self._last_t = now
+        if dt <= 0:
+            return
+        if dt > 0.75:
+            dt = _MARQUEE_GLOBAL_TICK_MS / 1000.0
+
+        self._haul_fract += self._SPEED * dt
+        step = int(self._haul_fract)
+        self._haul_fract -= float(step)
+        if step <= 0:
+            return
+        try:
+            self.move(self._scroll_tag, -step, 0)
+        except tk.TclError:
+            return
+        self._pan_accum -= float(step)
+        lw = float(self._scroll_loop_w)
+        while self._pan_accum <= -lw:
+            try:
+                self.move(self._scroll_tag, int(lw), 0)
+            except tk.TclError:
+                return
+            self._pan_accum += lw
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _measure(self) -> None:
         import tkinter.font as tkfont
+
         widths: list[int] = []
+        cache = self._font_measure_cache
         for txt, fnt, _ in self._segments:
             try:
-                widths.append(tkfont.Font(font=fnt).measure(txt))
+                fo = cache.get(fnt)
+                if fo is None:
+                    fo = tkfont.Font(font=fnt)
+                    cache[fnt] = fo
+                widths.append(int(fo.measure(txt)))
             except Exception:
                 widths.append(max(1, len(txt) * 9))
         self._seg_widths = widths
@@ -1443,61 +1541,68 @@ class _MarqueeLabel(tk.Canvas):
         self._measure()
         self._needs_scroll = self._total_w > self._canvas_w
         self._redraw()
-        if self._needs_scroll and self._after_id is None and self._delay_id is None:
-            self._delay_id = self.after(self._START_DELAY_MS, self._start_scroll)
+        self._scroll_active = False
+        if self._needs_scroll and self._delay_id is None:
+            self._delay_id = self.after(self._START_DELAY_MS, self._arm_scroll)
+
+    def _arm_scroll(self) -> None:
+        self._delay_id = None
+        if not self._needs_scroll:
+            self._scroll_active = False
+            return
+        self._scroll_active = True
+        self._last_t = time.monotonic()
+        self._pan_accum = 0.0
+        self._haul_fract = 0.0
 
     def _redraw(self) -> None:
         self.delete("all")
+        self._scroll_tag = ""
+        self._scroll_active = False
         if not self._segments:
             return
         h = max(1, self.winfo_height())
         y = h // 2
+        self._scroll_y = y
         if not self._needs_scroll:
-            # Static: horizontally centered
             x = max(0, (self._canvas_w - self._total_w) // 2)
             for (txt, fnt, col), w in zip(self._segments, self._seg_widths):
                 self.create_text(x, y, text=txt, font=fnt, fill=col, anchor="w")
                 x += w
-        else:
-            # Two copies for seamless looping
-            loop_w = self._total_w + self._GAP_PX
-            for offset in (0, loop_w):
-                x = self._scroll_x + offset
-                for (txt, fnt, col), w in zip(self._segments, self._seg_widths):
-                    self.create_text(int(x), y, text=txt, font=fnt, fill=col, anchor="w")
-                    x += w
-
-    def _start_scroll(self) -> None:
-        self._delay_id = None
-        self._last_t = time.monotonic()
-        self._tick()
-
-    def _tick(self) -> None:
-        if not self._needs_scroll:
             return
-        now = time.monotonic()
-        if not self._paused:
-            dt = now - self._last_t
-            self._scroll_x -= self._SPEED * dt
-            loop_w = self._total_w + self._GAP_PX
-            if self._scroll_x <= -loop_w:
-                self._scroll_x += loop_w
-            self._redraw()
-        self._last_t = now
-        self._after_id = self.after(self._TICK_MS, self._tick)
+        loop_w = self._total_w + self._GAP_PX
+        self._scroll_loop_w = loop_w
+        tag = f"_mq{id(self)}"
+        self._scroll_tag = tag
+        cum = 0
+        for (txt, fnt, col), sw in zip(self._segments, self._seg_widths):
+            xa = int(cum)
+            xb = int(loop_w + cum)
+            self.create_text(xa, y, text=txt, font=fnt, fill=col, anchor="w", tags=(tag,))
+            self.create_text(xb, y, text=txt, font=fnt, fill=col, anchor="w", tags=(tag,))
+            cum += sw
 
     def _on_configure(self) -> None:
+        if self._cfg_after_id is not None:
+            try:
+                self.after_cancel(self._cfg_after_id)
+            except Exception:
+                pass
+            self._cfg_after_id = None
+        self._cfg_after_id = self.after(self._CONFIGURE_DEBOUNCE_MS, self._on_configure_idle)
+
+    def _on_configure_idle(self) -> None:
+        self._cfg_after_id = None
         self._cancel_all()
-        self._scroll_x = 0.0
         self.after_idle(self._measure_and_draw)
 
     def _cancel_all(self) -> None:
-        if self._after_id is not None:
+        if self._cfg_after_id is not None:
             try:
-                self.after_cancel(self._after_id)
+                self.after_cancel(self._cfg_after_id)
             except Exception:
                 pass
-            self._after_id = None
+            self._cfg_after_id = None
         if self._delay_id is not None:
             try:
                 self.after_cancel(self._delay_id)
@@ -1511,6 +1616,19 @@ class _MarqueeLabel(tk.Canvas):
             self._last_t = time.monotonic()
 
     def destroy(self) -> None:
+        app = getattr(self, "_app", None)
+        self._app = None
+        if app is not None:
+            try:
+                app._unregister_marquee(self)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        if self._cfg_after_id is not None:
+            try:
+                self.after_cancel(self._cfg_after_id)
+            except Exception:
+                pass
+            self._cfg_after_id = None
         self._cancel_all()
         super().destroy()
 
@@ -1676,6 +1794,7 @@ class App:
         self._jump_highlight_key: JumpUiKey = 0
         self._shortcut_panel_visible = load_show_help_guide_on_startup()
         self._settings_top: Optional[tk.Toplevel] = None
+        self._lbl_guide_playback_replay: Optional[tk.Label] = None
         self.shortcut_frame: Optional[tk.Frame] = None
         self.footer_outer: Optional[tk.Frame] = None
         self._body: Optional[tk.Frame] = None
@@ -1729,9 +1848,12 @@ class App:
         self._scroll_swipe_accum_x: float = 0.0
         self._scroll_swipe_after_id: Optional[str] = None
 
+        self._marquee_widgets: list[_MarqueeLabel] = []
+        self._marquee_tick_after_id: Optional[str] = None
+
         self._build_ui()
         self._sync_swipe_tiles_from_preset()
-        self._refresh_shortcut_guide_swipe_lines()
+        self._apply_swipe_archive_hotkey_chrome()
         if load_show_queue_panel_on_startup():
             self._apply_queue_panel_visibility(True)
         _prune_stale_bakkis_tempfiles()
@@ -1793,11 +1915,42 @@ class App:
         while len(self._genre_folder_names) < 9:
             self._genre_folder_names.append(safe_genre_folder_name(self._genre_labels[len(self._genre_folder_names)]))
 
+    def _playback_replay_guide_line(self) -> str:
+        if load_swipe_archive_hotkey() == "down":
+            return "R  Replay from playback start  ·  ↓ in Grid mode"
+        return "↓  Replay from playback start"
+
+    def _apply_swipe_archive_hotkey_chrome(self) -> None:
+        """Refresh Archive shortcut hints after ``swipe_archive_hotkey`` changes or at startup."""
+        hk = load_swipe_archive_hotkey()
+        ch = _swipe_archive_arrow_glyph(hk)
+        fav_ch = "↓" if hk == "up" else "↑"
+        sc = getattr(self._tile_archive_inner, "_tile_shortcut_label", None)
+        if sc is not None:
+            try:
+                sc.configure(text=_shortcut_caption_loose(ch))
+            except tk.TclError:
+                pass
+        scf = getattr(self._tile_favorite_inner, "_tile_shortcut_label", None)
+        if scf is not None:
+            try:
+                scf.configure(text=_shortcut_caption_loose(fav_ch))
+            except tk.TclError:
+                pass
+        self._refresh_shortcut_guide_swipe_lines()
+        if self._lbl_guide_playback_replay is not None:
+            try:
+                self._lbl_guide_playback_replay.configure(text=self._playback_replay_guide_line())
+            except tk.TclError:
+                pass
+
     def _refresh_shortcut_guide_swipe_lines(self) -> None:
+        arh = _swipe_archive_arrow_glyph(load_swipe_archive_hotkey())
+        fav_ar = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         lines = [
             f"{self._swipe_labels[0]} (→)",
-            f"{self._swipe_labels[1]} (↑)",
-            f"{self._swipe_labels[2]} (←)",
+            f"{self._swipe_labels[1]} ({arh})",
+            f"{self._swipe_labels[2]} ({fav_ar})",
             "Enter  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
@@ -1862,7 +2015,12 @@ class App:
         labels_e: list[tk.Entry] = []
         colors_e: list[tk.Entry] = []
         folders_e: list[tk.Entry] = []
-        row_titles = ("Right → keep", "Up ↑ archive", "Left ← favorites")
+        sah = load_swipe_archive_hotkey()
+        arh = _swipe_archive_arrow_glyph(sah)
+        arch_word = "Down" if sah == "down" else "Up"
+        fav_word = "Up" if sah == "down" else "Down"
+        fav_g = "↑" if sah == "down" else "↓"
+        row_titles = ("Right → keep", f"{arch_word} {arh} archive", f"{fav_word} {fav_g} favorites")
         for i in range(3):
             row = tk.Frame(top, bg=self.bg)
             row.pack(fill="x", padx=14, pady=4)
@@ -1929,7 +2087,7 @@ class App:
             self._upsert_preset_in_store(blob)
             self._apply_track_labels_from_preset_store()
             self._sync_swipe_tiles_from_preset()
-            self._refresh_shortcut_guide_swipe_lines()
+            self._apply_swipe_archive_hotkey_chrome()
             if self._music_root is not None:
                 self._refresh_sort_destination_paths()
             self._refresh_stats()
@@ -3438,24 +3596,24 @@ class App:
             base_inner_bg = self.skip_bg
         hover_bg = _mix_hex_toward_white(base_inner_bg, _ACTION_TILE_HOVER_MIX)
         try:
-            inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor="hand2")
+            inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor=_LINK_CURSOR)
             icon_lab.configure(
                 bg=hover_bg,
                 fg=self.teal_on_fg if role == "play" else self.fg,
-                cursor="hand2",
+                cursor=_LINK_CURSOR,
             )
             if isinstance(title_lab, tk.Label):
                 title_lab.configure(
                     bg=hover_bg,
                     fg=self.teal_on_fg if role == "play" else self.fg,
-                    cursor="hand2",
+                    cursor=_LINK_CURSOR,
                 )
             sub.configure(
                 bg=hover_bg,
                 fg="#1A1A1A" if role == "play" else self.muted,
-                cursor="hand2",
+                cursor=_LINK_CURSOR,
             )
-            outer.configure(cursor="hand2")
+            outer.configure(cursor=_LINK_CURSOR)
         except tk.TclError:
             pass
 
@@ -3503,12 +3661,12 @@ class App:
                     highlightthickness=1,
                     highlightbackground=hlb,
                     highlightcolor=hlb,
-                    cursor="hand2",
+                    cursor=_LINK_CURSOR,
                 )
-                icon_lab.configure(bg=bg_n, fg=fg_i, cursor="hand2")
+                icon_lab.configure(bg=bg_n, fg=fg_i, cursor=_LINK_CURSOR)
                 if title_l is not None:
-                    title_l.configure(bg=bg_n, fg=fg_t, cursor="hand2")
-                sub.configure(bg=bg_n, fg=fg_s, cursor="hand2")
+                    title_l.configure(bg=bg_n, fg=fg_t, cursor=_LINK_CURSOR)
+                sub.configure(bg=bg_n, fg=fg_s, cursor=_LINK_CURSOR)
             except tk.TclError:
                 pass
         else:
@@ -3720,7 +3878,7 @@ class App:
                 highlightthickness=hl_thick,
                 highlightbackground=hlb,
                 highlightcolor=hlb,
-                cursor="hand2",
+                cursor=_LINK_CURSOR,
             )
         except tk.TclError:
             return
@@ -3730,7 +3888,7 @@ class App:
                 w.configure(
                     bg=bg,
                     fg=fg_sc if (shortcut_w is not None and w is shortcut_w) else fg_main,
-                    cursor="hand2",
+                    cursor=_LINK_CURSOR,
                 )
             except tk.TclError:
                 pass
@@ -3773,17 +3931,17 @@ class App:
         fg_sc = str(getattr(inner, "_tile_shortcut_fg", self.muted))
         inner._tile_hovering = True  # type: ignore[attr-defined]
         try:
-            inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor="hand2")
+            inner.configure(bg=hover_bg, highlightbackground=hb, highlightcolor=hb, cursor=_LINK_CURSOR)
             for w in widgets:
                 w.configure(
                     bg=hover_bg,
                     fg=fg_sc if (sc is not None and w is sc) else fg_main,
-                    cursor="hand2",
+                    cursor=_LINK_CURSOR,
                 )
         except tk.TclError:
             pass
         try:
-            inner.master.configure(cursor="hand2")  # type: ignore[union-attr]
+            inner.master.configure(cursor=_LINK_CURSOR)  # type: ignore[union-attr]
         except tk.TclError:
             pass
 
@@ -3817,7 +3975,7 @@ class App:
             hl_thick = 1
         if on:
             inner.configure(
-                cursor="hand2",
+                cursor=_LINK_CURSOR,
                 bg=bg_n,
                 highlightthickness=hl_thick,
                 highlightbackground=hlb,
@@ -3828,7 +3986,7 @@ class App:
                     bg=bg_n,
                     fg=sc_fg if (shortcut_w is not None and w is shortcut_w) else fg_n,
                     highlightthickness=0,
-                    cursor="hand2",
+                    cursor=_LINK_CURSOR,
                 )
         else:
             inner.configure(
@@ -4266,6 +4424,45 @@ class App:
 
         return handler
 
+    def _kbd_swipe_up_arrow(self, keysym: str) -> Callable[[object], Optional[str]]:
+        def handler(_e: object) -> Optional[str]:
+            if not self._shortcuts_active():
+                return None
+            if self._sorting_mode != "swipe":
+                return "break"
+            if self._suppress_key_repeat(keysym):
+                return "break"
+            if load_swipe_archive_hotkey() == "up":
+                self.sort_current("archive")
+                self._flash_control(self.btn_archive)
+            else:
+                self.sort_current("favorites")
+                self._flash_control(self.btn_favorite)
+            return "break"
+
+        return handler
+
+    def _kbd_down_favorite_replay_or_swipe_archive(self, keysym: str) -> Callable[[object], Optional[str]]:
+        def handler(_e: object) -> Optional[str]:
+            if not self._shortcuts_active():
+                return None
+            if self._suppress_key_repeat(keysym):
+                return "break"
+            if self._sorting_mode != "swipe":
+                self._replay_from_playback_start()
+                self._flash_control(self.btn_play)
+                return "break"
+            hk = load_swipe_archive_hotkey()
+            if hk == "down":
+                self.sort_current("archive")
+                self._flash_control(self.btn_archive)
+            else:
+                self.sort_current("favorites")
+                self._flash_control(self.btn_favorite)
+            return "break"
+
+        return handler
+
     def _dispatch_digit_key(self, digit_1_to_9: int, _e: object) -> Optional[str]:
         if not self._shortcuts_active():
             return None
@@ -4302,6 +4499,48 @@ class App:
         self.jump_to(float(sec), jump_ui_key=sec)
         self._flash_control(btn)
         return "break"
+
+    def _register_marquee(self, w: _MarqueeLabel) -> None:
+        if w not in self._marquee_widgets:
+            self._marquee_widgets.append(w)
+        self._ensure_marquee_tick()
+
+    def _unregister_marquee(self, w: _MarqueeLabel) -> None:
+        try:
+            self._marquee_widgets.remove(w)
+        except ValueError:
+            pass
+        if not self._marquee_widgets:
+            self._stop_marquee_tick()
+
+    def _ensure_marquee_tick(self) -> None:
+        if self._marquee_tick_after_id is not None:
+            return
+        if not self._marquee_widgets:
+            return
+        self._marquee_tick_after_id = self.root.after(_MARQUEE_GLOBAL_TICK_MS, self._marquee_tick)
+
+    def _stop_marquee_tick(self) -> None:
+        aid = self._marquee_tick_after_id
+        if aid is not None:
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+            self._marquee_tick_after_id = None
+
+    def _marquee_tick(self) -> None:
+        self._marquee_tick_after_id = None
+        mq = self._marquee_widgets
+        if not mq:
+            return
+        now = time.monotonic()
+        for m in list(mq):
+            try:
+                m._advance(now)
+            except Exception:
+                pass
+        self._ensure_marquee_tick()
 
     def _build_ui(self) -> None:
         self._body = tk.Frame(self.root, bg=self.bg)
@@ -4412,14 +4651,6 @@ class App:
         tk.Label(_title_row, text=" ", bg=self.bg, font=("Helvetica Neue", 5)).pack(side="left")
         tk.Label(_title_row, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica Neue", 22, "bold")).pack(side="left")
 
-        player_card = tk.Frame(
-            self._main_upper,
-            bg=self.bg,
-            highlightthickness=1,
-            highlightbackground=self.panel_border,
-            highlightcolor=self.panel_border,
-        )
-        tk.Frame(self._main_upper, bg=self.bg).pack(fill="both", expand=True)
         _tagline_outer = tk.Frame(self._main_upper, bg=self.bg, highlightthickness=0)
         _tagline_outer.pack(fill="x", pady=(0, 12))
         _tagline_row = tk.Frame(_tagline_outer, bg=self.bg)
@@ -4442,6 +4673,15 @@ class App:
             highlightthickness=0,
             cursor="",
         ).pack(side="left")
+
+        player_card = tk.Frame(
+            self._main_upper,
+            bg=self.bg,
+            highlightthickness=1,
+            highlightbackground=self.panel_border,
+            highlightcolor=self.panel_border,
+        )
+        tk.Frame(self._main_upper, bg=self.bg).pack(fill="both", expand=True)
         player_card.pack(fill="x", padx=_CONTENT_GUTTER, pady=(0, _SECTION_GAP_Y))
         self._swipe_player_card_ref = player_card
         # Overlay canvas — placed over player_card only during an active swipe drag.
@@ -4488,7 +4728,7 @@ class App:
             anchor="center",
         )
 
-        self._marquee_main = _MarqueeLabel(card_inner, bg=self.bg, height=36)
+        self._marquee_main = _MarqueeLabel(card_inner, bg=self.bg, height=36, app=self)
         self._marquee_main.pack(fill="x", pady=(1, 2))
 
         self._set_now_playing_main_plain("Load a folder to begin")
@@ -4749,7 +4989,7 @@ class App:
             tinder_sort_row,
             "↓",
             "ARCHIVE",
-            "↑",
+            _swipe_archive_arrow_glyph(load_swipe_archive_hotkey()),
             self.archive_bg,
             self.archive_active,
             self.archive_fg,
@@ -4765,7 +5005,7 @@ class App:
             tinder_sort_row,
             "★",
             "FAVORITE",
-            "←",
+            "↑" if load_swipe_archive_hotkey() == "down" else "↓",
             self.favorite_bg,
             self.favorite_active,
             self.favorite_on_fg,
@@ -5094,7 +5334,13 @@ class App:
         )
         now_box = tk.Frame(qf, bg=self.panel, highlightthickness=1, highlightbackground=self.accent)
         now_box.pack(fill="x", padx=10, pady=(0, 10))
-        self._marquee_queue_now = _MarqueeLabel(now_box, bg=self.panel, height=28)
+        self._marquee_queue_now = _MarqueeLabel(
+            now_box,
+            bg=self.panel,
+            height=28,
+            app=self,
+            tick_gate=lambda: self._queue_panel_visible,
+        )
         self._marquee_queue_now.pack(fill="x", padx=8, pady=8)
         self._marquee_queue_now.set_text("—", ("Helvetica Neue", 10, "bold"), self.fg)
 
@@ -5308,10 +5554,12 @@ class App:
         swipe_f = tk.Frame(stack, bg=self.panel)
         swipe_f.pack(fill="x", pady=(0, 8))
         tk.Label(swipe_f, text="▶ SWIPE", bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
+        arh = _swipe_archive_arrow_glyph(load_swipe_archive_hotkey())
+        farh = "↓" if load_swipe_archive_hotkey() == "up" else "↑"
         swipe_intro = [
             f"{self._swipe_labels[0]} (→)",
-            f"{self._swipe_labels[1]} (←)",
-            f"{self._swipe_labels[2]} (↑)",
+            f"{self._swipe_labels[1]} ({arh})",
+            f"{self._swipe_labels[2]} ({farh})",
             "Enter  Skip",
             "Z  Undo last step",
             "⌃Z  Undo all (back to folder load)",
@@ -5334,7 +5582,7 @@ class App:
                 "♪ PLAYBACK",
                 [
                     "Space  Play / Pause",
-                    "↓  Replay from playback start",
+                    self._playback_replay_guide_line(),
                     "R  Replay active jump (preset / Outro / default start)",
                     "Q  Show / hide queue list",
                 ],
@@ -5378,8 +5626,8 @@ class App:
             col_f = tk.Frame(stack, bg=self.panel)
             col_f.pack(fill="x", pady=(0, 8))
             tk.Label(col_f, text=title, bg=self.panel, fg=self.accent, font=hdr, anchor="w").pack(anchor="w")
-            for line in lines:
-                tk.Label(
+            for li, line in enumerate(lines):
+                lb = tk.Label(
                     col_f,
                     text=line,
                     bg=self.panel,
@@ -5388,7 +5636,10 @@ class App:
                     anchor="w",
                     justify="left",
                     wraplength=wl,
-                ).pack(anchor="w", pady=(2, 0), fill="x")
+                )
+                lb.pack(anchor="w", pady=(2, 0), fill="x")
+                if title == "♪ PLAYBACK" and li == 1:
+                    self._lbl_guide_playback_replay = lb
         tk.Label(
             inner_pad,
             text="Press H to hide or show this guide",
@@ -5733,8 +5984,37 @@ class App:
 
     # ── Swipe gesture support ────────────────────────────────────────────────
 
-    _SWIPE_MIN_DIST_PX = 50   # minimum drag distance to trigger an action
+    _SWIPE_MIN_DIST_PX = 38   # minimum drag distance to trigger an action (mouse)
     _SWIPE_SHOW_PX = 10       # drag distance before overlay becomes visible
+
+    def _event_screen_xy(self, event: object) -> tuple[int, int]:
+        """Screen coords for swipe math — fallback uses pointer when x_root/y_root are missing."""
+        xr = getattr(event, "x_root", None)
+        yr = getattr(event, "y_root", None)
+        if xr is not None and yr is not None:
+            try:
+                return int(xr), int(yr)
+            except (TypeError, ValueError):
+                pass
+        try:
+            return int(self.root.winfo_pointerx()), int(self.root.winfo_pointery())
+        except tk.TclError:
+            return 0, 0
+
+    def _pointer_over_player_card(self) -> bool:
+        """Whether the mouse pointer is currently over the player card (scroll-swipe hit test)."""
+        card = self._swipe_player_card_ref
+        if card is None:
+            return False
+        try:
+            px, py = self.root.winfo_pointerxy()
+            cx = card.winfo_rootx()
+            cy = card.winfo_rooty()
+            cw = card.winfo_width()
+            ch = card.winfo_height()
+            return cx <= px < cx + cw and cy <= py < cy + ch
+        except tk.TclError:
+            return False
 
     # Overlay colors (direction → fill hex, label text)
     _SWIPE_DIR_STYLE: dict = {
@@ -5852,8 +6132,7 @@ class App:
             cy = card.winfo_rooty()
             cw = card.winfo_width()
             ch = card.winfo_height()
-            rx: int = getattr(event, "x_root", 0)
-            ry: int = getattr(event, "y_root", 0)
+            rx, ry = self._event_screen_xy(event)
         except tk.TclError:
             return
         if cx <= rx < cx + cw and cy <= ry < cy + ch:
@@ -5865,8 +6144,7 @@ class App:
         """Update swipe overlay while dragging."""
         if not self._swipe_drag_active:
             return
-        rx: int = getattr(event, "x_root", 0)
-        ry: int = getattr(event, "y_root", 0)
+        rx, ry = self._event_screen_xy(event)
         dx = rx - self._swipe_drag_start_x
         dy = ry - self._swipe_drag_start_y
         self._update_swipe_overlay(dx, dy)
@@ -5876,8 +6154,7 @@ class App:
         if not self._swipe_drag_active:
             return
         self._swipe_drag_active = False
-        rx: int = getattr(event, "x_root", 0)
-        ry: int = getattr(event, "y_root", 0)
+        rx, ry = self._event_screen_xy(event)
         dx = rx - self._swipe_drag_start_x
         dy = ry - self._swipe_drag_start_y
         self._hide_swipe_overlay()
@@ -5903,29 +6180,22 @@ class App:
 
     # ── Trackpad two-finger scroll-swipe ─────────────────────────────────────
 
-    # Accumulated scroll delta needed (in Tk "units") to trigger a sort action.
-    # macOS trackpad delivers raw-pixel deltas (~3–30 per event); a deliberate
-    # flick comfortably exceeds 60 within the settle window; slow/accidental
-    # scrolls typically do not.
-    _SCROLL_SWIPE_THRESHOLD = 60
-    # Milliseconds of quiet after the last scroll event before we commit.
-    _SCROLL_SWIPE_SETTLE_MS = 180
+    # Accumulated scroll delta (sum of MouseWheel deltas) to trigger one action.
+    # Tk/macOS trackpad deltas are small per event; threshold must stay low enough
+    # that several events within _SCROLL_SWIPE_SETTLE_MS add up before reset.
+    _SCROLL_SWIPE_THRESHOLD = 28
+    _SCROLL_SWIPE_SETTLE_MS = 380
 
-    def _is_event_over_player_card(self, event: object) -> bool:
-        """Return True if the event's root-screen position is inside the player card."""
-        card = self._swipe_player_card_ref
-        if card is None:
-            return False
-        try:
-            cx = card.winfo_rootx()
-            cy = card.winfo_rooty()
-            cw = card.winfo_width()
-            ch = card.winfo_height()
-            rx: int = getattr(event, "x_root", 0)
-            ry: int = getattr(event, "y_root", 0)
-            return cx <= rx < cx + cw and cy <= ry < cy + ch
-        except tk.TclError:
-            return False
+    def _on_mousewheel_maybe_swipe(self, event: object) -> None:
+        """Route vertical vs horizontal wheel deltas — Darwin often uses Shift for horizontal."""
+        axis = "y"
+        if sys.platform == "darwin":
+            try:
+                if int(getattr(event, "state", 0) or 0) & 0x0001:
+                    axis = "x"
+            except (TypeError, ValueError):
+                pass
+        self._on_scroll_swipe(event, axis)
 
     def _on_scroll_swipe(self, event: object, axis: str) -> None:
         """Accumulate trackpad scroll delta and schedule a commit.
@@ -5937,7 +6207,8 @@ class App:
             return
         if not self._shortcuts_active():
             return
-        if not self._is_event_over_player_card(event):
+        # MouseWheel events on macOS often lack usable x_root/y_root — use live pointer position.
+        if not self._pointer_over_player_card():
             return
 
         delta: float = float(getattr(event, "delta", 0))
@@ -6013,8 +6284,8 @@ class App:
         b("<KP_Enter>", self._kbd_skip("KP_Enter"))
         b("<Right>", self._kbd_cleanup_sort("Right", "keep", self.btn_keep))
         b("<Left>", self._kbd_cleanup_sort("Left", "archive", self.btn_archive))
-        b("<Up>", self._kbd_cleanup_sort("Up", "favorites", self.btn_favorite))
-        b("<Down>", self._kbd("Down", self._replay_from_playback_start, self.btn_play))
+        b("<Up>", self._kbd_swipe_up_arrow("Up"))
+        b("<Down>", self._kbd_down_favorite_replay_or_swipe_archive("Down"))
         b("<KeyPress-s>", self._kbd("s", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
         b("<KeyPress-S>", self._kbd("S", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
         b("<KeyPress-t>", self._kbd("t", lambda: self._set_sorting_mode("swipe"), self._tile_mode_cleanup_inner))
@@ -6064,9 +6335,11 @@ class App:
         self.root.bind_all("<B1-Motion>", self._on_swipe_motion, add="+")
         self.root.bind_all("<ButtonRelease-1>", self._on_swipe_release, add="+")
 
-        # Trackpad two-finger scroll-swipe (macOS <MouseWheel>, Linux Button-4/5/6/7)
-        self.root.bind_all("<MouseWheel>", lambda e: self._on_scroll_swipe(e, "y"), add="+")
-        self.root.bind_all("<Shift-MouseWheel>", lambda e: self._on_scroll_swipe(e, "x"), add="+")
+        # Trackpad scroll-swipe (Swipe Mode gated inside handlers).
+        # Darwin: horizontal scroll usually arrives as Shift+vertical MouseWheel — handled in _on_mousewheel_maybe_swipe.
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel_maybe_swipe, add="+")
+        if sys.platform != "darwin":
+            self.root.bind_all("<Shift-MouseWheel>", lambda e: self._on_scroll_swipe(e, "x"), add="+")
         # X11 / Linux scroll buttons (buttons 6/7 don't exist on macOS — guard with try/except)
         for _btn, _axis in (("4", "y"), ("5", "y"), ("6", "x"), ("7", "x")):
             try:
@@ -6673,6 +6946,37 @@ class App:
             font=("Helvetica Neue", 10),
         ).pack(anchor="w", pady=(8, 4))
 
+        tk.Label(
+            sec_sort,
+            text="Swipe mode: Archive arrow key",
+            bg=self.panel,
+            fg=self.fg,
+            font=("Helvetica Neue", 11, "bold"),
+        ).pack(anchor="w", pady=_SETTINGS_SUBHEAD_TOP_PADY)
+        row_sah = tk.Frame(sec_sort, bg=self.panel)
+        row_sah.pack(anchor="w", pady=_SETTINGS_SUBHEAD_GAP_AFTER_TITLE)
+        tk.Label(row_sah, text="Arrow:", bg=self.panel, fg=self.muted, font=("Helvetica Neue", 10)).pack(side="left")
+        v_sah = tk.StringVar(master=top, value="Down" if load_swipe_archive_hotkey() == "down" else "Up")
+
+        def on_swipe_archive_hotkey_change(*_a: object) -> None:
+            key: SwipeArchiveHotkey = "down" if v_sah.get() == "Down" else "up"
+            patch_user_settings(swipe_archive_hotkey=key)
+            self._apply_swipe_archive_hotkey_chrome()
+
+        om_sah = tk.OptionMenu(row_sah, v_sah, "Down", "Up", command=on_swipe_archive_hotkey_change)
+        self._style_tk_option_menu_transport(om_sah)
+        om_sah.pack(side="left", padx=(8, 0))
+        tk.Label(
+            sec_sort,
+            text="Down = Archive by default; Up = Favorite. Swap to Up = Archive and Down = Favorite. Left always Archive. R replays from the chosen start in Swipe; ↓ still replays in Grid.",
+            bg=self.panel,
+            fg=self.muted,
+            font=("Helvetica Neue", 9),
+            wraplength=_SETTINGS_TEXT_WRAP,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 4))
+
         sep_fn = tk.Frame(sec_sort, bg=self.panel_border, height=1)
         sep_fn.pack_propagate(False)
         sep_fn.pack(fill="x", pady=_SETTINGS_SEP_PADY)
@@ -6795,7 +7099,7 @@ class App:
             self._sync_swipe_tiles_from_preset()
             self._sync_genre_tile_titles()
             self._apply_genre_tile_colors()
-            self._refresh_shortcut_guide_swipe_lines()
+            self._apply_swipe_archive_hotkey_chrome()
             if self._music_root is not None:
                 self._refresh_sort_destination_paths()
             self._refresh_stats()
@@ -8017,6 +8321,7 @@ class App:
     def _on_close(self) -> None:
         self._stop_playback()
         self._mpv_shutdown()
+        self._stop_marquee_tick()
         self.root.destroy()
 
     def run(self) -> None:
