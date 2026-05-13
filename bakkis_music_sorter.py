@@ -566,6 +566,7 @@ def _default_user_settings_blob() -> dict:
         "include_subfolders": True,
         "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
+        "volume": 80,
     }
 
 
@@ -604,6 +605,11 @@ def _normalize_user_settings_dict(data: dict) -> None:
     data["include_subfolders"] = bool(data.get("include_subfolders", True))
     data["show_help_guide_on_startup"] = bool(data.get("show_help_guide_on_startup", False))
     data["show_queue_panel_on_startup"] = bool(data.get("show_queue_panel_on_startup", False))
+    try:
+        vol = int(float(data.get("volume", 80)))
+    except (TypeError, ValueError):
+        vol = 80
+    data["volume"] = max(0, min(100, vol))
 
 
 def read_user_settings() -> dict:
@@ -1232,6 +1238,9 @@ class App:
         self._jump_btn_plus: Optional[tk.Label] = None
         self._jump_btn_pb_start: Optional[tk.Label] = None
         self._jump_mouse_error_lbl: Optional[tk.Label] = None
+        self._volume: int = max(0, min(100, int(float(read_user_settings().get("volume", 80)))))
+        self._vol_canvas: Optional[tk.Canvas] = None
+        self._vol_icon: Optional[tk.Label] = None
         self._tinder_kb_jump_error_digit: Optional[int] = None
         self._tinder_kb_jump_error_plus30: bool = False
         # Which jump control shows teal (last preset used from UI/keyboard, or default on new track)
@@ -1649,6 +1658,7 @@ class App:
                     s.connect(sock_path)
                     with self._mpv_ipc_lock:
                         self._mpv_ipc_sock = s
+                    self.root.after(150, self._apply_mpv_volume)
                     break
             except OSError:
                 n_try += 1
@@ -2575,6 +2585,75 @@ class App:
 
     def jump_to_outro(self) -> None:
         self.jump_to(self._outro_jump_seconds(), jump_ui_key="outro")
+
+    # ------------------------------------------------------------------
+    # Volume control
+    # ------------------------------------------------------------------
+
+    def _redraw_vol_canvas(self) -> None:
+        c = self._vol_canvas
+        if c is None:
+            return
+        try:
+            w = c.winfo_width()
+            h = c.winfo_height()
+        except tk.TclError:
+            return
+        if w < 4 or h < 2:
+            return
+        c.delete("all")
+        pad = 5          # knob radius — allows knob to sit flush at both extremes
+        track_h = 3
+        ty = (h - track_h) // 2
+        # Background track
+        c.create_rectangle(pad, ty, w - pad, ty + track_h, fill=self.trough, outline="")
+        # Teal fill
+        frac = max(0.0, min(1.0, self._volume / 100.0))
+        fill_x = pad + int(frac * (w - 2 * pad))
+        if fill_x > pad:
+            c.create_rectangle(pad, ty, fill_x, ty + track_h, fill=self.accent, outline="")
+        # Knob
+        ky = h // 2
+        c.create_oval(fill_x - pad, ky - pad, fill_x + pad, ky + pad,
+                      fill=self.accent, outline=self.bg, width=1)
+
+    def _on_vol_click(self, e: object) -> None:
+        self._apply_vol_from_canvas_x(getattr(e, "x", 0))
+
+    def _on_vol_drag(self, e: object) -> None:
+        self._apply_vol_from_canvas_x(getattr(e, "x", 0))
+
+    def _apply_vol_from_canvas_x(self, x: int) -> None:
+        c = self._vol_canvas
+        if c is None:
+            return
+        try:
+            w = c.winfo_width()
+        except tk.TclError:
+            return
+        pad = 5
+        frac = max(0.0, min(1.0, (x - pad) / max(1, w - 2 * pad)))
+        self._set_volume(int(round(frac * 100)))
+
+    def _set_volume(self, vol: int, *, persist: bool = True) -> None:
+        vol = max(0, min(100, vol))
+        self._volume = vol
+        self._mpv_ipc_send_obj({"command": ["set_property", "volume", float(vol)]})
+        self._redraw_vol_canvas()
+        if self._vol_icon is not None:
+            icon = "🔇" if vol == 0 else ("🔉" if vol < 40 else "🔊")
+            try:
+                self._vol_icon.configure(text=icon)
+            except tk.TclError:
+                pass
+        if persist:
+            patch_user_settings(volume=vol)
+
+    def _apply_mpv_volume(self) -> None:
+        """Restore saved volume after IPC connects (no-op if socket not ready)."""
+        self._set_volume(self._volume, persist=False)
+
+    # ------------------------------------------------------------------
 
     def _set_play_button_text(self, text: str) -> None:
         """Sync play/pause glyph + title on the transport tile; re-chrome the app."""
@@ -3828,7 +3907,7 @@ class App:
         top.columnconfigure(2, weight=1, uniform="top_hdr")
 
         top_left_col = tk.Frame(top, bg=self.bg)
-        top_left_col.grid(row=0, column=0, sticky="nw")
+        top_left_col.grid(row=0, column=0, sticky="nsew")
 
         hdr_util = tk.Frame(top_left_col, bg=self.bg)
         hdr_util.pack(anchor="w", fill="x")
@@ -3939,14 +4018,16 @@ class App:
         tk.Label(titles, text="MUSIC SORTER", bg=self.bg, fg=self.accent, font=("Helvetica", 20, "bold")).pack(side="left")
 
         top_right_col = tk.Frame(top, bg=self.bg)
-        top_right_col.grid(row=0, column=2, sticky="ne")
-        right_stack = tk.Frame(top_right_col, bg=self.bg)
-        right_stack.pack(anchor="ne", fill="x")
+        top_right_col.grid(row=0, column=2, sticky="nsew")
+        # 2-column grid mirrors left column: Queue spans both columns (row 0),
+        # Swipe+Grid each take one column (row 1) — matching Guide+Settings layout.
+        right_grid = tk.Frame(top_right_col, bg=self.bg)
+        right_grid.pack(anchor="ne", fill="x")
+        right_grid.columnconfigure(0, weight=1, uniform="rg_col")
+        right_grid.columnconfigure(1, weight=1, uniform="rg_col")
 
-        queue_row = tk.Frame(right_stack, bg=self.bg)
-        queue_row.pack(fill="x", anchor="e")
         _o_q, self._tile_queue_inner = self._action_tile(
-            queue_row,
+            right_grid,
             "☰",
             "Queue",
             "[Q]",
@@ -3957,16 +4038,10 @@ class App:
             self._toggle_queue_panel_visibility,
             clickable_when_tiles_disabled=True,
         )
-        _o_q.pack(fill="x", expand=True, anchor="e")
+        _o_q.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, _ACTION_TILE_GRID_GAP_PX))
 
-        mode_outer = tk.Frame(right_stack, bg=self.bg)
-        mode_outer.pack(anchor="e", fill="x", pady=(_SECTION_GAP_Y, 0))
-        mode_tiles = tk.Frame(mode_outer, bg=self.bg)
-        mode_tiles.pack(anchor="e", fill="x")
-        for mc in range(2):
-            mode_tiles.columnconfigure(mc, weight=1, uniform="mode_pick_col")
         _o_mc, self._tile_mode_cleanup_inner = self._action_tile(
-            mode_tiles,
+            right_grid,
             "💘",
             "Swipe",
             "[S]",
@@ -3978,7 +4053,7 @@ class App:
             clickable_when_tiles_disabled=True,
         )
         _o_mg, self._tile_mode_genre_inner = self._action_tile(
-            mode_tiles,
+            right_grid,
             "🎵",
             "Grid",
             "[G]",
@@ -3989,8 +4064,8 @@ class App:
             lambda: self._set_sorting_mode("grid"),
             clickable_when_tiles_disabled=True,
         )
-        _o_mc.grid(row=0, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
-        _o_mg.grid(row=0, column=1, sticky="nsew")
+        _o_mc.grid(row=1, column=0, sticky="nsew", padx=(0, _ACTION_TILE_GRID_GAP_PX))
+        _o_mg.grid(row=1, column=1, sticky="nsew")
 
         player_card = tk.Frame(
             self._main_upper,
@@ -4094,16 +4169,45 @@ class App:
             anchor="center",
         )
         self.lbl_source_folder.pack(fill="x", pady=(0, 2))
+
+        # Path label left, volume control right — same horizontal row, no added height.
+        path_vol_row = tk.Frame(paths_strip, bg=self.bg)
+        path_vol_row.pack(fill="x")
         self.lbl_path = tk.Label(
-            paths_strip,
+            path_vol_row,
             text="",
             bg=self.bg,
             fg=self.muted,
-            wraplength=1100,
-            justify="center",
             font=("Helvetica", 10),
+            anchor="w",
         )
-        self.lbl_path.pack(fill="x", pady=(0, 0))
+        self.lbl_path.pack(side="left", fill="x", expand=True)
+
+        vol_frame = tk.Frame(path_vol_row, bg=self.bg)
+        vol_frame.pack(side="right", padx=(8, 0))
+        self._vol_icon = tk.Label(
+            vol_frame,
+            text="🔊",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 10),
+            cursor="",
+        )
+        self._vol_icon.pack(side="left", padx=(0, 3))
+        self._vol_canvas = tk.Canvas(
+            vol_frame,
+            width=110,
+            height=14,
+            bg=self.bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="",
+        )
+        self._vol_canvas.pack(side="left")
+        self._vol_canvas.bind("<Button-1>", self._on_vol_click)
+        self._vol_canvas.bind("<B1-Motion>", self._on_vol_drag)
+        self._vol_canvas.bind("<Configure>", lambda _e: self._redraw_vol_canvas())
+        self.root.after_idle(self._redraw_vol_canvas)
 
         undo_sc = "[⌘Z]" if sys.platform == "darwin" else "[Z]"
 
