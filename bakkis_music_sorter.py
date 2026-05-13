@@ -27,7 +27,7 @@ from typing import Callable, Literal, Optional, Union
 import tkinter as tk
 
 ButtonKind = Literal["panel", "accent", "archive", "favorite", "transport"]
-JumpUiKey = Union[int, Literal["outro", "pb_start"]]
+JumpUiKey = Union[int, Literal["outro"]]
 SortingMode = Literal["swipe", "grid"]
 TrackOrder = Literal["random", "in_order"]
 from mutagen import File as MutagenFile
@@ -35,13 +35,20 @@ from tkinter import filedialog, messagebox, simpledialog
 
 # Default landscape window; genre grid + right panel fit without main-window scrolling.
 _DEFAULT_WIN_W = 1300
-_DEFAULT_WIN_H = 940
 _WIN_MIN_W = 1200
-_WIN_MIN_H = 860
 # Shared horizontal inset for main-column blocks (header, progress, jump, transport, sort shells, footer).
 _CONTENT_GUTTER = 24
 # Fixed height for Swipe vs Grid swap zone — avoids vertical jump when switching modes (inner content fills).
 _ACTION_ZONE_FIXED_HEIGHT_PX = 280
+# Minimum pixel budget for the upper section (_main_upper: header + player + transport + jump).
+# Must be kept in sync if sections are added/removed from _main_upper.
+_UPPER_SECTION_MIN_H = 520
+# Minimum pixel reservation for the bottom dock row (footer rule + logo).
+_DOCK_MIN_H = 50
+# Window height derived from components so the minimum is never accidentally smaller than content.
+# +38 accounts for macOS titlebar / window chrome.
+_WIN_MIN_H = _UPPER_SECTION_MIN_H + _ACTION_ZONE_FIXED_HEIGHT_PX + _DOCK_MIN_H + 38  # ≈ 888
+_DEFAULT_WIN_H = _WIN_MIN_H + 60  # comfortable launch size above minimum
 # Vertical rhythm between major blocks in the main column.
 _SECTION_GAP_Y_TIGHT = 3
 _SECTION_GAP_Y = 6
@@ -2237,8 +2244,6 @@ class App:
 
     def _is_active_jump_label(self, lbl: tk.Label) -> bool:
         sel = self._jump_highlight_key
-        if lbl is self._jump_btn_pb_start and sel == "pb_start":
-            return True
         if lbl is self._jump_btn_outro and sel == "outro":
             return True
         for sec, btn in self._preset_jump_buttons.items():
@@ -2258,18 +2263,10 @@ class App:
         self._set_playback_start_line(self._playback_start_label)
         outro_sec = self._outro_jump_seconds()
         ds = self._desired_start_sec
-        used_config_start = self._duration_sec > 0.0 and self._duration_sec >= want + 30.0
         if self._duration_sec >= 3.0 and abs(ds - outro_sec) <= 0.75:
-            if used_config_start and abs(ds - want) <= 0.75:
-                self._jump_highlight_key = "pb_start"
-            else:
-                self._jump_highlight_key = "outro"
+            self._jump_highlight_key = "outro"
         else:
-            if used_config_start and abs(ds - want) <= 0.75:
-                self._jump_highlight_key = "pb_start"
-            else:
-                self._jump_highlight_key = int(round(ds))
-        self._sync_pb_start_jump_button_label()
+            self._jump_highlight_key = int(round(ds))
 
     def _apply_user_playback_start_change(self, new_sec: float) -> None:
         new_sec = float(new_sec)
@@ -2454,11 +2451,6 @@ class App:
                     continue
                 if b is self._jump_btn_minus or b is self._jump_btn_plus:
                     self._style_jump_label_idle(b)
-                elif b is self._jump_btn_pb_start:
-                    if sel == "pb_start":
-                        self._style_jump_label_active(b)
-                    else:
-                        self._style_jump_label_idle(b)
                 elif b is self._jump_btn_outro:
                     if sel == "outro":
                         self._style_jump_label_active(b)
@@ -2583,32 +2575,6 @@ class App:
 
     def jump_to_outro(self) -> None:
         self.jump_to(self._outro_jump_seconds(), jump_ui_key="outro")
-
-    def _jump_to_playback_start_slot(self) -> None:
-        if not self._tiles_enabled:
-            return
-        ds = float(self._desired_start_sec)
-        if self._absolute_jump_past_track_end(ds):
-            if self._jump_btn_pb_start is not None:
-                self._style_jump_label_error_hold(self._jump_btn_pb_start)
-            return
-        self.jump_to(ds, jump_ui_key="pb_start")
-
-    def _sync_pb_start_jump_button_label(self) -> None:
-        lb = self._jump_btn_pb_start
-        if lb is None:
-            return
-        part = str(self._playback_start_label)
-        base = f"START\n{part}"
-        lb._jump_base_text = base  # type: ignore[attr-defined]
-        lb._jump_time_only = part  # type: ignore[attr-defined]
-        if self._is_active_jump_label(lb):
-            return
-        idle_font = getattr(lb, "_jump_idle_font", ("Helvetica", 13, "bold"))
-        try:
-            lb.configure(text=base, font=idle_font)
-        except tk.TclError:
-            pass
 
     def _set_play_button_text(self, text: str) -> None:
         """Sync play/pause glyph + title on the transport tile; re-chrome the app."""
@@ -2759,8 +2725,6 @@ class App:
         if hint_suffix:
 
             def _hint_enter(_e: object) -> None:
-                if self._sorting_mode == "grid" and (hint_suffix or "").strip().isdigit():
-                    return
                 if self._is_active_jump_label(lbl):
                     return
                 try:
@@ -3486,7 +3450,6 @@ class App:
         self._tinder_kb_jump_error_digit = None
         self._tinder_kb_jump_error_plus30 = False
         self._reset_jump_time_button_captions()
-        self._sync_pb_start_jump_button_label()
         if self.lbl_mode_header is not None:
             self._refresh_mode_status_label()
         self._apply_mode_switch_chrome()
@@ -3829,6 +3792,8 @@ class App:
         # Main column + bottom dock: grid keeps the dock from overlapping the content area.
         self._main_scroll_outer.grid_columnconfigure(0, weight=1)
         self._main_scroll_outer.grid_rowconfigure(0, weight=1)
+        # Reserve dock row so it is never compressed away by the expanding panel above it.
+        self._main_scroll_outer.grid_rowconfigure(1, weight=0, minsize=_DOCK_MIN_H)
 
         self._main_panel = tk.Frame(self._main_scroll_outer, bg=self.bg)
         self._main_panel.grid(row=0, column=0, sticky="nsew")
@@ -3839,7 +3804,9 @@ class App:
         self._main_column = tk.Frame(self._main_panel, bg=self.bg)
         self._main_column.pack(fill="both", expand=True)
         self._main_column.columnconfigure(0, weight=1)
-        self._main_column.rowconfigure(0, weight=1)
+        # Row 0: upper section expands to fill available space but never shrinks below its content budget.
+        self._main_column.rowconfigure(0, weight=1, minsize=_UPPER_SECTION_MIN_H)
+        # Row 1: action swap zone is fixed-height; grid_propagate(False) on the shell enforces this.
         self._main_column.rowconfigure(1, weight=0, minsize=_ACTION_ZONE_FIXED_HEIGHT_PX)
         self._main_upper = tk.Frame(self._main_column, bg=self.bg)
         self._main_upper.grid(row=0, column=0, sticky="nsew")
@@ -4209,18 +4176,6 @@ class App:
 
         row1 = tk.Frame(jump, bg=self.bg)
         row1.pack(fill="x")
-        self._jump_btn_pb_start = self._jump_time_button(
-            row1,
-            "START\n0:00",
-            self._jump_to_playback_start_slot,
-            hint_suffix=None,
-            width=0,
-            tinder_target_sec=None,
-        )
-        self._jump_buttons.append(self._jump_btn_pb_start)
-        self._jump_btn_pb_start.pack(side="left", padx=(0, 4), fill="x", expand=True)
-        self._sync_pb_start_jump_button_label()
-
         for base, hint, sec in [
             ("0:00", "  1", 0),
             ("0:30", "  2", 30),
@@ -4294,6 +4249,14 @@ class App:
 
         self.cleanup_outer = tk.Frame(self._action_swap_host, bg=self.bg)
         self.cleanup_outer.pack(fill="both", expand=True, padx=_CONTENT_GUTTER, pady=(2, 4))
+        tk.Label(
+            self.cleanup_outer,
+            text="SORT TO",
+            bg=self.bg,
+            fg=self.accent,
+            font=("Helvetica Neue", 9, "bold"),
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 3))
         self.cleanup_actions = tk.Frame(self.cleanup_outer, bg=self.bg)
         self.cleanup_actions.pack(fill="both", expand=True)
 
@@ -4356,12 +4319,29 @@ class App:
         )
         o_f.grid(row=0, column=2, sticky="nsew", padx=_sgp, pady=_sgp)
 
+        tk.Label(
+            self.cleanup_outer,
+            text="Edit Swipe labels in Settings",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="center",
+        ).pack(fill="x", pady=(4, 0))
+
         # Aliases for keyboard flash (tile inner frames)
         self.btn_keep = self._tile_keep_inner  # type: ignore[assignment]
         self.btn_archive = self._tile_archive_inner  # type: ignore[assignment]
         self.btn_favorite = self._tile_favorite_inner  # type: ignore[assignment]
 
         self.genre_actions = tk.Frame(self._action_swap_host, bg=self.bg)
+        tk.Label(
+            self.genre_actions,
+            text="SORT TO",
+            bg=self.bg,
+            fg=self.accent,
+            font=("Helvetica Neue", 9, "bold"),
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 3))
         genre_grid = tk.Frame(self.genre_actions, bg=self.bg)
         genre_grid.pack(fill="both", expand=True)
         for gr in range(3):
@@ -4388,12 +4368,21 @@ class App:
                 sc_m,
                 lambda idx=i: self.sort_current_genre(idx),
             )
-            o_g.grid(row=row, column=col, sticky="nsew", padx=_ACTION_TILE_GRID_GAP_PX, pady=_ACTION_TILE_GRID_GAP_PX)
+            o_g.grid(row=row, column=col, sticky="nsew", padx=_SWIPE_SORT_GRID_PAD, pady=_SWIPE_SORT_GRID_PAD)
             name_lab = getattr(inn_g, "_genre_name_label", None)
             if isinstance(name_lab, tk.Label):
                 self._genre_title_labels.append(name_lab)
             self._genre_tile_inners.append(inn_g)
         self._apply_genre_tile_colors()
+
+        tk.Label(
+            self.genre_actions,
+            text="Edit grid labels in Settings",
+            bg=self.bg,
+            fg=self.muted,
+            font=("Helvetica", 9),
+            anchor="center",
+        ).pack(fill="x", pady=(4, 0))
 
         # Grid Mode: genre grid is the sole action area — no KAF row.
 
