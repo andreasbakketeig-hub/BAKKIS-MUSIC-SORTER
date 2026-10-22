@@ -11,7 +11,7 @@ import re
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional, TypeVar
 
 from .config import safe_segment
 
@@ -26,6 +26,8 @@ CLEANUP_IGNORABLE_NAMES = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
 _DATE_PREFIXED_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2} - (.+)$")
 
 PROGRESS_EVERY = 40
+
+T = TypeVar("T")
 
 
 def is_audio_path(path: Path) -> bool:
@@ -174,20 +176,22 @@ class ScanJob:
 # --------------------------------------------------------------------------- ordering
 
 
-def _in_order_key(p: Path) -> str:
+def _in_order_key(p) -> str:
     return str(p).lower()
 
 
-def order_tracks(paths: Iterable[Path], order: str, rng: Optional[random.Random] = None) -> list[Path]:
+def order_tracks(paths: Iterable[T], order: str, rng: Optional[random.Random] = None, key: Callable[[T], str] = _in_order_key) -> list[T]:
     out = list(paths)
     if order == "random":
         (rng or random).shuffle(out)
         return out
-    return sorted(out, key=_in_order_key)
+    return sorted(out, key=key)
 
 
-def reorder_keep_current(queue: list[Path], order: str, rng: Optional[random.Random] = None) -> list[Path]:
-    """Reorder a queue without changing its head (the current track)."""
+def reorder_keep_current(
+    queue: list[T], order: str, rng: Optional[random.Random] = None, key: Callable[[T], str] = _in_order_key
+) -> list[T]:
+    """Reorder a queue without changing its head (the current track). ``key`` maps items to a path string."""
     if not queue:
         return []
     current = queue[0]
@@ -196,7 +200,7 @@ def reorder_keep_current(queue: list[Path], order: str, rng: Optional[random.Ran
         (rng or random).shuffle(rest)
         return [current] + rest
     # In order: continue alphabetically from the current track, wrapping around.
-    ordered = sorted(queue, key=_in_order_key)
+    ordered = sorted(queue, key=key)
     i = ordered.index(current)
     return ordered[i:] + ordered[:i]
 
