@@ -1,0 +1,64 @@
+{
+  "presets": [
+    {
+      "id": "c145950aff794fc58cf8468d63381f38",
+      "name": "DJ Sorting",
+      "mode": "swipe",
+      "labels": [
+        "Keep",
+        "Archive",
+        "Favorite"
+      ],
+      "colors": [
+        "#00D6B4",
+        "#FF2D55",
+        "#FFF200"
+      ],
+      "folders": [
+        "KEEP",
+        "ARCHIVE",
+        "FAVORITES"
+      ]
+    },
+    {
+      "id": "bc5f5cebff104560ad7569d323056f47",
+      "name": "Genre Sorting",
+      "mode": "grid",
+      "labels": [
+        "House",
+        "Tech House",
+        "Deep House",
+        "Minimal",
+        "Afro House",
+        "Melodic",
+        "Techno",
+        "Garage",
+        "Other"
+      ],
+      "colors": [
+        "#00D6B4",
+        "#18A0FB",
+        "#7C5CFF",
+        "#8A8F98",
+        "#FF7A1A",
+        "#D65CFF",
+        "#FF2D55",
+        "#FFF200",
+        "#2A2F36"
+      ],
+      "folders": [
+        "House",
+        "Tech House",
+        "Deep House",
+        "Minimal",
+        "Afro House",
+        "Melodic",
+        "Techno",
+        "Garage",
+        "Other"
+      ]
+    }
+  ],
+  "active_swipe_preset_id": "c145950aff794fc58cf8468d63381f38",
+  "active_grid_preset_id": "bc5f5cebff104560ad7569d323056f47"
+}

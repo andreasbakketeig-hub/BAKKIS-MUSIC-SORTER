@@ -1,3 +1,7 @@
 {
-  "track_order": "random"
+  "track_order_mode": "random",
+  "track_order": "random",
+  "include_subfolders": true,
+  "auto_load_default_folder": true,
+  "default_folder_path": "/Users/andreasbakketeig/Desktop/MUSIC SORTER TEST"
 }
