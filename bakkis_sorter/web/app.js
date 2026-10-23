@@ -1276,9 +1276,11 @@ function setupTrackpadFlick() {
     if (now < lockedUntil) return;
     if (now - lastT > 250) acc = 0;
     lastT = now;
-    acc += e.deltaX;
+    // With macOS "natural scrolling" (the default) fingers moving right give negative deltaX; without it
+    // positive. WebKit says which via webkitDirectionInvertedFromDevice, so the card always follows the fingers.
+    const natural = e.webkitDirectionInvertedFromDevice !== false;
+    acc += natural ? e.deltaX : -e.deltaX;
     if (Math.abs(acc) > 140) {
-      // macOS natural scrolling: fingers moving right produce negative deltaX.
       const dir = acc < 0 ? "right" : "left";
       acc = 0;
       lockedUntil = now + 700;
