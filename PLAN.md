@@ -1,6 +1,6 @@
 # BAKKIS MUSIC SORTER v2 — rebuild plan
 
-Status: planned, not started. Written 2026-10-23 after a full review of v1 (`bakkis_music_sorter.py`, Tkinter, 8,634 lines).
+Status: milestones 1–6 done on `v2-pywebview` (plus a review pass); next: features below, then packaging. Written 2026-10-23 after a full review of v1 (`bakkis_music_sorter.py`, Tkinter, 8,634 lines).
 Owner: Andreas (BAKKIS). Communicate with him in Norwegian; code, comments and commits in English.
 
 ## Goal
@@ -18,6 +18,12 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 | Platform | **macOS only.** |
 | Playback | **Drop mpv.** Play audio in WebKit via `<audio>` served by a local HTTP server with Range support. Removes the mpv/dylib packaging problem and makes seeking instant. |
 | Branching | Build on a new branch `v2-pywebview` off `main`. Keep v1 working until v2 reaches parity. |
+| Language | **English everywhere**: UI, README, docs. No other languages for now. |
+| Signing | Build script supports **both**: unsigned (default, free) and Developer ID signed + notarized (when an Apple Developer account exists). |
+| Architecture | **Universal** app (Apple Silicon + Intel), built with python.org Python 3.12 universal2. Minimum **macOS 13 Ventura**. |
+| Distribution | **GitHub Releases** (zip per version). App name "BAKKIS MUSIC SORTER", version 2.0.0, bundle id `com.bakkis.music-sorter`. |
+| License | Proposed: **open source, MIT** (app doubles as a promo tool). BAKKIS name and logo excluded from the license. *Awaiting Andreas' confirmation.* Audit git history for personal data before the repo goes public. |
+| Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)
 
@@ -162,13 +168,23 @@ Panels & stats
 - Proper `.icns` icon from the logo.
 - New `build_mac_app.sh`; delete the stale `.spec` (or regenerate it).
 - Distribute as zip; document right-click → Open for unsigned apps. Optional later: Developer ID signing + notarization.
-- Rewrite `PACKAGING.md` and add a `README.md` (Norwegian user section + English dev section).
+- Rewrite `PACKAGING.md` and add a `README.md` (English only: user section, install incl. Gatekeeper steps, contact, license/brand note, dev section).
 
 ## Repo hygiene
 
 - `.gitignore`: add `settings.json`, `bakkis_settings.json` if they stay user-specific; keep `dist/`, `build/` ignored.
 - Remove `_bakkis_sort_click.wav` from git (sound is synthesized in v2).
 - Decide on PR #1 (`AGENTS.md`) — merge or close; this file + `CLAUDE.md` supersede it.
+
+## Features added after the review (all approved by Andreas, 2026-10-23)
+
+1. **Export playlists for Rekordbox / Serato**: M3U8 per destination folder (and Rekordbox XML) after or during a session.
+2. **History across sessions**: a view over the journal with "put back" for past sessions; never overwrites.
+3. **Filter / order the queue by BPM or key** (BPM range, Camelot order).
+4. **Report a problem**: prefilled e-mail to bakkis@bakkis.com with version, macOS and a recent log excerpt.
+5. **Update check**: on startup, compare with the latest GitHub Release and show a notice (no auto-update; can be turned off; documented in README since it uses the network).
+6. **Duplicate warning**: flag tracks that already exist in BAKKIS_SORTED (title + artist + duration).
+7. **Search the queue** by name in the queue drawer.
 
 ## Milestones
 
@@ -178,7 +194,8 @@ Panels & stats
 4. Frontend: main screen, playback, preload, waveform, swipe + grid, keyboard, toasts. Measure: sort → next track audible < 150 ms.
 5. Drawers/overlays: queue, settings, preset/genre editors, guide, onboarding, session end.
 6. `app.py` (pywebview), folder dialog, drag-and-drop, fullscreen, reveal in Finder.
-7. Packaging + README/PACKAGING; test on a clean user account without Homebrew.
+7. Features 1–7 above (approved after the review pass).
+7b. Packaging (universal, unsigned + signed/notarized paths) + README/PACKAGING; test on a clean user account without Homebrew.
 8. Parity pass against the checklist; then merge to `main` and tag `v2.0.0`.
 
 ## Testing
