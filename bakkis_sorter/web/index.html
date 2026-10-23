@@ -35,7 +35,10 @@
   <section class="screen screen-empty" id="screen-empty">
     <div class="empty-inner">
       <h1>Sort your music, one track at a time</h1>
-      <button type="button" class="primary-btn" id="btn-choose">Choose music folder</button>
+      <div class="row-btns">
+        <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
+        <button type="button" class="primary-btn" id="btn-choose">Choose music folder</button>
+      </div>
       <p class="muted">or drop a folder anywhere in this window</p>
       <p class="muted small">Sorted files go to <code>BAKKIS_SORTED/…</code> inside the folder you choose. Nothing is deleted.</p>
       <p class="warn small" id="empty-message" hidden></p>
@@ -92,8 +95,10 @@
     <div class="empty-inner">
       <h1>All done</h1>
       <div class="done-stats" id="done-stats"></div>
+      <p class="muted small" id="done-note"></p>
       <div class="row-btns">
         <button type="button" class="ghost-btn" id="btn-done-undo">Undo last (Z)</button>
+        <button type="button" class="ghost-btn" id="btn-done-reveal">Reveal in Finder</button>
         <button type="button" class="primary-btn" id="btn-done-load">Load another folder</button>
       </div>
     </div>
@@ -114,8 +119,34 @@
   </div>
 </div>
 
+<aside class="drawer" id="drawer-queue" hidden aria-label="Queue">
+  <div class="drawer-head"><h2>Queue</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
+  <div class="drawer-section">
+    <h3>Last actions</h3>
+    <div id="queue-history"></div>
+  </div>
+  <div class="drawer-section grow">
+    <h3>Up next <span class="muted" id="queue-count"></span> <span class="muted small">· click to play next</span></h3>
+    <div class="queue-list" id="queue-list"><div class="queue-inner" id="queue-inner"></div></div>
+  </div>
+</aside>
+
+<aside class="drawer drawer-wide" id="drawer-settings" hidden aria-label="Settings">
+  <div class="drawer-head"><h2 id="settings-title">Settings</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
+  <div class="drawer-scroll" id="settings-body"></div>
+</aside>
+
+<div class="guide-backdrop" id="guide" hidden>
+  <div class="guide" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+    <div class="drawer-head"><h2>Shortcuts</h2><button type="button" class="icon-btn" id="guide-close" aria-label="Close">✕</button></div>
+    <div class="guide-body" id="guide-body"></div>
+    <label class="set-check guide-foot"><input type="checkbox" id="guide-startup"><span>Show this guide on startup</span></label>
+  </div>
+</div>
+
 <div class="drop-overlay" id="drop-overlay" hidden><div>Drop folder to load</div></div>
 
+<script src="/static/panels.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

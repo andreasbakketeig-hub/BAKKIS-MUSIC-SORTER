@@ -205,3 +205,22 @@ def test_presets_and_settings_over_api(app):
     assert state["presets"]["active_swipe_preset_id"] == pid
     assert api(server, "preset_delete", preset_id="missing")[0] == 409
     assert api(server, "set_settings", volume=12)[1]["result"]["volume"] == 12
+
+
+def test_queue_paging_and_reveal(app, music, monkeypatch):
+    backend, server = app
+    for i in range(5):
+        make_mp3(music / f"{i}.mp3")
+    api(server, "set_settings", track_order="in_order")
+    load(server, music)
+    page = api(server, "queue", offset=1, limit=2)[1]["result"]
+    assert page["total"] == 4 and [t["name"] for t in page["items"]] == ["2.mp3", "3.mp3"]
+    assert page["items"][0]["index"] == 1
+    opened = []
+    monkeypatch.setattr(backend, "_open_in_finder", opened.append)
+    assert api(server, "reveal")[1]["result"] == str(music.resolve())  # BAKKIS_SORTED not created yet
+    assert opened == [music.resolve()]
+    state = api(server, "state")[1]["result"]
+    assert state["default_folder_exists"] is False
+    api(server, "set_settings", default_folder_path=str(music))
+    assert api(server, "state")[1]["result"]["default_folder_exists"] is True

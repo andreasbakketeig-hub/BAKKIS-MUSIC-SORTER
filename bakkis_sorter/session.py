@@ -490,6 +490,14 @@ class Session:
                     return
             raise SessionError("Track not in queue")
 
+    def queue_slice(self, offset: int = 0, limit: int = 100) -> dict:
+        """A page of upcoming tracks (the queue without the current track)."""
+        offset, limit = max(0, int(offset)), max(0, min(int(limit), 500))
+        with self.lock:
+            upcoming = self.queue[1:]
+            items = [dict(self._track_public(t), index=offset + i) for i, t in enumerate(upcoming[offset : offset + limit])]
+            return {"total": len(upcoming), "offset": offset, "items": items}
+
     # ------------------------------------------------------------------ stats
 
     def folder_count(self, preset: dict, slot: int) -> int:

@@ -496,6 +496,7 @@ function renderAll() {
     $("scan-root").textContent = S.scan.root || "";
   } else if (!sess) {
     setScreen("empty");
+    renderEmpty();
   } else if (!sess.current) {
     setScreen("done");
     renderDone();
@@ -524,6 +525,9 @@ function renderTopbar() {
       if (act && p.id === act.id) o.selected = true;
       sel.appendChild(o);
     }
+    const edit = el("option", null, "Edit presets…");
+    edit.value = "__edit__";
+    sel.appendChild(edit);
   }
   const sess = S.session;
   if (sess && sess.total) {
@@ -676,24 +680,58 @@ function fillCard(track, meta) {
   });
 }
 
+function renderEmpty() {
+  const path = S.settings && S.settings.default_folder_path;
+  const btn = $("btn-load-default");
+  btn.hidden = !(path && S.defaultFolderExists);
+  if (path) btn.textContent = `Load ${path.split("/").filter(Boolean).pop()}`;
+  const msg = $("empty-message");
+  if (path && !S.defaultFolderExists) {
+    msg.textContent = `Default folder not found: ${path}. Choose a folder, or change it in Settings.`;
+    msg.hidden = false;
+  }
+}
+
+/** Session summary: one row per destination folder, plus skipped and time spent. */
 function renderDone() {
   const box = $("done-stats");
   box.textContent = "";
   const sess = S.session;
   if (!sess) return;
-  const labelFor = (key) => {
-    if (key === "skip") return "Skipped";
-    const [pid, slot] = key.split(":");
-    const p = S.presets.presets.find((q) => q.id === pid);
-    return p ? `${p.labels[Number(slot)]} · ${p.name}` : key;
-  };
+  const rows = [];
   for (const [k, v] of Object.entries(sess.counts)) {
     if (!v) continue;
-    box.appendChild(el("div", null, labelFor(k)));
-    box.appendChild(el("div", "n", String(v)));
+    if (k === "skip") { rows.push({ label: "Skipped", sub: "", n: v, color: "#8A8F98", order: 99 }); continue; }
+    const [pid, slot] = k.split(":");
+    const p = S.presets.presets.find((q) => q.id === pid);
+    rows.push({
+      label: p ? p.labels[Number(slot)] : k,
+      sub: p ? p.name : "",
+      n: v,
+      color: p ? p.colors[Number(slot)] : "#8A8F98",
+      order: Number(slot),
+    });
   }
+  rows.sort((a, b) => (a.order === 99) - (b.order === 99) || a.sub.localeCompare(b.sub) || a.order - b.order);
+  for (const r of rows) {
+    const name = el("div", "done-label");
+    const dot = el("i", "dot");
+    dot.style.background = r.color;
+    name.appendChild(dot);
+    name.appendChild(document.createTextNode(r.label));
+    if (r.sub) name.appendChild(el("span", "muted small", ` · ${r.sub}`));
+    box.appendChild(name);
+    box.appendChild(el("div", "n", String(r.n)));
+  }
+  const total = rows.reduce((a, r) => a + r.n, 0);
+  box.appendChild(el("div", "done-sep"));
+  box.appendChild(el("div", "done-sep"));
+  box.appendChild(el("div", null, "Total"));
+  box.appendChild(el("div", "n", String(total)));
   box.appendChild(el("div", "muted", "Time"));
   box.appendChild(el("div", "n muted", fmtTime(sess.elapsed)));
+  const verb = S.settings && S.settings.file_operation === "copy" ? "copied" : "moved";
+  $("done-note").textContent = total ? `Files were ${verb} into BAKKIS_SORTED inside ${sess.root.split("/").filter(Boolean).pop()}.` : "";
 }
 
 // ------------------------------------------------------------------ session updates
@@ -704,6 +742,7 @@ function applySession(snap) {
   S.session = snap;
   if (snap && snap.last_notice > S.noticeSeq) pollNotices();
   renderAll();
+  Drawers.onSession();
   const cur = snap && snap.current;
   if (!cur) return;
   if (cur.id !== prevId || cur.id !== Player.curId) {
@@ -723,6 +762,8 @@ async function refreshState() {
   S.settings = st.settings;
   S.presets = st.presets;
   S.scan = st.scan;
+  S.version = st.version;
+  S.defaultFolderExists = st.default_folder_exists;
   applySession(st.session);
   return st;
 }
@@ -854,15 +895,18 @@ async function setOrder(order) {
 
 // ------------------------------------------------------------------ folder loading
 
-async function chooseFolder() {
-  let path = null;
+/** Native folder dialog in the app; a path prompt in browser dev mode. Returns a path or null. */
+async function pickFolderPath() {
   try {
-    path = await api("choose_folder");
+    return await api("choose_folder");
   } catch (e) {
-    if (e.status !== 404) { toast(e.message, { level: "error" }); return; }
-    // Browser dev mode: no native dialog.
-    path = window.prompt("Music folder path (use a TEST folder):", (S.settings && S.settings.default_folder_path) || "");
+    if (e.status !== 404) { toast(e.message, { level: "error" }); return null; }
+    return window.prompt("Music folder path (use a TEST folder):", (S.settings && S.settings.default_folder_path) || "") || null;
   }
+}
+
+async function chooseFolder() {
+  const path = await pickFolderPath();
   if (path) loadFolder(path);
 }
 
@@ -941,6 +985,14 @@ function onKey(e) {
     else if (e.key === "Enter") { e.preventDefault(); modal.confirm(); }
     return;
   }
+  if (Guide.isOpen) {
+    if (["Escape", "h", "H", "?"].includes(e.key)) { e.preventDefault(); Guide.close(); }
+    return;
+  }
+  if (Drawers.open === "settings") {
+    if (e.key === "Escape") { e.preventDefault(); Drawers.close(); }
+    return; // the settings form owns the keyboard
+  }
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" && e.target.type !== "range" || tag === "TEXTAREA") return;
   if (tag === "SELECT") return;
@@ -955,10 +1007,15 @@ function onKey(e) {
   if (meta && key === "f") { e.preventDefault(); toggleFullscreen(); return; }
   if (meta || ctrl || e.altKey) return; // leave other system shortcuts alone
 
-  if (key === "Escape") { if (document.fullscreenElement) document.exitFullscreen(); else api("exit_fullscreen").catch(() => {}); return; }
+  if (key === "Escape") {
+    if (Drawers.open) Drawers.close();
+    else if (document.fullscreenElement) document.exitFullscreen();
+    else api("exit_fullscreen").catch(() => {});
+    return;
+  }
   if (key === "Tab") { e.preventDefault(); body.classList.toggle("focus"); return; }
-  if (key === "h" || key === "?") { e.preventDefault(); toast("Shortcut guide arrives in the next milestone"); return; }
-  if (key === "q") { e.preventDefault(); toast("Queue drawer arrives in the next milestone"); return; }
+  if (key === "h" || key === "?") { e.preventDefault(); Guide.toggle(); return; }
+  if (key === "q") { e.preventDefault(); Drawers.toggle("queue"); return; }
 
   const hasTrack = !!(S.session && S.session.current);
   if (!hasTrack) return;
@@ -1148,10 +1205,21 @@ async function boot() {
   $("btn-choose").addEventListener("click", chooseFolder);
   $("btn-done-load").addEventListener("click", chooseFolder);
   $("btn-done-undo").addEventListener("click", undo);
-  $("btn-queue").addEventListener("click", () => toast("Queue drawer arrives in the next milestone"));
-  $("btn-settings").addEventListener("click", () => toast("Settings arrive in the next milestone"));
-  $("btn-help").addEventListener("click", () => toast("Shortcut guide arrives in the next milestone"));
+  setupPanels();
+  $("btn-queue").addEventListener("click", () => Drawers.toggle("queue"));
+  $("btn-settings").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.toggle("settings"); });
+  $("btn-help").addEventListener("click", () => Guide.toggle());
+  $("btn-done-reveal").addEventListener("click", () => api("reveal").catch((e) => toast(e.message, { level: "error" })));
+  $("btn-load-default").addEventListener("click", () => S.settings.default_folder_path && loadFolder(S.settings.default_folder_path));
   $("preset-select").addEventListener("change", async (e) => {
+    if (e.target.value === "__edit__") {
+      e.target.blur();
+      renderTopbar();
+      SettingsDrawer.view = "main";
+      SettingsDrawer.scrollTo = "presets";
+      Drawers.show("settings");
+      return;
+    }
     try {
       await api("preset_select", { preset_id: e.target.value });
       await refreshState();
@@ -1188,6 +1256,8 @@ async function boot() {
   } else if (st.session) {
     refreshCountsSoon(0);
   }
+  if (S.settings.show_queue_panel_on_startup && S.session) Drawers.show("queue");
+  if (S.settings.show_help_guide_on_startup) Guide.show();
   poll();
 }
 

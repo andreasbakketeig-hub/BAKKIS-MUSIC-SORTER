@@ -7,6 +7,7 @@ Native window actions (folder dialog, fullscreen, reveal in Finder) are added by
 from __future__ import annotations
 
 import inspect
+import subprocess
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -98,7 +99,12 @@ class AppBackend:
                 "presets": self.presets.data,
                 "scan": dict(self.scan),
                 "session": snap,
+                "default_folder_exists": self._default_folder_exists(),
             }
+
+    def _default_folder_exists(self) -> bool:
+        p = self.settings.get("default_folder_path")
+        return bool(p) and Path(p).expanduser().is_dir()
 
     def api_notices(self, since: int = 0) -> list:
         s = self.session
@@ -218,6 +224,22 @@ class AppBackend:
     def api_play_next(self, track_id: str) -> dict:
         self._session().play_next(str(track_id))
         return self._after_queue_change()
+
+    def api_queue(self, offset: int = 0, limit: int = 100) -> dict:
+        s = self.session
+        return s.queue_slice(offset, limit) if s else {"total": 0, "offset": 0, "items": []}
+
+    def api_reveal(self, target: str = "sorted") -> str:
+        """Open the BAKKIS_SORTED folder (or the music folder) in Finder."""
+        s = self._session()
+        path = library.sorted_root(s.music_root)
+        if target != "sorted" or not path.is_dir():
+            path = s.music_root
+        self._open_in_finder(path)
+        return str(path)
+
+    def _open_in_finder(self, path: Path) -> None:
+        subprocess.Popen(["open", str(path)])
 
     def api_folder_counts(self, mode: str) -> list:
         s = self._session()
