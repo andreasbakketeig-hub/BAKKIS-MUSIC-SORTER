@@ -152,6 +152,16 @@ Click anywhere on the waveform to jump there.
 - **Already sorted?** If the same track (title, artist and length) is already somewhere in `BAKKIS_SORTED`, the card shows *Already in …*.
 - Titles are cleaned up for display (download-site stamps like `myfreemp3.vip`, `%28Original Mix%29`, key/BPM prefixes). Your files and tags are never changed.
 
+### Hands-free with macOS Voice Control
+
+Everything in the app works from the keyboard, so macOS **Voice Control** can drive it without any extra setup:
+
+1. Open **System Settings → Accessibility → Voice Control** and turn it on.
+2. With the app in front, say for example *"Press right arrow"* (Keep), *"Press left arrow"* (Archive) or *"Press Z"* (undo).
+3. For shorter commands, click **Commands…**, then **+**. Set *When I say* to "Keep", *While using* to BAKKIS MUSIC SORTER, and *Perform* to **Press Keyboard Shortcut** → **→**. Do the same for "Archive" (←), "Skip" (↓), "Favorite" (↑) and "Undo" (Z).
+
+Use headphones: with speakers the microphone also hears the music, and vocals can be mistaken for commands. Anything sorted by mistake is one **Z** away from coming back.
+
 ---
 
 ## Advanced features
