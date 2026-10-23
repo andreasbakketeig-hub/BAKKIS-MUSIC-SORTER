@@ -567,3 +567,44 @@ body.is-empty .footer-slogan { visibility: hidden; }
 
 /* departing copy of the track card (see flyOutCard) */
 .card-ghost { position: fixed; margin: 0; z-index: 15; pointer-events: none; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45); }
+
+/* ---------------------------------------------------------------- listen mode */
+
+.mode-switch button[hidden] { display: none; }
+.listen-controls { display: none; flex-direction: column; gap: 12px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+body.mode-listen .listen-controls { display: flex; }
+body.mode-listen .tiles,
+body.mode-listen .coach,
+body.mode-listen .preset-select,
+body.mode-listen .top-progress { display: none !important; }
+.listen-buttons { display: flex; align-items: center; justify-content: center; gap: 16px; }
+.listen-btn {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text);
+}
+.listen-btn:hover { filter: brightness(1.15); }
+.listen-btn svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
+.listen-btn.big { width: 72px; height: 72px; background: var(--accent); color: #001a15; border-color: transparent; }
+.listen-btn.big svg { width: 28px; height: 28px; }
+.listen-btn .i-pause { display: none; }
+body.playing .listen-btn .i-pause { display: block; }
+body.playing .listen-btn .i-play { display: none; }
+.listen-btn.like svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
+.listen-btn.like.on { color: var(--danger); }
+.listen-btn.like.on svg { fill: currentColor; }
+.listen-btn.like.pulse { animation: like-pulse 0.35s ease; }
+@keyframes like-pulse { 50% { transform: scale(1.18); } }
+.listen-info { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: var(--fs-s); }
+.listen-info .spacer { flex: 1; }
+.listen-note { margin: 0; text-align: center; }
+.listen-picker { width: min(520px, 92vw); }
+.listen-picker-body { padding: 0 24px 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.listen-source { justify-content: flex-start; padding: 4px 0; }
+.listen-source span:first-of-type { flex: 1; }
+.listen-snippet-row { display: flex; align-items: center; gap: 8px; padding-left: 24px; }
+.listen-snippet-row .set-select { width: auto; padding: 4px 8px; }
+.listen-picker-foot { padding: 16px 24px; justify-content: flex-end; }

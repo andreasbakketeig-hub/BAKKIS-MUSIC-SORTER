@@ -71,7 +71,7 @@ def test_restore_copy_deletes_only_the_copy(music, journal):
     s.close()
     (item,) = items(history.load(journal))
     assert history.restore(journal, [item["id"]])[0]["ok"]
-    assert a.exists() and not (music.resolve() / "BAKKIS_SORTED" / "DJ Sorting" / "Keep" / "a.mp3").exists()
+    assert a.exists() and not (music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Keep" / "a.mp3").exists()
     assert load_copied_index(music) == {}
 
 

@@ -803,6 +803,9 @@ const Guide = {
       ["Session", [["Z  or  ⌘Z", "Undo last"], ["⇧⌘Z  or  ⌃Z", "Undo all (asks first)"], ["U  /  O", "Random order / in order"], ["S  /  G", "Swipe / Grid mode"]]],
       ["Window", [["Q", "Queue"], ["H  or  ?", "This guide"], ["Tab", "Focus mode"], ["⌘F", "Fullscreen"], ["Esc", "Close / exit fullscreen"]]],
     ];
+    if (S.settings && S.settings.advanced_features) {
+      groups.push(["Listen mode (advanced)", [["L", "Start / stop listening"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Save to “Liked while listening”"], ["Space", "Play / pause"]]]);
+    }
     for (const [title, rows] of groups) {
       const g = el("div", "guide-group");
       g.appendChild(el("h3", null, title));

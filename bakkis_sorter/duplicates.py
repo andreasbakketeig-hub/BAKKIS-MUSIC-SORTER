@@ -92,7 +92,7 @@ class DuplicateIndex:
                 continue
             rel = Path(library.relative_posix(p, library.sorted_root(self.music_root)))
             parts = [x for x in rel.parent.parts if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", x)]
-            # "<preset>/<folder>" -> "Keep · DJ Sorting"
+            # "<preset>/<folder>" -> "Keep · Quick Sort"
             folder = " · ".join(reversed(parts[:2])) if parts else rel.parent.as_posix()
             return {"path": str(p), "folder": folder}
         return None

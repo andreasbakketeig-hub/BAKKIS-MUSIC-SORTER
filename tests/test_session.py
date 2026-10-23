@@ -43,7 +43,7 @@ def make_session(music, settings, tmp_path):
 
 
 def keep_dir(music):
-    return music.resolve() / "BAKKIS_SORTED" / "DJ Sorting" / "Keep"
+    return music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Keep"
 
 
 def journal_lines(tmp_path):
@@ -81,7 +81,7 @@ def test_dated_sessions_and_grid(music, make_session, settings):
     s = make_session([a])
     s.sort(s.current.id, "grid", 6)
     s.flush()
-    assert (music.resolve() / "BAKKIS_SORTED" / "Genre Sorting" / "2026-10-23" / "Techno" / "a.mp3").exists()
+    assert (music.resolve() / "BAKKIS_SORTED" / "Genre Sort" / "2026-10-23" / "Techno" / "a.mp3").exists()
 
 
 def test_skip_preserves_subfolders(music, make_session):
@@ -89,7 +89,7 @@ def test_skip_preserves_subfolders(music, make_session):
     s = make_session([a])
     s.skip(s.current.id, "swipe")
     s.flush()
-    assert (music.resolve() / "BAKKIS_SORTED" / "DJ Sorting" / "Skipped" / "Promos" / "Label" / "a.mp3").exists()
+    assert (music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Skipped" / "Promos" / "Label" / "a.mp3").exists()
 
 
 def test_stale_track_id_and_bad_slot_rejected(music, make_session):
@@ -262,7 +262,7 @@ def test_copy_mode_keeps_source_and_indexes(music, make_session, settings):
     s.flush()
     assert a.exists() and (keep_dir(music) / "a.mp3").exists()
     idx = load_copied_index(music)
-    assert idx["Sub/a.mp3"]["dest"] == "BAKKIS_SORTED/DJ Sorting/Keep/a.mp3"
+    assert idx["Sub/a.mp3"]["dest"] == "BAKKIS_SORTED/Quick Sort/Keep/a.mp3"
     assert filter_already_copied([a, b], music) == [b]
     # A replaced source (different size) shows up again.
     a.write_bytes(b"a different, longer file")

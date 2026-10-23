@@ -20,6 +20,7 @@
   <div class="mode-switch" role="tablist" aria-label="Sorting mode">
     <button type="button" data-mode="swipe" role="tab">Swipe</button>
     <button type="button" data-mode="grid" role="tab">Grid</button>
+    <button type="button" data-mode="listen" role="tab" hidden title="Listen without sorting (L)">Listen</button>
   </div>
   <div class="top-progress" aria-hidden="true"><div id="top-progress-fill"></div></div>
   <div class="count" id="count"></div>
@@ -97,6 +98,28 @@
           <input type="range" id="volume" min="0" max="100" step="1" aria-label="Volume">
         </label>
       </div>
+    </div>
+
+    <div class="listen-controls" id="listen-controls">
+      <div class="listen-buttons">
+        <button type="button" class="listen-btn" id="listen-prev" title="Previous (←)"><svg viewBox="0 0 24 24"><path d="M18 6 9 12l9 6zM6 6v12"/></svg></button>
+        <button type="button" class="listen-btn big" id="listen-play" title="Play / pause (Space)">
+          <svg viewBox="0 0 24 24" class="i-play"><path d="M8 5v14l11-7z"/></svg>
+          <svg viewBox="0 0 24 24" class="i-pause"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></svg>
+        </button>
+        <button type="button" class="listen-btn" id="listen-next" title="Next (→)"><svg viewBox="0 0 24 24"><path d="m6 6 9 6-9 6zM18 6v12"/></svg></button>
+        <button type="button" class="listen-btn like" id="listen-like" title="Save to “Liked while listening” (↑ or F)"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></button>
+      </div>
+      <div class="listen-info">
+        <span id="listen-from"></span>
+        <span class="muted" id="listen-pos"></span>
+        <span class="muted" id="listen-mode-label"></span>
+        <span class="muted" id="listen-countdown"></span>
+        <span class="spacer"></span>
+        <button type="button" class="link-btn" id="listen-change">Change folders</button>
+        <button type="button" class="ghost-btn small-btn" id="listen-exit">Back to sorting (L)</button>
+      </div>
+      <p class="muted small listen-note">Listening never moves or copies files. ↑ saves the track to a playlist in BAKKIS_SORTED/_Playlists.</p>
     </div>
 
     <div class="coach" id="coach" hidden>
@@ -194,7 +217,32 @@
 
 <div class="drop-overlay" id="drop-overlay" hidden><div>Drop folder to load</div></div>
 
+<div class="guide-backdrop" id="listen-picker" hidden>
+  <div class="guide listen-picker" role="dialog" aria-modal="true" aria-label="Listen">
+    <div class="drawer-head"><h2>Listen</h2></div>
+    <div class="listen-picker-body">
+      <p class="muted small">Play through your music without sorting. Nothing is moved or copied.</p>
+      <h3 class="set-section">Folders</h3>
+      <div id="listen-sources"></div>
+      <h3 class="set-section">Play</h3>
+      <label class="set-check"><input type="radio" name="listen-style" id="listen-style-snippet" checked><span>Snippets from the middle of each track, with a crossfade</span></label>
+      <div class="listen-snippet-row">
+        <span class="muted small">Length</span>
+        <select class="set-select" id="listen-snippet">
+          <option value="30">30 s</option><option value="45">45 s</option><option value="60">60 s</option><option value="90">90 s</option>
+        </select>
+      </div>
+      <label class="set-check"><input type="radio" name="listen-style" id="listen-style-full"><span>Full tracks</span></label>
+    </div>
+    <div class="row-btns listen-picker-foot">
+      <button type="button" class="ghost-btn" id="listen-cancel">Cancel</button>
+      <button type="button" class="primary-btn" id="listen-start">Start listening</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/panels.js"></script>
+<script src="/static/listen.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

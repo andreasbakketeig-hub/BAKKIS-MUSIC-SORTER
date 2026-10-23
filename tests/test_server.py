@@ -174,7 +174,7 @@ def test_sort_undo_flow_over_http(app, music):
     assert status == 409  # stale id (double press)
 
     backend.session.flush()
-    assert (music.resolve() / "BAKKIS_SORTED" / "DJ Sorting" / "Keep" / "a.mp3").exists()
+    assert (music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Keep" / "a.mp3").exists()
     assert api(server, "folder_counts", mode="swipe")[1]["result"] == [1, 0, 0]
 
     status, body = api(server, "undo")

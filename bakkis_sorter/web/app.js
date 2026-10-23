@@ -159,7 +159,8 @@ const Player = {
     for (const a of [this.cur, this.next]) {
       a.preload = "auto";
       a.addEventListener("ended", () => a === this.cur && onTrackEnded());
-      a.addEventListener("timeupdate", () => a === this.cur && EndWatch.tick());
+      // timeupdate keeps firing while the window is hidden (requestAnimationFrame does not).
+      a.addEventListener("timeupdate", () => { if (a === this.cur) { EndWatch.tick(); Listen.tick(); } });
       a.addEventListener("error", () => a === this.cur && a.src && onPlaybackError());
       a.addEventListener("playing", () => a === this.cur && onPlaying());
       a.addEventListener("pause", () => a === this.cur && body.classList.remove("playing"));
@@ -167,12 +168,47 @@ const Player = {
     }
   },
 
+  vol: 0.8,
+
   setVolume(v) {
-    this.cur.volume = this.next.volume = Math.max(0, Math.min(1, v / 100));
+    this.vol = Math.max(0, Math.min(1, v / 100));
+    this.cur.volume = this.next.volume = this.vol;
+  },
+
+  /** Listen mode: fade the preloaded track in while the current one fades out. */
+  crossfadeTo(id, ms) {
+    const to = this.next, from = this.cur;
+    if (this.nextId !== id || to.readyState < 2) { this.load(id); return; }
+    to.muted = false;
+    to.volume = 0;
+    this.cur = to;
+    this.next = from;
+    this.curId = id;
+    this.nextId = null;
+    EndWatch.reset(id);
+    this.activeStart = Number(to.dataset.start || 0);
+    if (!this.userPaused) this.play();
+    Wave.markersDirty();
+    const t0 = performance.now();
+    this.fadingUntil = t0 + ms;
+    const timer = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      to.volume = this.vol * k;
+      from.volume = this.vol * (1 - k);
+      if (k >= 1) {
+        clearInterval(timer);
+        this.fadingUntil = 0;
+        from.pause();
+        from.removeAttribute("src");
+        from.load();
+        from.volume = this.vol;
+      }
+    }, 30);
   },
 
   /** The chosen start point, or, when the track is too short for it, about a third of the way in. */
-  startPointFor(duration) {
+  startPointFor(duration, id) {
+    if (Listen.active && id) return Listen.startFor(id, duration);
     const start = (S.settings && S.settings.playback_start_seconds) || 0;
     if (!isFinite(duration) || duration <= 0) return start;
     if (duration >= start + 30) return start;
@@ -183,6 +219,7 @@ const Player = {
   /** Make `id` the playing track. Uses the preloaded element when it holds this track. */
   load(id, autoplay = true) {
     if (id === this.curId) return;
+    this.fadingUntil = 0;
     const old = this.cur;
     if (id === this.nextId) {
       this.cur = this.next;
@@ -204,19 +241,28 @@ const Player = {
     const a = this.cur;
     const begin = () => {
       if (a !== this.cur) return;
-      if (a.dataset.start === "") a.dataset.start = String(this.startPointFor(a.duration));
+      if (a.dataset.start === "") a.dataset.start = String(this.startPointFor(a.duration, this.curId));
       this.activeStart = Number(a.dataset.start);
       if (Math.abs(a.currentTime - this.activeStart) > 0.25) a.currentTime = this.activeStart;
       if (autoplay && !this.userPaused) this.play();
       Wave.markersDirty();
     };
+    if (a.error) {
+      // The preloaded copy already failed (its "error" event fired while it was the hidden element).
+      setTimeout(() => { if (a === this.cur && this.curId === id) onPlaybackError(); }, 0);
+      return;
+    }
     if (a.readyState >= 1) begin();
     else a.addEventListener("loadedmetadata", begin, { once: true });
   },
 
+  fadingUntil: 0,
+
   /** Load `id` into the hidden element, seeked to its start point. */
   preload(id) {
     if (!id || id === this.nextId || id === this.curId) return;
+    const wait = this.fadingUntil - performance.now();
+    if (wait > 0) { setTimeout(() => this.preload(id), wait + 50); return; } // the hidden element is still fading out
     const a = this.next;
     this.nextId = id;
     a.muted = true;
@@ -224,7 +270,7 @@ const Player = {
     a.src = audioUrl(id);
     a.addEventListener("loadedmetadata", () => {
       if (a !== this.next || this.nextId !== id) return;
-      a.dataset.start = String(this.startPointFor(a.duration));
+      a.dataset.start = String(this.startPointFor(a.duration, id));
       a.currentTime = Number(a.dataset.start);
     }, { once: true });
   },
@@ -319,12 +365,14 @@ const EndWatch = {
 function onTrackEnded() {
   if (EndWatch.fired && EndWatch.id === Player.curId) return;
   EndWatch.fired = true;
+  if (Listen.active) { Listen.onEnded(); return; }
   body.classList.remove("playing");
   if (!S.settings || S.settings.end_of_track === "stop") { Player.cur.pause(); return; }
   decide({ kind: "skip", auto: "ended" });
 }
 
 function onPlaybackError() {
+  if (Listen.active) { Listen.onError(); return; }
   const cur = S.session && S.session.current;
   if (!cur || cur.id !== Player.curId) return;
   decide({ kind: "skip", auto: "error" });
@@ -416,13 +464,13 @@ const Wave = {
     this.dirtyMarkers = false;
     const box = $("markers");
     box.textContent = "";
-    if (S.mode !== "swipe" && S.mode !== "grid") return;
+    if (!["swipe", "grid", "listen"].includes(S.mode)) return;
     const d = Player.duration;
     // Only points inside the track are shown; pressing a key beyond the end flashes the waveform.
     const points = JUMPS.map((sec, i) => ({ sec, key: String(i + 1), label: fmtTime(sec) })).filter((p) => !d || p.sec < d);
     if (d > OUTRO_SEC) points.push({ sec: d - OUTRO_SEC, key: "9", label: "outro", outro: true });
     points.sort((a, b) => a.sec - b.sec);
-    const showKeys = S.mode === "swipe";
+    const showKeys = S.mode !== "grid";
     for (const p of points) {
       const b = el("button", "marker");
       b.type = "button";
@@ -528,6 +576,7 @@ function frame() {
     Wave.draw();
     Wave.drawMarkers();
     EndWatch.tick();
+    Listen.tick();
     const t = Player.cur.currentTime || 0;
     const txt = `${fmtTime(t)} / ${fmtTime(Player.duration)}`;
     const timeEl = $("time");
@@ -546,6 +595,7 @@ function renderAll() {
   renderTopbar();
   renderTiles();
   renderHints();
+  if (Listen.active) { setScreen("player"); return; }
   const sess = S.session;
   if (S.scan && S.scan.status === "scanning") {
     setScreen("scanning");
@@ -609,6 +659,9 @@ function renderTopbar() {
   for (const b of document.querySelectorAll(".mode-switch button")) b.classList.toggle("active", b.dataset.mode === S.mode);
   body.classList.toggle("mode-swipe", S.mode === "swipe");
   body.classList.toggle("mode-grid", S.mode === "grid");
+  body.classList.toggle("mode-listen", S.mode === "listen");
+  const listenBtn = document.querySelector('.mode-switch [data-mode="listen"]');
+  if (listenBtn) listenBtn.hidden = !(S.settings && S.settings.advanced_features && S.session);
 
   const sel = $("preset-select");
   sel.textContent = "";
@@ -629,7 +682,7 @@ function renderTopbar() {
   const sess = S.session;
   if (sess && sess.total) {
     const done = sess.total - sess.remaining;
-    $("count").textContent = `${Math.min(done + 1, sess.total)} / ${sess.total}`;
+    $("count").textContent = Listen.active ? "Listening" : `${Math.min(done + 1, sess.total)} / ${sess.total}`;
     $("top-progress-fill").style.width = `${(done / sess.total) * 100}%`;
   } else {
     $("count").textContent = "";
@@ -714,6 +767,7 @@ function renderHints() {
   h.textContent = "";
   const add = (k, label) => { const s = el("span"); s.appendChild(el("kbd", null, k)); s.appendChild(document.createTextNode(label)); h.appendChild(s); };
   if (!S.session) { add("H", "shortcuts"); return; }
+  if (Listen.active) { add("← →", "previous / next"); add("↑ or F", "like"); add("Space", "play"); add("1–9", "jump"); add("L", "back to sorting"); return; }
   if (S.mode === "swipe") { add("← → ↑", "sort"); add("↓", "skip"); add("1–9", "jump"); }
   else { add("1–9", "sort"); add("↓", "skip"); }
   add("Space", "play"); add("A D", "±30s"); add("Z", "undo"); add("H", "all shortcuts");
@@ -897,6 +951,7 @@ function applySession(snap) {
   if (snap && snap.current) warmUpAudio();
   renderAll();
   Drawers.onSession();
+  if (Listen.active) return;
   const cur = snap && snap.current;
   if (!cur) return;
   if (cur.id !== prevId || cur.id !== Player.curId) {
@@ -952,6 +1007,7 @@ async function ensureMoveAcknowledged() {
 
 /** kind: 'sort' | 'skip'. `auto` marks automatic skips (track ended / playback error). */
 async function decide({ kind, slot, auto }) {
+  if (Listen.active) return; // listening never moves files
   const sess = S.session;
   if (S.busy || !sess || !sess.current) return;
   const cur = sess.current;
@@ -1045,6 +1101,8 @@ async function undoAll() {
 }
 
 async function setMode(mode) {
+  if (mode === "listen") { Listen.openPicker(); return; } // the mode changes once listening starts
+  if (Listen.active) { await Listen.exit(); if (mode === S.mode) return; }
   if (mode === S.mode) return;
   S.mode = mode;
   S.counts = [];
@@ -1081,6 +1139,7 @@ async function chooseFolder() {
 }
 
 async function loadFolder(path) {
+  if (Listen.active) await Listen.exit();
   $("empty-message").hidden = true;
   try {
     Player.clear();
@@ -1173,6 +1232,14 @@ function onKey(e) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code);
 
+  if (Listen.pickerOpen) {
+    if (key === "Escape") { e.preventDefault(); Listen.closePicker(); }
+    else if (key === "Enter") { e.preventDefault(); Listen.startFromPicker(); }
+    return;
+  }
+  if (Listen.active && !meta && !ctrl && Listen.onKey(e, key)) return;
+  if (key === "l" && !meta && !ctrl && S.session && S.settings.advanced_features) { e.preventDefault(); Listen.openPicker(); return; }
+
   // Undo
   if (key === "z" && (meta && shift || ctrl && !meta)) { e.preventDefault(); if (!e.repeat) undoAll(); return; }
   if (key === "z" && !ctrl) { e.preventDefault(); if (!e.repeat) undo(); return; }
@@ -1191,7 +1258,7 @@ function onKey(e) {
   if (key === "h" || key === "?") { e.preventDefault(); Guide.toggle(); return; }
   if (key === "q") { e.preventDefault(); Drawers.toggle("queue"); return; }
 
-  const hasTrack = !!(S.session && S.session.current);
+  const hasTrack = !!(S.session && S.session.current) || Listen.active;
   if (!hasTrack) return;
 
   if (key === "s" || key === "t") { setMode("swipe"); return; }
@@ -1438,6 +1505,7 @@ async function boot() {
   $("btn-done-load").addEventListener("click", chooseFolder);
   $("btn-done-undo").addEventListener("click", undo);
   setupPanels();
+  setupListen();
   $("btn-queue").addEventListener("click", () => Drawers.toggle("queue"));
   $("btn-history").addEventListener("click", () => Drawers.toggle("history"));
   $("folder-chip").addEventListener("click", chooseFolder);

@@ -70,7 +70,7 @@ Everything goes into a `BAKKIS_SORTED` folder inside the folder you chose:
 ```
 Your Folder/
 └── BAKKIS_SORTED/
-    └── DJ Sorting/            ← the preset you sort with
+    └── Quick Sort/            ← the preset you sort with
         └── 2026-10-23/        ← one folder per day (optional)
             ├── Keep/
             ├── Archive/
@@ -103,7 +103,7 @@ Press **1–9** to sort into one of nine tiles, laid out 1-2-3 on the top row. T
 
 ### Presets
 
-A preset is a set of tiles with labels, colors and folder names, for example *DJ Sorting* (swipe) or *Genre Sorting* (grid). Create as many as you like in **Settings → Presets**, and switch between them from the menu in the top bar. Each preset gets its own folder in `BAKKIS_SORTED`.
+A preset is a set of tiles with labels, colors and folder names, for example *Quick Sort* (swipe) or *Genre Sort* (grid). Create as many as you like in **Settings → Presets**, and switch between them from the menu in the top bar. Each preset gets its own folder in `BAKKIS_SORTED`.
 
 ### All shortcuts
 
@@ -123,6 +123,7 @@ A preset is a set of tiles with labels, colors and folder names, for example *DJ
 | Q | Queue |
 | H or ? | Shortcut guide |
 | Tab | Focus mode (hides everything but the track) |
+| L | Listen mode (advanced features) |
 | ⌘F | Full screen |
 | Esc | Close a panel / leave full screen |
 
@@ -148,6 +149,7 @@ Click anywhere on the waveform to jump there.
 Turn on **Settings → Advanced → Show advanced features** to get:
 
 - **Playlist export for Rekordbox and Serato**: one M3U8 playlist per sorted folder, written to `BAKKIS_SORTED/_Playlists/`. In Rekordbox use *File → Import → Playlist*; in Serato, drag the files onto the crate list.
+- **Listen mode** (press **L** or choose *Listen* in the top bar): play through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** saves the track to a *Liked while listening* playlist in `BAKKIS_SORTED/_Playlists/`. Nothing is moved or copied while listening.
 - **Filter the queue by BPM and key**: show only, for example, 120–124 BPM in 8A (optionally with harmonically compatible keys), ordered by BPM or key. Other tracks are set aside, not moved, and come back when you clear the filter. Keys are read as Camelot (8A), musical (Am) or Open Key (1m).
 
 ---

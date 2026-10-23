@@ -326,7 +326,7 @@ def load_genre_defaults() -> tuple[list[str], list[str]]:
 def default_swipe_preset() -> dict:
     return {
         "id": new_preset_id(),
-        "name": "DJ Sorting",
+        "name": "Quick Sort",
         "mode": "swipe",
         "labels": list(DEFAULT_SWIPE_LABELS),
         "colors": list(DEFAULT_SWIPE_COLORS),
@@ -338,7 +338,7 @@ def default_grid_preset(use_genre_file: bool = True) -> dict:
     labels, colors = load_genre_defaults() if use_genre_file else (list(DEFAULT_GENRE_LABELS), list(DEFAULT_GENRE_COLORS))
     return {
         "id": new_preset_id(),
-        "name": "Genre Sorting",
+        "name": "Genre Sort",
         "mode": "grid",
         "labels": labels,
         "colors": colors,

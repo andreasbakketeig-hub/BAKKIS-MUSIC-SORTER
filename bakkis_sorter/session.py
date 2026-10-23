@@ -50,6 +50,11 @@ class Track:
     path: Path
 
 
+def new_track(path: Path) -> Track:
+    """A track with a process-unique id (used by sorting sessions and listen mode)."""
+    return Track(id=str(next(_TRACK_IDS)), path=Path(path))
+
+
 @dataclass
 class Action:
     id: int
@@ -236,7 +241,7 @@ class Session:
     # ------------------------------------------------------------------ helpers
 
     def _new_track(self, path: Path) -> Track:
-        t = Track(id=str(next(_TRACK_IDS)), path=Path(path))
+        t = new_track(path)
         self.tracks[t.id] = t
         return t
 

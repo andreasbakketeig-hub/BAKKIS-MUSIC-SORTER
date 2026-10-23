@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from . import __version__, library
 from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, save_settings
-from . import history, keys, playlists, updates
+from . import history, keys, listen, playlists, updates
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
 from .server import ApiError
@@ -36,6 +36,7 @@ class AppBackend:
         self.peaks = PeakStore(config_dir() / "peaks")
         self.session: Optional[Session] = None
         self.dupes: Optional[DuplicateIndex] = None
+        self.listen: Optional[listen.ListenSession] = None
         self._scan_job: Optional[library.ScanJob] = None
         self.scan = {"status": "idle", "root": None, "count": 0, "error": None}
         self._on_change = on_change
@@ -61,8 +62,11 @@ class AppBackend:
             raise ApiError(str(e), 409) from e
 
     def audio_path(self, track_id: str) -> Optional[Path]:
-        s = self.session
-        return s.track_path(track_id) if s else None
+        s, ls = self.session, self.listen
+        p = s.track_path(track_id) if s else None
+        if p is None and ls is not None:
+            p = ls.track_path(track_id)
+        return p
 
     def cover(self, track_id: str) -> Optional[bytes]:
         p = self.audio_path(track_id)
@@ -356,6 +360,51 @@ class AppBackend:
     def api_clear_filter(self) -> dict:
         self._session().clear_filter()
         return self._after_queue_change()
+
+    # ------------------------------------------------------------------ listen mode (advanced; never moves files)
+
+    def api_listen_sources(self) -> list:
+        s = self._session()
+        with s.lock:
+            unsorted = len(s.queue)
+        name = s.music_root.name
+        out = [{"key": "queue", "label": f"Unsorted tracks in {name}", "count": unsorted}] if unsorted else []
+        return out + listen.sorted_sources(s.music_root)
+
+    def api_listen_start(self, sources: list, shuffle: bool = True) -> dict:
+        s = self._session()
+        labels = {x["key"]: x["label"] for x in self.api_listen_sources()}
+        items: list = []
+        for key in [str(k) for k in sources]:
+            if key == "queue":
+                with s.lock:
+                    items += [(t.path, labels.get("queue", "Unsorted")) for t in s.queue]
+            else:
+                folder = listen.resolve_source(s.music_root, key)
+                if folder is None:
+                    raise ApiError(f"Unknown source: {key}")
+                items += [(p, labels.get(key, folder.name)) for p in playlists._audio_files(folder)]  # noqa: SLF001
+        if not items:
+            raise ApiError("Nothing to listen to in the chosen folders", 409)
+        self.listen = listen.ListenSession(items, shuffle=bool(shuffle))
+        self.meta.prefetch([t.path for t in self.listen.tracks[:8]])
+        return {"total": len(self.listen.tracks), "tracks": self.listen.public(s.music_root)}
+
+    def api_listen_like(self, track_id: str) -> dict:
+        s = self._session()
+        p = self.listen.track_path(track_id) if self.listen else None
+        if p is None:
+            raise ApiError("Not a listen track", 404)
+        return listen.like(s.music_root, p, self.meta.get)
+
+    def api_listen_prefetch(self, track_ids: list) -> bool:
+        if self.listen:
+            self.meta.prefetch([p for p in (self.listen.track_path(t) for t in track_ids) if p])
+        return True
+
+    def api_listen_stop(self) -> bool:
+        self.listen = None
+        return True
 
     def api_export_playlists(self) -> dict:
         """Advanced: M3U8 per destination folder into BAKKIS_SORTED/_Playlists."""
