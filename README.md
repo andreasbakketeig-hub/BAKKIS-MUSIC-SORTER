@@ -52,6 +52,8 @@ Then open the app again.
 
 ## Getting started
 
+> **Before your first session:** back up your music (Time Machine or a copy on another disk), or try the app on a copy of one folder first. If the tracks are in a Rekordbox or Serato library, choose **Copy** when the app asks, so the originals stay where your library expects them.
+
 1. **Choose a music folder**: click **Choose music folder**, or drag a folder (or a track inside it) into the window. Subfolders are included.
 2. The first track starts playing at **2:00**. Choose anything from 0:00 to 6:00 in Settings → Playback; a track too short for that starts about a third of the way in.
 3. **Decide.** The track is filed and the next one plays immediately.
@@ -233,6 +235,10 @@ To uninstall, delete the app from Applications and, if you like, that folder. Yo
 - All streaming links: [songshare.com/artist/z7iy15wo](https://songshare.com/artist/z7iy15wo)
 
 ---
+
+## Disclaimer
+
+BAKKIS MUSIC SORTER moves or copies the files you tell it to. It is careful by design: nothing is deleted, existing files are never overwritten, and every action can be undone. Still, it is free software provided **as is, without warranty of any kind** (see the [license](LICENSE)). You use it at your own risk; keep a backup of music you care about.
 
 ## License
 
