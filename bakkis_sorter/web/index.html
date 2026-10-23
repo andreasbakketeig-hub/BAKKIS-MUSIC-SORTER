@@ -8,7 +8,7 @@
 </head>
 <body class="is-empty">
 <header class="topbar">
-  <div class="brand">BAKKIS</div>
+  <span class="logo logo-wordmark brand" role="img" aria-label="BAKKIS"></span>
   <div class="folder" id="folder-name" title=""></div>
   <select id="preset-select" class="preset-select" aria-label="Active preset"></select>
   <div class="mode-switch" role="tablist" aria-label="Sorting mode">
@@ -34,6 +34,8 @@
   <!-- Onboarding / empty state -->
   <section class="screen screen-empty" id="screen-empty">
     <div class="empty-inner">
+      <span class="logo logo-boxed hero-logo" role="img" aria-label="BAKKIS"></span>
+      <p class="slogan">Fast.&nbsp; · &nbsp;Instinctive.&nbsp; · &nbsp;<span>Sorting.</span></p>
       <h1>Sort your music, one track at a time</h1>
       <div class="row-btns">
         <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
@@ -107,6 +109,7 @@
 
 <footer class="footer">
   <div class="hints" id="hints"></div>
+  <div class="footer-slogan slogan">Fast.&nbsp; · &nbsp;Instinctive.&nbsp; · &nbsp;<span>Sorting.</span></div>
 </footer>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

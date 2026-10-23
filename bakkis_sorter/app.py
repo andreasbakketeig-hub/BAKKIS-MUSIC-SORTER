@@ -20,6 +20,8 @@ from .library import is_audio_path
 from .server import AppServer
 
 FOLDER_DIALOG = 20  # webview.FileDialog.FOLDER
+NS_FULLSCREEN_MASK = 1 << 14  # NSWindowStyleMaskFullScreen
+NS_FULLSCREEN_PRIMARY = 1 << 7  # NSWindowCollectionBehaviorFullScreenPrimary
 WINDOW_SIZE = (1280, 860)
 MIN_SIZE = (960, 680)
 BACKGROUND = "#0E0F11"
@@ -62,16 +64,40 @@ class NativeBridge:
 
     def toggle_fullscreen(self) -> bool:
         with self._lock:
-            self.window.toggle_fullscreen()
-            self.fullscreen = not self.fullscreen
-            return self.fullscreen
+            target = not self.is_fullscreen()
+            self._toggle()
+            self.fullscreen = target
+            return target
 
     def exit_fullscreen(self) -> bool:
         with self._lock:
-            if self.fullscreen:
-                self.window.toggle_fullscreen()
-                self.fullscreen = False
+            if self.is_fullscreen():
+                self._toggle()
+            self.fullscreen = False
+            return False
+
+    def is_fullscreen(self) -> bool:
+        """The window's real state (also covers the green button and ⌃⌘F), else our own flag."""
+        native = getattr(self.window, "native", None)
+        try:
+            return bool(native.styleMask() & NS_FULLSCREEN_MASK)
+        except Exception:  # noqa: BLE001 - no native window (tests) or not created yet
             return self.fullscreen
+
+    def _toggle(self) -> None:
+        native = getattr(self.window, "native", None)
+        if native is None:
+            self.window.toggle_fullscreen()
+            return
+        # pywebview's toggle_fullscreen switches the window to "managed" before leaving fullscreen,
+        # which makes macOS ignore the request. Drive NSWindow directly on the main thread instead.
+        from PyObjCTools import AppHelper
+
+        def go() -> None:
+            native.setCollectionBehavior_(native.collectionBehavior() | NS_FULLSCREEN_PRIMARY)
+            native.toggleFullScreen_(None)
+
+        AppHelper.callAfter(go)
 
     # ------------------------------------------------------------------ drag and drop
 

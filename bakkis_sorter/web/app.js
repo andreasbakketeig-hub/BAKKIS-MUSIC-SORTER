@@ -382,7 +382,7 @@ const Wave = {
       const b = el("button", "marker");
       b.type = "button";
       if (showKeys) b.appendChild(el("kbd", null, p.key));
-      b.appendChild(document.createTextNode(p.label));
+      b.appendChild(el("span", "t", p.label));
       const pos = d ? p.sec / d : JUMPS.indexOf(p.sec) / (JUMPS.length - 1);
       b.style.left = `${(pos * 100).toFixed(3)}%`;
       if (Math.abs(p.sec - Player.activeStart) < 0.5) b.classList.add("active");
@@ -396,6 +396,16 @@ const Wave = {
     if (first) first.style.transform = "translateX(0)";
     const last = box.lastElementChild;
     if (last && last !== first && Number(last.dataset.pos) > 0.92) last.style.transform = "translateX(-100%)";
+    // Markers that would overlap the previous one show only their key number.
+    let prevRight = -Infinity;
+    for (const m of box.children) {
+      const r = m.getBoundingClientRect();
+      if (r.left < prevRight + 4) {
+        if (!showKeys) { m.hidden = true; continue; } // grid mode has no key numbers to fall back to
+        m.classList.add("compact");
+      }
+      prevRight = m.getBoundingClientRect().right;
+    }
   },
 
   flash(sec) {
@@ -1008,6 +1018,8 @@ function onKey(e) {
   if (meta || ctrl || e.altKey) return; // leave other system shortcuts alone
 
   if (key === "Escape") {
+    // Mark Esc as handled, or WebKit passes it on to NSWindow, which leaves fullscreen a second time.
+    e.preventDefault();
     if (Drawers.open) Drawers.close();
     else if (document.fullscreenElement) document.exitFullscreen();
     else api("exit_fullscreen").catch(() => {});

@@ -148,3 +148,42 @@ def test_peak_store(tmp_path):
     make_wav(p, seconds=2)  # file changed -> new key
     assert store.get(p) is None
     assert store.get(tmp_path / "missing.wav") is None
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        ("Becuz my-free-mp3s.com", "Becuz"),
+        ("Claire (Alfonso Muchacho Rework) myfreemp3.vip", "Claire (Alfonso Muchacho Rework)"),
+        ("Ultravision feat. Jaw (Original Mix)_www.mediadonor.ru myfreemp3.vip ", "Ultravision feat. Jaw (Original Mix)"),
+        ("Under The Sheets %28Original Mix%29", "Under The Sheets (Original Mix)"),
+        ("08-Maceo Plex - Under The Sheets", "Maceo Plex - Under The Sheets"),
+        ("sleeper (0daymusic.org)", "sleeper"),
+        ("www.electronicfresh.com", None),
+        ("1-2-3", "1-2-3"),
+        ("Dancing For My Pleasure (Original Mix) 7A", "Dancing For My Pleasure (Original Mix)"),
+        ("The Second Moon (Original Mix) ***********************", "The Second Moon (Original Mix)"),
+        ("9A 122", None),
+        ("Inhalation_Original Mix", "Inhalation Original Mix"),
+        ("Track 12A", "Track"),
+        ("Blue Monday 88", "Blue Monday 88"),
+        ("20  - 9A 122 - High_feat__Lauren_Faith_Original_Mix (1)", "High feat Lauren Faith Original Mix (1)"),
+        ("2A or 3A - 126 - Where_Are_You_Now", "Where Are You Now"),
+        ("Mr. Oizo - Flat Beat", "Mr. Oizo - Flat Beat"),
+        ("", None),
+    ],
+)
+def test_clean_text(raw, clean):
+    assert metadata.clean_text(raw) == clean
+
+
+def test_site_stamp_artist_falls_back_to_title_split(tmp_path):
+    p = make_mp3(tmp_path / "x.mp3")
+    tag_id3(p, t=TIT2(encoding=3, text="08-Maceo Plex - Under The Sheets %28Original Mix%29"), a=TPE1(encoding=3, text="www.electronicfresh.com"))
+    m = metadata.read_meta(p)
+    assert (m.title, m.artist) == ("Under The Sheets (Original Mix)", "Maceo Plex")
+
+
+def test_filename_fallback_is_cleaned(tmp_path):
+    p = make_wav(tmp_path / "Mihai Popoviciu - Flux my-free-mp3s.com .wav")
+    assert metadata.read_meta(p).display == "Flux — Mihai Popoviciu"
