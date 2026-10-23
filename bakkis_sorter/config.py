@@ -402,11 +402,58 @@ def normalize_preset_store(raw: object) -> dict:
     grid_ids = [p["id"] for p in presets if p["mode"] == "grid"]
     aid = str(data.get("active_swipe_preset_id") or "")
     gid = str(data.get("active_grid_preset_id") or "")
+    added = data.get("builtins_added")
     return {
         "presets": presets,
         "active_swipe_preset_id": aid if aid in swipe_ids else swipe_ids[0],
         "active_grid_preset_id": gid if gid in grid_ids else grid_ids[0],
+        # Built-in presets already offered once (so a deleted one does not come back). v1 ignores this key.
+        "builtins_added": [str(x) for x in added] if isinstance(added, list) else [],
     }
+
+
+# Ready-made presets that show what the app is for. Swipe slots: [0] = → (Keep), [1] = ← (Archive),
+# [2] = ↑ (Favorite, the strongest yes). Swipe folders are named after the labels.
+BUILTIN_PRESETS: tuple[dict, ...] = (
+    {
+        "key": "promos",
+        "mode": "swipe",
+        "name": "Promos",  # a DJ answering label promos (promo report wording)
+        "labels": ["Maybe", "Not for me", "Feeling it"],
+        "colors": ["#00D6B4", "#FF2D55", "#FFF200"],
+    },
+    {
+        "key": "demos",
+        "mode": "swipe",
+        "name": "Demos",  # a label answering demo submissions
+        "labels": ["Hold", "Reject", "Sign"],
+        "colors": ["#00D6B4", "#FF2D55", "#FFF200"],
+    },
+    {
+        "key": "set-builder",
+        "mode": "grid",
+        "name": "Set Builder",
+        "labels": ["Warm-up", "Deep", "Groove", "Build-up", "Peak time", "Driving", "Closing", "After hours", "Other"],
+        "colors": ["#18A0FB", "#7C5CFF", "#00D6B4", "#FFF200", "#FF2D55", "#FF7A1A", "#D65CFF", "#2A2F36", "#8A8F98"],
+    },
+)
+
+
+def add_builtin_presets(data: dict) -> bool:
+    """Add each built-in preset once (skipping names that already exist). Returns True if anything changed."""
+    changed = False
+    names = {p["name"].strip().lower() for p in data["presets"]}
+    for b in BUILTIN_PRESETS:
+        if b["key"] in data["builtins_added"]:
+            continue
+        data["builtins_added"].append(b["key"])
+        changed = True
+        if b["name"].lower() in names:
+            continue
+        p = coerce_preset({"id": new_preset_id(), "mode": b["mode"], "name": b["name"], "labels": b["labels"], "colors": b["colors"], "folders": list(b["labels"])})
+        if p is not None:
+            data["presets"].append(p)
+    return changed
 
 
 class PresetError(ValueError):
@@ -420,6 +467,7 @@ class PresetStore:
         self.path = Path(path) if path is not None else config_dir() / MODE_PRESETS_JSON
         raw = _read_json(self.path)
         self.data = normalize_preset_store(raw)
+        add_builtin_presets(self.data)
         if raw != self.data:
             self.save()
 

@@ -135,15 +135,17 @@ def test_v1_store_roundtrips_unchanged(isolated_config):
     path = isolated_config / "mode_presets.json"
     path.write_text(json.dumps(V1_STORE))
     store = config.PresetStore()
-    assert store.data == V1_STORE
+    assert store.data["presets"][:2] == V1_STORE["presets"]  # v1 presets untouched
+    assert store.data["active_swipe_preset_id"] == V1_STORE["active_swipe_preset_id"]
     assert store.active("swipe")["name"] == "DJ Sorting"
     assert store.active("grid")["id"] == "bc5f5cebff104560ad7569d323056f47"
 
 
 def test_empty_store_gets_defaults_and_is_saved(isolated_config):
     store = config.PresetStore()
-    assert len(store.of_mode("swipe")) == 1
-    assert len(store.of_mode("grid")) == 1
+    assert [p["name"] for p in store.of_mode("swipe")] == ["Quick Sort", "Promos", "Demos"]
+    assert [p["name"] for p in store.of_mode("grid")] == ["Genre Sort", "Set Builder"]
+    assert store.active("swipe")["name"] == "Quick Sort"
     assert store.active("grid")["labels"] == config.DEFAULT_GENRE_LABELS
     assert (isolated_config / "mode_presets.json").is_file()
 
@@ -192,6 +194,8 @@ def test_preset_crud(isolated_config):
     assert reloaded.active("swipe")["labels"] == ["Yes", "No", "Wow"]
     reloaded.delete(p["id"])
     assert reloaded.active("swipe")["id"] != p["id"]
+    while len(reloaded.of_mode("swipe")) > 1:
+        reloaded.delete(reloaded.of_mode("swipe")[-1]["id"])
     with pytest.raises(config.PresetError):
         reloaded.delete(reloaded.active("swipe")["id"])  # last swipe preset
     with pytest.raises(config.PresetError):
@@ -212,3 +216,25 @@ def test_safe_segment():
     assert config.safe_segment("   ") == "Preset"
     assert config.safe_segment("..") == "Preset"
     assert len(config.safe_segment("x" * 300)) == 120
+
+
+def test_builtin_presets_added_once(isolated_config):
+    path = isolated_config / "mode_presets.json"
+    path.write_text(json.dumps(V1_STORE))
+    store = config.PresetStore()
+    promos = next(p for p in store.presets if p["name"] == "Promos")
+    assert promos["labels"] == ["Maybe", "Not for me", "Feeling it"] and promos["folders"] == promos["labels"]
+    assert next(p for p in store.presets if p["name"] == "Demos")["labels"] == ["Hold", "Reject", "Sign"]
+    assert next(p for p in store.presets if p["name"] == "Set Builder")["labels"][4] == "Peak time"
+    store.delete(promos["id"])
+    again = config.PresetStore()  # a deleted built-in does not come back
+    assert "Promos" not in [p["name"] for p in again.presets]
+    assert len(again.presets) == 4
+
+
+def test_builtin_skips_existing_name(isolated_config):
+    raw = json.loads(json.dumps(V1_STORE))
+    raw["presets"][0]["name"] = "Promos"  # the user already has a preset called Promos
+    (isolated_config / "mode_presets.json").write_text(json.dumps(raw))
+    store = config.PresetStore()
+    assert [p["name"] for p in store.presets].count("Promos") == 1

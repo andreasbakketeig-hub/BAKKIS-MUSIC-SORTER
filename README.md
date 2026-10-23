@@ -103,7 +103,17 @@ Press **1–9** to sort into one of nine tiles, laid out 1-2-3 on the top row. T
 
 ### Presets
 
-A preset is a set of tiles with labels, colors and folder names, for example *Quick Sort* (swipe) or *Genre Sort* (grid). Create as many as you like in **Settings → Presets**, and switch between them from the menu in the top bar. Each preset gets its own folder in `BAKKIS_SORTED`.
+A preset is a set of tiles with labels, colors and folder names. Switch between them from the menu in the top bar; each preset gets its own folder in `BAKKIS_SORTED`. The app comes with:
+
+| Preset | Mode | Tiles |
+|---|---|---|
+| **Quick Sort** | Swipe | → Keep · ← Archive · ↑ Favorite |
+| **Promos** (for DJs answering label promos) | Swipe | → Maybe · ← Not for me · ↑ Feeling it |
+| **Demos** (for labels answering demo submissions) | Swipe | → Hold · ← Reject · ↑ Sign |
+| **Genre Sort** | Grid | House, Tech House, Deep House, Minimal, Afro House, Melodic, Techno, Garage, Other |
+| **Set Builder** | Grid | Warm-up, Deep, Groove, Build-up, Peak time, Driving, Closing, After hours, Other |
+
+Edit them, delete them or create your own in **Settings → Presets**. A deleted built-in preset does not come back.
 
 ### All shortcuts
 
