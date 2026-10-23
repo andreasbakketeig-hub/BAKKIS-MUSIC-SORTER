@@ -331,26 +331,18 @@ body.mode-grid .tiles-grid { display: grid; grid-template-columns: repeat(3, 1fr
   padding: 0 6px; border-radius: 6px;
   background: rgba(255, 255, 255, 0.08);
 }
-.tiles-swipe .tile {
+.tiles-swipe .tile, .tiles-grid .tile {
   border-top: 3px solid var(--tile-color, var(--line));
   /* A faint wash of the tile color so each target reads at a glance. */
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--tile-color) 14%, transparent), transparent 70%),
     var(--panel);
 }
-.tiles-swipe .tile.pressed { background: color-mix(in srgb, var(--tile-color) 30%, var(--panel)); }
+.tiles-swipe .tile.pressed, .tiles-grid .tile.pressed { background: color-mix(in srgb, var(--tile-color) 30%, var(--panel)); }
 .tile .key { font: var(--fs-s) var(--mono); opacity: 0.6; padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); }
-.tiles-grid .tile { background: var(--tile-color); color: var(--tile-fg); border-color: transparent; }
-.tiles-grid .tile .badge { background: rgba(0, 0, 0, 0.18); }
 .tiles-grid .tile .label { font-size: var(--fs-l); }
-.tiles-grid .tile .key { background: rgba(0, 0, 0, 0.14); }
-/* Settings → Colored tiles off: grid tiles get the calm swipe look, keeping the colour as a stripe. */
-body.plain-tiles .tiles-grid .tile,
-body.plain-tiles .tiles-swipe .tile {
-  background: var(--panel); color: var(--ink);
-  border-color: var(--line); border-top: 3px solid var(--tile-color, var(--line));
-}
-body.plain-tiles .tiles-grid .tile .badge, body.plain-tiles .tiles-grid .tile .key { background: rgba(255, 255, 255, 0.06); }
+/* Settings → Colored tiles off: no colour wash, only the stripe on top. */
+body.plain-tiles .tiles-grid .tile, body.plain-tiles .tiles-swipe .tile { background: var(--panel); }
 body.plain-tiles .tile.pressed { background: color-mix(in srgb, var(--tile-color) 30%, var(--panel)); }
 
 /* ---------------------------------------------------------------- footer, toasts, modal */

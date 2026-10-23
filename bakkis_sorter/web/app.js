@@ -80,12 +80,6 @@ function el(tag, cls, text) {
   return e;
 }
 
-function luminance(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
-}
-const fgFor = (hex) => (luminance(hex) > 0.5 ? "#000000" : token("--ink"));
 /** A colour token from :root in app.css, e.g. token("--accent"). Cached: the waveform asks every frame. */
 const tokenCache = {};
 const token = (name) => (tokenCache[name] ??= getComputedStyle(document.documentElement).getPropertyValue(name).trim());
@@ -752,7 +746,6 @@ function renderTiles() {
       const tile = el("button", "tile");
       tile.type = "button";
       tile.style.setProperty("--tile-color", color);
-      tile.style.setProperty("--tile-fg", fgFor(color));
       tile.dataset.slot = String(i);
       tile.appendChild(el("div", "label", label));
       tile.appendChild(el("div", "key", String(i + 1)));
