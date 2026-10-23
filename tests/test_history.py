@@ -98,3 +98,15 @@ def test_missing_destination(music, journal):
     assert items(history.load(journal))[0]["status"] == "missing"
     assert not history.restore(journal, [item["id"]])[0]["ok"]
     assert not history.restore(journal, ["nope:1"])[0]["ok"]
+
+
+def test_sort_again_after_undo_to_the_same_folder_counts(music, journal):
+    (a,) = tracks(music, "a.mp3")
+    s = run_session(music, [a], journal)
+    s.sort(s.current.id, "swipe", 0)
+    s.flush()
+    s.undo_last()
+    s.sort(s.current.id, "swipe", 0)  # same destination path as the undone sort
+    s.close()
+    (item,) = items(history.load(journal))
+    assert item["status"] == "sorted" and item["label"] == "Keep"

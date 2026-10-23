@@ -47,10 +47,21 @@ def load(journal: Journal, days: int = MAX_DAYS, active_dests: frozenset = froze
     ``active_dests`` are destinations owned by the running session (those are undone with Undo).
     """
     entries = _entries(journal, days)
-    cancelled = {e.get("dest") for e in entries if e.get("event") in ("undo", "restore") and e.get("dest")}
+    # Replay in order: an undo/restore cancels the sort before it with that destination, not a later
+    # sort that reused the same path (undo, then sort the track to the same folder again).
+    live: dict = {}
+    for e in entries:
+        dest = e.get("dest")
+        if not dest:
+            continue
+        if e.get("event") == "sort":
+            live[dest] = e
+        elif e.get("event") in ("undo", "restore"):
+            live.pop(dest, None)
+    in_effect = {id(e) for e in live.values()}
     sessions: dict[str, dict] = {}
     for e in entries:
-        if e.get("event") != "sort" or not e.get("dest") or e["dest"] in cancelled:
+        if id(e) not in in_effect:
             continue
         key = e.get("session") or e["id"].split(":")[0]  # entries from before session ids: group by day
         s = sessions.setdefault(
@@ -71,6 +82,8 @@ def load(journal: Journal, days: int = MAX_DAYS, active_dests: frozenset = froze
                 "op": e.get("op", "move"),
                 "label": e.get("label"),
                 "preset": e.get("preset"),
+                "mode": e.get("mode"),
+                "slot": e.get("slot"),
                 "name": Path(e.get("src", "")).name,
                 "src": e.get("src"),
                 "dest": e["dest"],

@@ -279,12 +279,19 @@ const HistoryDrawer = {
     title.appendChild(el("span", null, when));
     title.appendChild(el("span", "muted small", `${folder ? folder + " · " : ""}${sess.items.length} track${sess.items.length === 1 ? "" : "s"}`));
     head.appendChild(title);
+    const actions = el("div", "hist-actions");
+    const fb = el("button", "ghost-btn small-btn", "Copy feedback");
+    fb.type = "button";
+    fb.title = "Copy a summary of this session's decisions";
+    fb.addEventListener("click", () => copyFeedback(sess.id));
+    actions.appendChild(fb);
+    head.appendChild(actions);
     const restorable = sess.items.filter((i) => i.status === "sorted");
     if (restorable.length) {
       const all = el("button", "ghost-btn small-btn", `Put back all (${restorable.length})`);
       all.type = "button";
       all.addEventListener("click", () => this.putBack(restorable, `Put back ${restorable.length} tracks from ${when}?`));
-      head.appendChild(all);
+      actions.appendChild(all);
     }
     box.appendChild(head);
     const list = el("div", "hist-items");

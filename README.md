@@ -145,6 +145,26 @@ Click anywhere on the waveform to jump there.
 - The **History** panel (clock icon) lists everything you sorted in the last 90 days that is still in place. Put back single tracks or whole sessions. In copy mode, putting back removes only the copy.
 - A log of every action is kept in `~/Library/Application Support/BAKKIS MUSIC SORTER/journal/`.
 
+### Copy feedback (promo reports and demo replies)
+
+**Copy feedback** puts a plain-text summary of your decisions on the clipboard, ready to paste into a promo report, an e-mail or a chat:
+
+```
+Promos – 23 Oct 2026
+
+Feeling it (2)
+• Jimpster – Sleeper
+• Solomun – Home (Club Mix)
+
+Maybe (1)
+• John Tejada – Steppa
+
+Not for me (1)
+• …
+```
+
+It is on the end screen, in the queue panel (*Copy feedback so far*, for when you stop halfway) and next to every past session in History. The best verdict comes first, skips and undone tracks are left out, and nothing is sent anywhere.
+
 ### Good to know
 
 - **Unplayable tracks** (a broken file, or a format your Mac can't play) are skipped automatically. Undo brings them back.

@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from . import __version__, library
 from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, save_settings
-from . import history, keys, listen, playlists, updates
+from . import feedback, history, keys, listen, playlists, updates
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
 from .server import ApiError
@@ -307,6 +307,22 @@ class AppBackend:
                         s.add_next(p)
         self._changed()
         return results
+
+    def api_feedback(self, session_id: Optional[str] = None, copy: bool = True) -> dict:
+        """Plain-text summary of a session's decisions; copied to the clipboard by default."""
+        s = self.session
+        if s is not None:
+            s.flush()
+        sid = session_id or (s.session_id if s else None)
+        sessions = history.load(self.journal, active_dests=self._active_dests())
+        sess = next((x for x in sessions if x["id"] == sid), None)
+        res = feedback.build(sess["items"] if sess else [], self.meta.get, self.presets.presets)
+        if copy and res["count"]:
+            self._copy_to_clipboard(res["text"])
+        return res
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
 
     def api_open_url(self, url: str) -> bool:
         """Open a link in the user's browser / mail app. Only https: and mailto: links are allowed."""

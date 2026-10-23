@@ -141,6 +141,7 @@
       <div class="row-btns">
         <button type="button" class="primary-btn" id="btn-done-clear-filter" hidden>Clear filter</button>
         <button type="button" class="ghost-btn" id="btn-done-undo">Undo last (Z)</button>
+        <button type="button" class="ghost-btn" id="btn-done-feedback" title="Copy a summary of your decisions for a promo report or demo replies">Copy feedback</button>
         <button type="button" class="ghost-btn" id="btn-done-reveal">Reveal in Finder</button>
         <button type="button" class="ghost-btn" id="btn-done-export" hidden>Export playlists</button>
         <button type="button" class="primary-btn" id="btn-done-load">Load another folder</button>
@@ -167,7 +168,7 @@
 <aside class="drawer" id="drawer-queue" hidden aria-label="Queue">
   <div class="drawer-head"><h2>Queue</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
   <div class="drawer-section">
-    <h3>Last actions</h3>
+    <h3 class="q-head">Last actions <button type="button" class="link-btn" id="btn-feedback-queue" title="Copy a summary of your decisions so far">Copy feedback so far</button></h3>
     <div id="queue-history"></div>
   </div>
   <div class="drawer-section grow">

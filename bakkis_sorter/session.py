@@ -486,6 +486,7 @@ class Session:
             "mode": a.mode,
             "preset": a.preset_name,
             "label": a.label,
+            "slot": a.slot,
             "src": str(a.src),
             "dest": str(a.dest) if a.dest else None,
             "deleted_dirs": [str(d) for d in a.deleted_dirs],

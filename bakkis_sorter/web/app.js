@@ -898,6 +898,15 @@ function renderDone() {
   $("done-note").textContent = total ? `Files were ${verb} into BAKKIS_SORTED inside ${sess.root.split("/").filter(Boolean).pop()}.` : "";
 }
 
+/** Copy a plain-text summary of a session's decisions (promo reports, demo replies). */
+async function copyFeedback(sessionId) {
+  try {
+    const r = await api("feedback", sessionId ? { session_id: sessionId } : {});
+    if (!r.count) { toast("Nothing to report yet: sort a few tracks first (skips are not included)"); return; }
+    toast(`Copied feedback for ${r.count} track${r.count === 1 ? "" : "s"}. Paste it into your report or e-mail.`, { ms: 5000 });
+  } catch (e) { toast(e.message, { level: "error" }); }
+}
+
 /** Advanced: M3U8 per destination folder, then offer to show them in Finder. */
 async function exportPlaylists() {
   try {
@@ -1516,6 +1525,8 @@ async function boot() {
   $("btn-done-clear-filter").addEventListener("click", () => FilterPanel.clear());
   $("op-badge").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.show("settings"); });
   $("btn-done-export").addEventListener("click", exportPlaylists);
+  $("btn-done-feedback").addEventListener("click", () => copyFeedback());
+  $("btn-feedback-queue").addEventListener("click", () => copyFeedback());
   $("btn-done-reveal").addEventListener("click", () => api("reveal").catch((e) => toast(e.message, { level: "error" })));
   $("btn-load-default").addEventListener("click", () => S.settings.default_folder_path && loadFolder(S.settings.default_folder_path));
   $("preset-select").addEventListener("change", async (e) => {

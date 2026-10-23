@@ -610,3 +610,6 @@ body.playing .listen-btn .i-play { display: none; }
 .listen-picker-foot { padding: 16px 24px; justify-content: flex-end; }
 .hearts-actions { margin-top: 8px; }
 #listen-hearted { color: var(--danger); }
+.q-head { display: flex; align-items: center; justify-content: space-between; }
+.q-head .link-btn { text-transform: none; letter-spacing: 0; }
+.hist-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
