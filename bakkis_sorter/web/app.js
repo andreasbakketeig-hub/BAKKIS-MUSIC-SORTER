@@ -602,7 +602,7 @@ function renderTopbar() {
   const root = (S.session && S.session.root) || (S.scan && S.scan.root) || "";
   const name = root.split("/").filter(Boolean).pop() || "";
   $("folder-name").textContent = name;
-  $("folder-name").title = root;
+  $("folder-chip").title = root ? `${root}\nClick to choose another folder` : "Choose a folder";
   for (const b of document.querySelectorAll(".mode-switch button")) b.classList.toggle("active", b.dataset.mode === S.mode);
   body.classList.toggle("mode-swipe", S.mode === "swipe");
   body.classList.toggle("mode-grid", S.mode === "grid");
@@ -1437,6 +1437,7 @@ async function boot() {
   setupPanels();
   $("btn-queue").addEventListener("click", () => Drawers.toggle("queue"));
   $("btn-history").addEventListener("click", () => Drawers.toggle("history"));
+  $("folder-chip").addEventListener("click", chooseFolder);
   $("btn-settings").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.toggle("settings"); });
   $("btn-help").addEventListener("click", () => Guide.toggle());
   $("coach-close").addEventListener("click", finishCoach);

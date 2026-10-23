@@ -8,8 +8,14 @@
 </head>
 <body class="is-empty">
 <header class="topbar">
-  <span class="logo logo-wordmark brand" role="img" aria-label="BAKKIS"></span>
-  <div class="folder" id="folder-name" title=""></div>
+  <div class="brand-lockup" aria-label="BAKKIS MUSIC SORTER">
+    <span class="logo logo-wordmark brand" role="img" aria-hidden="true"></span>
+    <span class="brand-sub">MUSIC SORTER</span>
+  </div>
+  <button type="button" class="folder-chip" id="folder-chip" title="Choose another folder">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    <span id="folder-name"></span>
+  </button>
   <select id="preset-select" class="preset-select" aria-label="Active preset"></select>
   <div class="mode-switch" role="tablist" aria-label="Sorting mode">
     <button type="button" data-mode="swipe" role="tab">Swipe</button>

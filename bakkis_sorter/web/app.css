@@ -61,12 +61,37 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .logo { display: inline-block; flex: none; background-color: currentColor; -webkit-mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; }
 .logo-wordmark { -webkit-mask-image: url(/static/img/logo-wordmark.png); aspect-ratio: 800 / 121; }
 .logo-boxed { -webkit-mask-image: url(/static/img/logo-boxed.png); aspect-ratio: 800 / 198; }
+.brand-lockup { display: flex; align-items: center; gap: 10px; flex: none; }
 .brand { height: 14px; color: var(--text); }
+.brand-sub {
+  font-size: var(--fs-s);
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  line-height: 14px;
+  white-space: nowrap;
+}
 .hero-logo { height: 56px; color: var(--text); margin-bottom: 8px; }
 .slogan { color: var(--muted); letter-spacing: 0.02em; }
 .slogan span { color: var(--accent); }
 .empty-inner .slogan { margin: 0 0 40px; }
-.folder { color: var(--muted); max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 240px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+}
+.folder-chip:hover { background: var(--surface-2); }
+.folder-chip svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.folder-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.is-empty .folder-chip { display: none; }
+/* Narrow windows: keep the mark, drop the descriptor. */
+@media (max-width: 1100px) { .brand-sub { display: none; } }
 
 .preset-select {
   background: var(--surface);
