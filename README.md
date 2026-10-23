@@ -262,6 +262,8 @@ python3 -m venv .venv
 .venv/bin/python main.py
 ```
 
+Or double-click `Start BAKKIS v2.command` (it quits a running copy and starts the newest code).
+
 Set `BAKKIS_DEBUG=1` to enable the Web Inspector. Set `BAKKIS_CONFIG_DIR=/some/folder` to use a separate settings folder, for example for testing.
 
 **Browser dev mode** (UI work without the app window):

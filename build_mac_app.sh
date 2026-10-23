@@ -1,67 +1,58 @@
 #!/usr/bin/env bash
-# Build a double-clickable macOS app: dist/BAKKIS MUSIC SORTER.app
-# Requires: Python 3.x on the build machine, Xcode CLI tools optional for codesign.
+# Build BAKKIS MUSIC SORTER.app (universal: Apple Silicon + Intel) and a zip for GitHub Releases.
+#
+#   ./build_mac_app.sh                 unsigned build (friends open it once via Privacy & Security)
+#
+#   CODESIGN_IDENTITY="Developer ID Application: Andreas Bakketeig (TEAMID)" \
+#   NOTARY_PROFILE="bakkis-notary" ./build_mac_app.sh
+#                                      signed + notarized build (opens without a warning)
+#
+# NOTARY_PROFILE is a keychain profile made once with:
+#   xcrun notarytool store-credentials bakkis-notary --apple-id you@example.com --team-id TEAMID
+# See PACKAGING.md.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 cd "$ROOT"
+[[ "$(uname -s)" == "Darwin" ]] || { echo "macOS only."; exit 1; }
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "This script is for macOS only."
-  exit 1
+APP_NAME="BAKKIS MUSIC SORTER"
+PY="${ROOT}/.venv/bin/python"
+[[ -x "$PY" ]] || { /usr/bin/python3 -m venv .venv; }
+"$PY" -m pip install -q -r requirements.txt pyinstaller
+
+VERSION="$("$PY" -c 'import bakkis_sorter; print(bakkis_sorter.__version__)')"
+ZIP="dist/BAKKIS-MUSIC-SORTER-${VERSION}.zip"
+
+echo "Building ${APP_NAME} ${VERSION}…"
+rm -rf build "dist/${APP_NAME}" "dist/${APP_NAME}.app" "$ZIP"
+"$PY" -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging/bakkis_music_sorter.spec
+
+APP="dist/${APP_NAME}.app"
+[[ -d "$APP" ]] || { echo "Build failed: ${APP} missing"; exit 1; }
+
+# Sanity checks: both architectures, and nothing linked from Homebrew.
+EXE="${APP}/Contents/MacOS/${APP_NAME}"
+echo "Architectures: $(lipo -archs "$EXE")"
+if find "$APP" -type f \( -name '*.so' -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -q -E '/opt/homebrew|/usr/local/(Cellar|opt)'; then
+  echo "ERROR: the app links to Homebrew libraries and would not run on other Macs."; exit 1
 fi
 
-if [[ -d "${ROOT}/.venv" ]]; then
-  # shellcheck source=/dev/null
-  source "${ROOT}/.venv/bin/activate"
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  codesign --verify --deep --strict --verbose=1 "$APP"
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    echo "Notarizing (this takes a few minutes)…"
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$APP"
+    rm -f "$ZIP"
+  fi
 fi
 
-python3 -m pip install -q -r "${ROOT}/requirements.txt"
-python3 -m pip install -q -r "${ROOT}/requirements-packaging.txt"
-
-PYI_ARGS=(
-  --noconfirm
-  --clean
-  --windowed
-  --name "BAKKIS MUSIC SORTER"
-  --osx-bundle-identifier "com.bakkis.music-sorter"
-  --collect-all mutagen
-  --collect-all pillow
-  --hidden-import PIL._tkinter_finder
-)
-
-if [[ -f "${ROOT}/genre_labels.json" ]]; then
-  PYI_ARGS+=(--add-data "${ROOT}/genre_labels.json:.")
-else
-  echo "Note: genre_labels.json not found — first-run defaults come from code; optional seed file skipped."
-fi
-
-if [[ -f "${ROOT}/bakkis_settings.json" ]]; then
-  PYI_ARGS+=(--add-data "${ROOT}/bakkis_settings.json:.")
-fi
-
-if [[ -f "${ROOT}/bakkislogo.png" ]]; then
-  PYI_ARGS+=(--add-data "${ROOT}/bakkislogo.png:.")
-else
-  echo "Note: bakkislogo.png not found — footer shows text only."
-fi
-
-if command -v mpv >/dev/null 2>&1; then
-  MPV="$(command -v mpv)"
-  PYI_ARGS+=(--add-binary "${MPV}:.")
-  echo "Bundling mpv: ${MPV}"
-else
-  echo "Note: mpv not in PATH — testers need: brew install mpv (the app shows this hint if playback fails)."
-fi
-
-python3 -m PyInstaller "${PYI_ARGS[@]}" "${ROOT}/bakkis_music_sorter.py"
-
-APP="${ROOT}/dist/BAKKIS MUSIC SORTER.app"
-if [[ -d "${APP}" ]]; then
-  echo ""
-  echo "Done: ${APP}"
-  echo "Zip it before sharing:  cd dist && zip -r \"BAKKIS-MUSIC-SORTER-mac.zip\" \"BAKKIS MUSIC SORTER.app\""
-else
-  echo "Expected app bundle not found at: ${APP}"
-  exit 1
-fi
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+echo
+echo "Done:"
+echo "  ${APP}"
+echo "  ${ZIP} ($(du -h "$ZIP" | cut -f1))"
+[[ -z "${CODESIGN_IDENTITY:-}" ]] && echo "  (unsigned: first launch needs System Settings → Privacy & Security → Open Anyway)"
+exit 0

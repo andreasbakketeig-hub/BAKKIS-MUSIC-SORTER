@@ -1,67 +1,73 @@
 # Packaging BAKKIS MUSIC SORTER for macOS
 
+This builds the v2 app (`bakkis_sorter/`). v1 (`bakkis_music_sorter.py`) is no longer packaged.
+
 ## What you get
 
-- `**dist/BAKKIS MUSIC SORTER.app**` — double-click GUI app (no Terminal).
-- Python and **mutagen** are bundled. **tkinter** uses the Python framework linked into the build.
-- **Playback** uses **mpv** (JSON IPC): one subprocess started at launch. **mpv** is bundled **if** it is on your `PATH` when you run the build script (typically `/opt/homebrew/bin/mpv` or `/usr/local/bin/mpv`). Otherwise testers install it with Homebrew.
+- `dist/BAKKIS MUSIC SORTER.app`: a **universal** app (Apple Silicon and Intel), macOS 13 Ventura or later.
+- `dist/BAKKIS-MUSIC-SORTER-<version>.zip`: the file to upload to GitHub Releases (about 10 MB).
 
-## Build (on your Mac)
+Everything is inside the app: Python, pywebview and mutagen. Audio plays in the system WebKit, so there is **no mpv, ffmpeg or Homebrew dependency**. The build script stops with an error if anything links to Homebrew.
 
-1. Put assets next to `bakkis_music_sorter.py` (optional but recommended):
-  - `bakkislogo.png` — footer logo  
-  - `genre_labels.json` — copied into the app bundle and seeded on first launch  
-  - `bakkis_settings.json` — optional seed for defaults
-2. Use Python 3 with a venv (recommended):
-  ```bash
-   cd "/path/to/BAKKIS MUSIC SORTER"
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-  ```
-3. (Recommended) Install **mpv** so it gets bundled:
-  ```bash
-   brew install mpv
-  ```
-4. Run the build script:
-  ```bash
-   chmod +x build_mac_app.sh
-   ./build_mac_app.sh
-  ```
-5. Output: `**dist/BAKKIS MUSIC SORTER.app**`
+User data is never inside the app. It lives in `~/Library/Application Support/BAKKIS MUSIC SORTER/` (settings, presets, history journal, hearts, waveform cache).
 
-## Where settings live (for your friends)
+## Build
 
-When running the **.app**, user-writable files are **not** inside the bundle (the bundle is effectively read-only after copy). They are stored in:
+Requirements on the build Mac: Xcode Command Line Tools (`xcode-select --install`). The build uses the Command Line Tools' Python 3.9, which is universal; the script creates `.venv` if it is missing and installs what it needs.
 
-`~/Library/Application Support/BAKKIS MUSIC SORTER/`
+```bash
+./build_mac_app.sh
+```
 
-- `genre_labels.json`
-- `bakkis_settings.json`
+The script:
 
-On first launch, if those files are missing, the app copies defaults from inside the bundle (if you packaged them).
+1. installs `requirements.txt` and PyInstaller into `.venv`,
+2. builds with `packaging/bakkis_music_sorter.spec` (version from `bakkis_sorter/__init__.py`, icon from `assets/icon/AppIcon.icns`, bundle id `com.bakkis.music-sorter`),
+3. checks that both architectures are present and nothing links to Homebrew,
+4. zips the app with `ditto` (keeps the bundle intact for Gatekeeper).
 
-## Share with friends
+To change the icon: edit and run `tools/make_icon.py`, then rebuild.
 
-1. **Zip the .app** (avoids Gatekeeper stripping quarantine oddly in some cases):
-  ```bash
-   cd dist
-   zip -r "BAKKIS-MUSIC-SORTER-mac.zip" "BAKKIS MUSIC SORTER.app"
-  ```
-2. Send `**BAKKIS-MUSIC-SORTER-mac.zip**`.
-3. **Unsigned apps**: Your friends should unzip, then **right-click the app → Open** the first time and confirm. After that, double-click is fine.
-4. If you did **not** bundle mpv, they should install:
-  ```bash
-   brew install mpv
-  ```
-   The app also shows an in-app hint when mpv is missing.
+## Unsigned builds (default)
 
-## Audio stops when quitting
+Without a Developer ID the app is ad-hoc signed. On first launch macOS asks people to confirm; the steps are in the README ("First launch of an unsigned app"):
 
-Closing the window runs `**_stop_playback()**` (pause + stop current media) and `**_mpv_shutdown()**` (quit the mpv process cleanly).
+- macOS 15 and later: open it once, click **Done**, then **System Settings → Privacy & Security → Open Anyway**.
+- macOS 13–14: right-click the app → **Open** → **Open**.
+
+## Signed and notarized builds (needs an Apple Developer account)
+
+One-time setup:
+
+1. Join the Apple Developer Program (Individual is simplest; it shows your own name).
+2. In **Xcode → Settings → Accounts → Manage Certificates**, create a **Developer ID Application** certificate.
+3. Create an app-specific password at appleid.apple.com, then store notarization credentials in your keychain:
+   ```bash
+   xcrun notarytool store-credentials bakkis-notary --apple-id you@example.com --team-id YOURTEAMID
+   ```
+
+Each release:
+
+```bash
+CODESIGN_IDENTITY="Developer ID Application: Your Name (YOURTEAMID)" \
+NOTARY_PROFILE="bakkis-notary" \
+./build_mac_app.sh
+```
+
+The app is signed with the hardened runtime (`packaging/entitlements.plist` allows what a bundled Python needs), sent to Apple for notarization (a few minutes), stapled, and zipped. It then opens with a double-click on any Mac, no warning.
+
+## Releasing
+
+1. Set the version in `bakkis_sorter/__init__.py` (for example `2.0.0`) and commit.
+2. Run `./build_mac_app.sh`.
+3. Test the app from `dist/`, ideally on a second Mac or a fresh user account without your settings.
+4. On GitHub: **Releases → Draft a new release**, tag `v2.0.0`, attach `dist/BAKKIS-MUSIC-SORTER-2.0.0.zip`, and write what is new.
+
+The app's update check looks at the latest GitHub release, so people get a notice once the release is published (the repository must be public for that).
 
 ## Troubleshooting
 
-- **“App is damaged” / won’t open**: Usually Gatekeeper. Use **right-click → Open**, or System Settings → Privacy & Security → allow.
-- **Blank window / Tcl/Tk issues**: Rare with python.org or Homebrew Pythons; build using the same Python you tested with `python3 bakkis_music_sorter.py`.
-
+- **"App is damaged and can't be opened"**: the download was quarantined. `xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"`, or sign and notarize the build.
+- **Blank window**: run the app's executable from Terminal to see errors:
+  `"/Applications/BAKKIS MUSIC SORTER.app/Contents/MacOS/BAKKIS MUSIC SORTER"`. Set `BAKKIS_DEBUG=1` for the Web Inspector.
+- **Build fails on a missing module**: add it to `hiddenimports` in `packaging/bakkis_music_sorter.spec`.

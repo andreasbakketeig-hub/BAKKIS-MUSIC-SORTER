@@ -35,3 +35,8 @@ htmlcov/
 
 # Temporary / preview audio (app normally uses system temp; ignore if copied into the repo)
 bakkis_*.wav
+
+# Personal settings written by v1 into the project folder (v2 uses Application Support)
+settings.json
+bakkis_settings.json
+_bakkis_sort_click.wav
