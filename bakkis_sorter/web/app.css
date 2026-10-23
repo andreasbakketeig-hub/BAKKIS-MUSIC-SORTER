@@ -368,8 +368,12 @@ body.focus { grid-template-rows: 0 1fr 0; }
   transform: translateX(-50%);
   display: flex; flex-direction: column; gap: 8px; align-items: center;
   pointer-events: none;
-  z-index: 20;
+  z-index: 26; /* above drawers (25), below dialogs */
+  transition: left 0.16s ease;
 }
+/* With a drawer open, center messages in the part of the window that is still visible. */
+body.drawer-open .toasts { left: calc((100vw - 380px) / 2); }
+body.drawer-open.drawer-wide-open .toasts { left: calc((100vw - 480px) / 2); }
 .toast {
   pointer-events: auto;
   display: flex; align-items: center; gap: 16px;
@@ -383,7 +387,7 @@ body.focus { grid-template-rows: 0 1fr 0; }
 }
 .toast.error { border-color: var(--danger); }
 .toast.warning { border-color: var(--warn); }
-.toast .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast .msg { overflow-wrap: anywhere; line-height: 1.35; }
 .toast button { border: 0; background: transparent; color: var(--accent); font-weight: 600; padding: 0; }
 .toast.out { opacity: 0; transition: opacity 0.2s; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }

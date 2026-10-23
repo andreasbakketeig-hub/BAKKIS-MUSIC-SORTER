@@ -946,7 +946,7 @@ async function copyFeedback(sessionId) {
   try {
     const r = await api("feedback", sessionId ? { session_id: sessionId } : {});
     if (!r.count) { toast("Nothing to report yet: sort a few tracks first (skips are not included)"); return; }
-    toast(`Copied feedback for ${r.count} track${r.count === 1 ? "" : "s"}. Paste it into your report or e-mail.`, { ms: 5000 });
+    toast(`Feedback for ${r.count} track${r.count === 1 ? "" : "s"} copied. Paste it anywhere.`, { ms: 5000 });
   } catch (e) { toast(e.message, { level: "error" }); }
 }
 

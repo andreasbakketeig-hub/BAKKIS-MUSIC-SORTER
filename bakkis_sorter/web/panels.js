@@ -64,6 +64,7 @@ const Drawers = {
     this.open = name;
     document.getElementById(`drawer-${name}`).hidden = false;
     document.body.classList.add("drawer-open");
+    document.body.classList.toggle("drawer-wide-open", document.getElementById(`drawer-${name}`).classList.contains("drawer-wide"));
     if (name === "queue") QueueDrawer.refresh();
     if (name === "settings") SettingsDrawer.render();
     if (name === "history") HistoryDrawer.render();
@@ -73,7 +74,7 @@ const Drawers = {
   close() {
     if (!this.open) return;
     document.getElementById(`drawer-${this.open}`).hidden = true;
-    document.body.classList.remove("drawer-open");
+    document.body.classList.remove("drawer-open", "drawer-wide-open");
     this.open = null;
   },
 
