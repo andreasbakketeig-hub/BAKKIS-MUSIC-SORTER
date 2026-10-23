@@ -23,7 +23,7 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 | Architecture | **Universal** app (Apple Silicon + Intel), built with python.org Python 3.12 universal2. Minimum **macOS 13 Ventura**. |
 | Distribution | **GitHub Releases** (zip per version). App name "BAKKIS MUSIC SORTER", version 2.0.0, bundle id `com.bakkis.music-sorter`. |
 | License | **Open source, MIT** (decided). The app doubles as a promo tool. BAKKIS name and logo excluded from the license. Audit git history for personal data before the repo goes public. |
-| Promo & support | Discreet only, no popups: "Follow BAKKIS" music links + one support link (Buy Me a Coffee / Ko-fi suggested, plus GitHub Sponsors button) in README, Settings → About, and one line on the session end screen. Links open in the browser; the app sends no data. *Links pending from Andreas.* |
+| Promo & support | Discreet only, no popups: "Follow BAKKIS" music links + one support link (Buy Me a Coffee / Ko-fi suggested, plus GitHub Sponsors button) in README, Settings → About, and one line on the session end screen. Links open in the browser; the app sends no data. In the app: Spotify, SoundCloud, Instagram, Beatport, Traxsource, bakkis.com (done). **README links: bakkis.com (https://bakkis.com), Instagram (https://www.instagram.com/bakkismusic/) and all streaming links via songshare (https://songshare.com/artist/z7iy15wo).** Support: Ko-fi, link pending. |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)
