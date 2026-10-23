@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import uuid
 import os
 import queue
 import shutil
@@ -218,6 +219,9 @@ class Session:
         self.tracks: dict[str, Track] = {}
         self.queue: list[Track] = [self._new_track(p) for p in paths]
         self.total = len(self.queue)
+        # Advanced filter: tracks that don't match wait here (in queue order) until the filter is cleared.
+        self.held: list[Track] = []
+        self.filter: Optional[dict] = None
         self.history: list[Action] = []
         self.counts: dict[str, int] = {}
         # Label/preset/color per count key, so the summary survives a preset being edited or deleted.
@@ -225,6 +229,7 @@ class Session:
         self.notices: deque = deque(maxlen=MAX_NOTICES)
         self._notice_seq = itertools.count(1)
         self.started_at = time.time()
+        self.session_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         self._copied_index: Optional[dict] = None
         self._worker = Worker()
 
@@ -470,6 +475,8 @@ class Session:
 
     def _journal_fields(self, a: Action) -> dict:
         return {
+            "session": self.session_id,
+            "root": str(self.music_root),
             "op": a.op,
             "mode": a.mode,
             "preset": a.preset_name,
@@ -501,13 +508,63 @@ class Session:
                     return
             raise SessionError("Track not in queue")
 
-    def queue_slice(self, offset: int = 0, limit: int = 100) -> dict:
-        """A page of upcoming tracks (the queue without the current track)."""
-        offset, limit = max(0, int(offset)), max(0, min(int(limit), 500))
+    def active_dests(self) -> frozenset:
+        """Destinations of sorts this session can still undo (history uses Undo for these)."""
         with self.lock:
-            upcoming = self.queue[1:]
-            items = [dict(self._track_public(t), index=offset + i) for i, t in enumerate(upcoming[offset : offset + limit])]
-            return {"total": len(upcoming), "offset": offset, "items": items}
+            return frozenset(str(a.dest) for a in self.history if a.dest)
+
+    def add_next(self, path: Path) -> Track:
+        """Queue a file as the next track (e.g. one put back from the history)."""
+        with self.lock:
+            t = self._new_track(path)
+            self.queue.insert(min(1, len(self.queue)), t)
+            self.total += 1
+            return t
+
+    def filter_pool(self) -> list[Track]:
+        """Upcoming + set-aside tracks: what a new filter is applied to."""
+        with self.lock:
+            return self.queue[1:] + self.held
+
+    def apply_filter(self, keep: set, order: Optional[list] = None, info: Optional[dict] = None) -> None:
+        """Keep track ids in ``keep`` upcoming (in ``order`` if given, else queue order); set the rest aside."""
+        with self.lock:
+            pool = self.queue[1:] + sorted(self.held, key=lambda t: int(t.id))
+            matched = [t for t in pool if t.id in keep]
+            if order:
+                rank = {tid: i for i, tid in enumerate(order)}
+                matched.sort(key=lambda t: rank.get(t.id, len(rank)))
+            self.held = [t for t in pool if t.id not in keep]
+            self.queue = self.queue[:1] + matched
+            self.filter = info or {}
+
+    def clear_filter(self) -> None:
+        """Bring set-aside tracks back; upcoming tracks return to the order the folder was loaded in."""
+        with self.lock:
+            upcoming = sorted(self.queue[1:] + self.held, key=lambda t: int(t.id))
+            self.queue = self.queue[:1] + upcoming
+            self.held = []
+            self.filter = None
+
+    def queue_slice(self, offset: int = 0, limit: int = 100, q: str = "") -> dict:
+        """A page of upcoming tracks (the queue without the current track).
+
+        ``q`` filters by file name and folder (all words must match, case-insensitive); ``index`` is
+        always the track's position in the full upcoming list.
+        """
+        offset, limit = max(0, int(offset)), max(0, min(int(limit), 500))
+        words = [w for w in str(q or "").lower().split() if w]
+        with self.lock:
+            indexed = list(enumerate(self.queue[1:]))
+            if words:
+                def hit(t: Track) -> bool:
+                    hay = library.relative_posix(t.path, self.music_root).lower()
+                    return all(w in hay for w in words)
+
+                indexed = [(i, t) for i, t in indexed if hit(t)]
+            page = indexed[offset : offset + limit]
+            items = [dict(self._track_public(t), index=i) for i, t in page]
+            return {"total": len(indexed), "offset": offset, "items": items, "query": " ".join(words)}
 
     # ------------------------------------------------------------------ stats
 
@@ -524,12 +581,14 @@ class Session:
 
     def snapshot(self, upcoming: int = UPCOMING_PREVIEW) -> dict:
         with self.lock:
-            done = self.total - len(self.queue)
+            done = self.total - len(self.queue) - len(self.held)
             return {
                 "root": str(self.music_root),
                 "total": self.total,
                 "position": min(done + 1, self.total),
-                "remaining": len(self.queue),
+                "remaining": len(self.queue) + len(self.held),
+                "held": len(self.held),
+                "filter": self.filter,
                 "current": self._track_public(self.queue[0]) if self.queue else None,
                 "upcoming": [self._track_public(t) for t in self.queue[1 : 1 + upcoming]],
                 "history": [a.public() for a in self.history[-HISTORY_PREVIEW:]][::-1],

@@ -335,6 +335,14 @@ class MetadataCache:
             self._meta.put(key, meta)
         return meta
 
+    def peek(self, path: Path) -> Optional[TrackMeta]:
+        """Cached metadata only (never reads the file)."""
+        key = _cache_key(path)
+        if key is None:
+            return None
+        with self._lock:
+            return self._meta.get(key)  # type: ignore[return-value]
+
     def cover(self, path: Path) -> Optional[bytes]:
         key = _cache_key(path)
         if key is None:

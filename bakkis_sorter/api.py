@@ -7,6 +7,7 @@ Native window actions (folder dialog, fullscreen, reveal in Finder) are added by
 from __future__ import annotations
 
 import inspect
+import os
 import platform
 import subprocess
 import threading
@@ -16,9 +17,11 @@ from typing import Callable, Optional
 
 from . import __version__, library
 from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, save_settings
+from . import history, keys, playlists, updates
+from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
 from .server import ApiError
-from .session import Session, SessionError, filter_already_copied
+from .session import Journal, Session, SessionError, filter_already_copied
 
 PREFETCH_AHEAD = 8
 
@@ -29,8 +32,10 @@ class AppBackend:
         self.settings = load_settings()
         self.presets = presets or PresetStore()
         self.meta = MetadataCache()
+        self.journal = Journal()
         self.peaks = PeakStore(config_dir() / "peaks")
         self.session: Optional[Session] = None
+        self.dupes: Optional[DuplicateIndex] = None
         self._scan_job: Optional[library.ScanJob] = None
         self.scan = {"status": "idle", "root": None, "count": 0, "error": None}
         self._on_change = on_change
@@ -62,6 +67,16 @@ class AppBackend:
     def cover(self, track_id: str) -> Optional[bytes]:
         p = self.audio_path(track_id)
         return self.meta.cover(p) if p else None
+
+    def _on_session_change(self) -> None:
+        """Called by the session after file ops: index newly sorted files for the duplicate check."""
+        s, d = self.session, self.dupes
+        if s is not None and d is not None:
+            with s.lock:
+                fresh = [a.dest for a in s.history[-3:] if a.status == "done" and a.dest]
+            for path in fresh:
+                d.add(path)
+        self._changed()
 
     def _changed(self) -> None:
         if self._on_change is not None:
@@ -116,7 +131,10 @@ class AppBackend:
         p = self.audio_path(track_id)
         if p is None:
             raise ApiError("Unknown track", 404)
-        return {"track_id": track_id, **self.meta.get(p).to_dict()}
+        meta = self.meta.get(p)
+        dupes = self.dupes
+        dup = dupes.find(p, meta) if dupes is not None else None
+        return {"track_id": track_id, **meta.to_dict(), "duplicate": dup}
 
     def api_peaks_get(self, track_id: str) -> Optional[str]:
         p = self.audio_path(track_id)
@@ -172,8 +190,17 @@ class AppBackend:
                 paths = filter_already_copied(paths, root)
             ordered = library.order_tracks(paths, s["track_order"])
             old = self.session
+            if self.dupes is not None:
+                self.dupes.cancel()
+            self.dupes = DuplicateIndex(root, self.meta.get).start()
             self.session = Session(
-                root, ordered, presets=self.presets, settings=self._get_settings, on_change=self._changed, lock=self.lock
+                root,
+                ordered,
+                presets=self.presets,
+                settings=self._get_settings,
+                journal=self.journal,
+                on_change=self._on_session_change,
+                lock=self.lock,
             )
             self.scan.update(status="ready", count=len(ordered))
             self._scan_job = None
@@ -225,21 +252,55 @@ class AppBackend:
         self._session().play_next(str(track_id))
         return self._after_queue_change()
 
-    def api_queue(self, offset: int = 0, limit: int = 100) -> dict:
+    def api_queue(self, offset: int = 0, limit: int = 100, q: str = "") -> dict:
         s = self.session
-        return s.queue_slice(offset, limit) if s else {"total": 0, "offset": 0, "items": []}
+        if s is None:
+            return {"total": 0, "offset": 0, "items": []}
+        page = s.queue_slice(offset, limit, q)
+        if self.settings.get("advanced_features"):
+            for item in page["items"]:  # BPM / key from the cache (filled by prefetch and filters)
+                m = self.meta.peek(s.track_path(item["id"]) or Path())
+                if m is not None:
+                    item["bpm"], item["key"] = m.bpm, keys.to_camelot(m.key) or m.key
+        return page
 
     def api_reveal(self, target: str = "sorted") -> str:
         """Open the BAKKIS_SORTED folder (or the music folder) in Finder."""
         s = self._session()
         path = library.sorted_root(s.music_root)
-        if target != "sorted" or not path.is_dir():
+        if target == "playlists":
+            path = path / playlists.PLAYLIST_DIR
+        if target not in ("sorted", "playlists") or not path.is_dir():
             path = s.music_root
         self._open_in_finder(path)
         return str(path)
 
     def _open_in_finder(self, path: Path) -> None:
         subprocess.Popen(["open", str(path)])
+
+    # ------------------------------------------------------------------ history across sessions
+
+    def _active_dests(self) -> frozenset:
+        s = self.session
+        return s.active_dests() if s else frozenset()
+
+    def api_history(self) -> list:
+        return history.load(self.journal, active_dests=self._active_dests())
+
+    def api_history_restore(self, entry_ids: list) -> list:
+        s = self.session
+        if s:
+            s.flush()  # never race the worker on the same files
+        results = history.restore(self.journal, [str(x) for x in entry_ids], active_dests=self._active_dests())
+        # Files put back inside the loaded folder join the queue as the next tracks.
+        if s:
+            for r in results:
+                if r.get("ok") and r.get("restored"):
+                    p = Path(r["restored"])
+                    if p.exists() and str(p).startswith(str(s.music_root) + os.sep) and library.is_audio_path(p):
+                        s.add_next(p)
+        self._changed()
+        return results
 
     def api_open_url(self, url: str) -> bool:
         """Open a link in the user's browser / mail app. Only https: and mailto: links are allowed."""
@@ -251,6 +312,64 @@ class AppBackend:
 
     def _open_external(self, url: str) -> None:
         subprocess.Popen(["open", url])
+
+    def api_set_filter(
+        self,
+        bpm_min: Optional[float] = None,
+        bpm_max: Optional[float] = None,
+        key: Optional[str] = None,
+        compatible: bool = False,
+        order: str = "queue",
+    ) -> dict:
+        """Advanced: show only tracks in a BPM range and/or (harmonically compatible) key."""
+        s = self._session()
+        code = keys.to_camelot(key) if key else None
+        if key and not code:
+            raise ApiError(f"Unknown key: {key}")
+        wanted = keys.compatible(code) if code and compatible else ({code} if code else None)
+        pool = s.filter_pool()
+        info = {}
+        keep, ranked = set(), []
+        for t in pool:  # metadata is cached; this reads tags only for tracks not seen yet
+            m = self.meta.get(t.path)
+            try:
+                bpm = float(m.bpm) if m.bpm else None
+            except ValueError:
+                bpm = None
+            camelot = keys.to_camelot(m.key)
+            if bpm_min is not None and (bpm is None or bpm < float(bpm_min) - 0.5):
+                continue
+            if bpm_max is not None and (bpm is None or bpm > float(bpm_max) + 0.5):
+                continue
+            if wanted is not None and camelot not in wanted:
+                continue
+            keep.add(t.id)
+            ranked.append((t.id, bpm, camelot))
+        if order == "bpm":
+            ranked.sort(key=lambda r: (r[1] is None, r[1] or 0))
+        elif order == "key":
+            ranked.sort(key=lambda r: (keys.sort_key(r[2]), r[1] or 0))
+        info = {"bpm_min": bpm_min, "bpm_max": bpm_max, "key": code, "compatible": bool(compatible and code), "order": order}
+        s.apply_filter(keep, [r[0] for r in ranked] if order in ("bpm", "key") else None, info)
+        return self._after_queue_change()
+
+    def api_clear_filter(self) -> dict:
+        self._session().clear_filter()
+        return self._after_queue_change()
+
+    def api_export_playlists(self) -> dict:
+        """Advanced: M3U8 per destination folder into BAKKIS_SORTED/_Playlists."""
+        s = self._session()
+        s.flush()  # include sorts that are still being written
+        return playlists.export(s.music_root, self.meta.get)
+
+    def api_check_update(self) -> dict:
+        """Ask GitHub Releases once per launch whether a newer version exists (only if enabled)."""
+        if not self.settings.get("check_for_updates", True):
+            return {"current": __version__, "error": "disabled"}
+        if getattr(self, "_update_result", None) is None:
+            self._update_result = updates.check()
+        return self._update_result
 
     def api_about(self) -> dict:
         return {"version": __version__, "macos": platform.mac_ver()[0] or platform.platform(), "python": platform.python_version()}

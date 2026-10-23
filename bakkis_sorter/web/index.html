@@ -17,8 +17,12 @@
   </div>
   <div class="top-progress" aria-hidden="true"><div id="top-progress-fill"></div></div>
   <div class="count" id="count"></div>
+  <button type="button" class="op-badge filter-badge" id="filter-badge" hidden title="The queue is filtered. Click to change.">FILTER</button>
   <button type="button" class="op-badge" id="op-badge" hidden title="Files are copied; originals stay where they are. Change in Settings.">COPY</button>
   <div class="top-icons">
+    <button type="button" class="icon-btn" id="btn-history" title="History" aria-label="History">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
+    </button>
     <button type="button" class="icon-btn" id="btn-queue" title="Queue (Q)" aria-label="Queue">
       <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
     </button>
@@ -105,8 +109,10 @@
       <p class="muted small" id="done-note"></p>
       <p class="done-follow small" id="done-follow"></p>
       <div class="row-btns">
+        <button type="button" class="primary-btn" id="btn-done-clear-filter" hidden>Clear filter</button>
         <button type="button" class="ghost-btn" id="btn-done-undo">Undo last (Z)</button>
         <button type="button" class="ghost-btn" id="btn-done-reveal">Reveal in Finder</button>
+        <button type="button" class="ghost-btn" id="btn-done-export" hidden>Export playlists</button>
         <button type="button" class="primary-btn" id="btn-done-load">Load another folder</button>
       </div>
     </div>
@@ -136,8 +142,35 @@
   </div>
   <div class="drawer-section grow">
     <h3>Up next <span class="muted" id="queue-count"></span> <span class="muted small">· click to play next</span></h3>
+    <input type="search" class="set-input queue-search" id="queue-search" placeholder="Search the queue" autocomplete="off" spellcheck="false">
+    <div class="queue-filter" id="queue-filter" hidden>
+      <div class="qf-row">
+        <label>BPM</label>
+        <input type="number" class="set-input qf-num" id="qf-bpm-min" placeholder="min" min="40" max="250" step="1">
+        <span class="muted">–</span>
+        <input type="number" class="set-input qf-num" id="qf-bpm-max" placeholder="max" min="40" max="250" step="1">
+        <label>Key</label>
+        <select class="set-select qf-key" id="qf-key"></select>
+      </div>
+      <div class="qf-row">
+        <label class="set-check"><input type="checkbox" id="qf-compatible"><span>+ compatible keys</span></label>
+        <select class="set-select qf-order" id="qf-order">
+          <option value="queue">Queue order</option>
+          <option value="bpm">By BPM</option>
+          <option value="key">By key</option>
+        </select>
+        <button type="button" class="primary-btn small-btn" id="qf-apply">Filter</button>
+        <button type="button" class="ghost-btn small-btn" id="qf-clear">Clear</button>
+      </div>
+      <div class="set-note" id="qf-status"></div>
+    </div>
     <div class="queue-list" id="queue-list"><div class="queue-inner" id="queue-inner"></div></div>
   </div>
+</aside>
+
+<aside class="drawer drawer-wide" id="drawer-history" hidden aria-label="History">
+  <div class="drawer-head"><h2>History</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
+  <div class="drawer-scroll" id="history-body"></div>
 </aside>
 
 <aside class="drawer drawer-wide" id="drawer-settings" hidden aria-label="Settings">

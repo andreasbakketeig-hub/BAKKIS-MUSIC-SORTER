@@ -237,3 +237,43 @@ def test_open_url_only_https_and_mailto(app, monkeypatch):
     assert opened == ["https://bakkis.com", "mailto:bakkis@bakkis.com?subject=Hi"]
     about = api(server, "about")[1]["result"]
     assert about["version"] and about["macos"]
+
+
+def test_bpm_key_filter(app, music):
+    backend, server = app
+    spec = [("a.mp3", "124", "8A"), ("b.mp3", "128", "Am"), ("c.mp3", "122", "9A"), ("d.mp3", None, "8A"), ("e.mp3", "126", "3B"), ("f.mp3", "124", "8B")]
+    from mutagen.id3 import TBPM, TKEY
+    for name, bpm, key in spec:
+        p = make_mp3(music / name)
+        t = ID3()
+        if bpm:
+            t.add(TBPM(encoding=3, text=bpm))
+        t.add(TKEY(encoding=3, text=key))
+        t.save(str(p))
+    api(server, "set_settings", track_order="in_order")
+    sess = load(server, music)["session"]
+    assert sess["current"]["name"] == "a.mp3"
+    names = lambda: [t["name"] for t in api(server, "queue", limit=50)[1]["result"]["items"]]
+
+    snap = api(server, "set_filter", bpm_min=123, bpm_max=127)[1]["result"]
+    assert names() == ["e.mp3", "f.mp3"] and snap["held"] == 3 and snap["remaining"] == 6  # a stays current
+    api(server, "set_filter", key="8A", compatible=True, order="bpm")
+    assert names() == ["c.mp3", "f.mp3", "b.mp3", "d.mp3"]  # 9A/8B/8A(Am) by BPM, no-BPM last
+    api(server, "set_filter", key="8A")
+    assert names() == ["b.mp3", "d.mp3"]
+    assert api(server, "set_filter", key="H#")[0] == 400
+    snap = api(server, "clear_filter")[1]["result"]
+    assert names() == ["b.mp3", "c.mp3", "d.mp3", "e.mp3", "f.mp3"] and snap["held"] == 0 and snap["filter"] is None
+
+
+def test_rejected_post_does_not_poison_keep_alive_connection(app):
+    _, server = app
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    conn.request("POST", "/api/state", body=b"{}", headers={"X-Bakkis-Token": "wrong"})
+    r = conn.getresponse()
+    r.read()
+    assert r.status == 403
+    conn.request("GET", "/static/app.js")  # same connection
+    r = conn.getresponse()
+    assert r.status == 200 and b"BAKKIS" in r.read()
+    conn.close()

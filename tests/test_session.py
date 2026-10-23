@@ -339,3 +339,13 @@ def test_count_info_survives_preset_delete(music, make_session):
     s.presets.delete(extra["id"])
     info = s.snapshot()["count_info"][f"{extra['id']}:1"]
     assert (info["label"], info["preset"], info["slot"]) == ("No", "Temp", 1)
+
+
+def test_queue_search(music, make_session):
+    paths = tracks(music, "Promos/Maceo Plex - Sheets.mp3", "Other/Solomun - Home.mp3", "Promos/Solomun - Kackvogel.mp3", "a.mp3")
+    s = make_session(paths)
+    res = s.queue_slice(q="solomun")
+    assert [t["name"] for t in res["items"]] == ["Solomun - Home.mp3", "Solomun - Kackvogel.mp3"]
+    assert [t["index"] for t in res["items"]] == [0, 1]
+    assert s.queue_slice(q="promos solomun")["total"] == 1
+    assert s.queue_slice(q="  ")["total"] == 3

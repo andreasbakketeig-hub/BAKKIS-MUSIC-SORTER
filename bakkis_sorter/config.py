@@ -215,6 +215,8 @@ def default_settings() -> dict:
         "move_warning_acknowledged": False,
         "guide_seen": False,  # the guide opens once on first launch
         "coach_done": False,  # first-session hint above the tiles
+        "check_for_updates": True,  # one request to GitHub Releases at startup
+        "advanced_features": False,  # playlist export, BPM/key filter
     }
 
 
@@ -238,6 +240,8 @@ def normalize_settings(raw: object) -> dict:
         "move_warning_acknowledged",
         "guide_seen",
         "coach_done",
+        "check_for_updates",
+        "advanced_features",
     ):
         if k in src:
             out[k] = coerce_bool(src[k])

@@ -15,7 +15,7 @@ const START_CHOICES = [[0, "0:00"], [30, "0:30"], [60, "1:00"], [90, "1:30"], [1
 
 // Promo / contact. Links open in the default browser via the backend (never inside the app window).
 const CONTACT_EMAIL = "bakkis@bakkis.com";
-const SUPPORT_URL = null; // Ko-fi link once the account exists; the Support button stays hidden until then
+const SUPPORT_URL = "https://ko-fi.com/bakkis";
 const FOLLOW_LINKS = [
   ["Spotify", "https://open.spotify.com/artist/4gKuT9rOlvCpHJUkWp4JFv"],
   ["SoundCloud", "https://soundcloud.com/bakkismusic"],
@@ -66,6 +66,7 @@ const Drawers = {
     document.body.classList.add("drawer-open");
     if (name === "queue") QueueDrawer.refresh();
     if (name === "settings") SettingsDrawer.render();
+    if (name === "history") HistoryDrawer.render();
   },
 
   close() {
@@ -84,6 +85,7 @@ const Drawers = {
 // ------------------------------------------------------------------ queue drawer
 
 const QueueDrawer = {
+  query: "",
   pages: new Map(),
   total: 0,
   timer: 0,
@@ -97,6 +99,7 @@ const QueueDrawer = {
   async refresh() {
     this.pages.clear();
     this.renderHistory();
+    FilterPanel.render();
     await this.fetchPage(0);
     this.renderList();
   },
@@ -106,7 +109,9 @@ const QueueDrawer = {
     if (this.pages.has(n) || this.inflight.has(n)) return false;
     this.inflight.add(n);
     try {
-      const res = await api("queue", { offset: n * QUEUE_PAGE, limit: QUEUE_PAGE });
+      const q = this.query;
+      const res = await api("queue", { offset: n * QUEUE_PAGE, limit: QUEUE_PAGE, q });
+      if (q !== this.query) return false; // the search changed while loading
       this.total = res.total;
       this.pages.set(n, res.items);
       return true;
@@ -140,7 +145,7 @@ const QueueDrawer = {
     document.getElementById("queue-count").textContent = this.total ? String(this.total) : "";
     inner.style.height = `${this.total * QUEUE_ROW_H}px`;
     inner.textContent = "";
-    if (!this.total) { inner.appendChild(el("div", "q-empty", "No more tracks")); return; }
+    if (!this.total) { inner.appendChild(el("div", "q-empty", this.query ? "No matches" : "No more tracks")); return; }
     const first = Math.max(0, Math.floor(scroller.scrollTop / QUEUE_ROW_H) - 5);
     const last = Math.min(this.total - 1, Math.ceil((scroller.scrollTop + scroller.clientHeight) / QUEUE_ROW_H) + 5);
     const missing = new Set();
@@ -153,12 +158,13 @@ const QueueDrawer = {
       row.type = "button";
       row.style.top = `${i * QUEUE_ROW_H}px`;
       row.title = "Play next";
-      row.appendChild(el("span", "q-idx", String(i + 1)));
+      row.appendChild(el("span", "q-idx", String(t.index + 1)));
       const txt = el("span", "q-text");
       txt.appendChild(el("span", "q-name", t.name.replace(/\.[^.]+$/, "")));
       if (t.folder) txt.appendChild(el("span", "q-folder", t.folder));
       row.appendChild(txt);
-      if (i === 0) row.appendChild(el("span", "q-state", "next"));
+      if (t.bpm || t.key) row.appendChild(el("span", "q-meta", [t.bpm, t.key].filter(Boolean).join(" · ")));
+      if (t.index === 0) row.appendChild(el("span", "q-state", "next"));
       row.addEventListener("click", () => this.playNext(t));
       inner.appendChild(row);
     }
@@ -169,6 +175,164 @@ const QueueDrawer = {
     try {
       applySession(await api("play_next", { track_id: t.id }));
       toast(`“${t.name.replace(/\.[^.]+$/, "")}” plays next`);
+    } catch (e) { toast(e.message, { level: "error" }); }
+  },
+};
+
+// ------------------------------------------------------------------ advanced: BPM / key filter (queue drawer)
+
+const KEY_CODES = Array.from({ length: 12 }, (_, i) => [`${i + 1}A`, `${i + 1}B`]).flat();
+const KEY_NAMES = {
+  "1A": "Abm", "2A": "Ebm", "3A": "Bbm", "4A": "Fm", "5A": "Cm", "6A": "Gm", "7A": "Dm", "8A": "Am", "9A": "Em", "10A": "Bm", "11A": "F#m", "12A": "C#m",
+  "1B": "B", "2B": "F#", "3B": "Db", "4B": "Ab", "5B": "Eb", "6B": "Bb", "7B": "F", "8B": "C", "9B": "G", "10B": "D", "11B": "A", "12B": "E",
+};
+
+const FilterPanel = {
+  built: false,
+
+  build() {
+    if (this.built) return;
+    this.built = true;
+    const sel = document.getElementById("qf-key");
+    const any = el("option", null, "Any");
+    any.value = "";
+    sel.appendChild(any);
+    for (const c of KEY_CODES) {
+      const o = el("option", null, `${c} · ${KEY_NAMES[c]}`);
+      o.value = c;
+      sel.appendChild(o);
+    }
+    document.getElementById("qf-apply").addEventListener("click", () => this.apply());
+    document.getElementById("qf-clear").addEventListener("click", () => this.clear());
+    for (const id of ["qf-bpm-min", "qf-bpm-max"]) {
+      document.getElementById(id).addEventListener("keydown", (e) => { if (e.key === "Enter") this.apply(); });
+    }
+  },
+
+  render() {
+    const box = document.getElementById("queue-filter");
+    const on = !!(S.settings && S.settings.advanced_features && S.session);
+    box.hidden = !on;
+    if (!on) return;
+    this.build();
+    const f = S.session.filter;
+    const status = document.getElementById("qf-status");
+    if (f) {
+      const parts = [];
+      if (f.bpm_min != null || f.bpm_max != null) parts.push(`${f.bpm_min ?? "…"}–${f.bpm_max ?? "…"} BPM`);
+      if (f.key) parts.push(`${f.key}${f.compatible ? " + compatible" : ""}`);
+      status.textContent = `Filtered${parts.length ? ` (${parts.join(", ")})` : ""}: ${S.session.remaining - S.session.held} to go, ${S.session.held} set aside. Tracks without BPM/key tags are set aside when filtering on them.`;
+    } else {
+      status.textContent = "Show only tracks in a BPM range and/or key. Nothing is moved; other tracks wait until you clear the filter.";
+    }
+  },
+
+  async apply() {
+    const num = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : Number(v); };
+    const params = {
+      bpm_min: num("qf-bpm-min"),
+      bpm_max: num("qf-bpm-max"),
+      key: document.getElementById("qf-key").value || null,
+      compatible: document.getElementById("qf-compatible").checked,
+      order: document.getElementById("qf-order").value,
+    };
+    if (params.bpm_min != null && params.bpm_max != null && params.bpm_min > params.bpm_max) {
+      [params.bpm_min, params.bpm_max] = [params.bpm_max, params.bpm_min];
+    }
+    try {
+      applySession(await api("set_filter", params));
+      QueueDrawer.refresh();
+    } catch (e) { toast(e.message, { level: "error" }); }
+  },
+
+  async clear() {
+    try {
+      applySession(await api("clear_filter"));
+      QueueDrawer.refresh();
+    } catch (e) { toast(e.message, { level: "error" }); }
+  },
+};
+
+// ------------------------------------------------------------------ history drawer (past sessions)
+
+const HistoryDrawer = {
+  SHOW: 40,
+  expanded: new Set(),
+
+  async render() {
+    const body = document.getElementById("history-body");
+    body.textContent = "";
+    body.appendChild(el("p", "muted small", "Everything sorted in the last 90 days that is still in place. Put tracks back where they came from; nothing is ever overwritten."));
+    let sessions = [];
+    try { sessions = await api("history"); } catch (e) { body.appendChild(el("p", "warn small", e.message)); return; }
+    if (!sessions.length) { body.appendChild(el("div", "q-empty", "Nothing sorted yet")); return; }
+    for (const sess of sessions) body.appendChild(this.renderSession(sess));
+  },
+
+  renderSession(sess) {
+    const box = el("div", "hist-session");
+    const head = el("div", "hist-head");
+    const when = sess.started ? new Date(sess.started).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : sess.id;
+    const folder = (sess.root || "").split("/").filter(Boolean).pop() || "";
+    const title = el("div", "hist-title");
+    title.appendChild(el("span", null, when));
+    title.appendChild(el("span", "muted small", `${folder ? folder + " · " : ""}${sess.items.length} track${sess.items.length === 1 ? "" : "s"}`));
+    head.appendChild(title);
+    const restorable = sess.items.filter((i) => i.status === "sorted");
+    if (restorable.length) {
+      const all = el("button", "ghost-btn small-btn", `Put back all (${restorable.length})`);
+      all.type = "button";
+      all.addEventListener("click", () => this.putBack(restorable, `Put back ${restorable.length} tracks from ${when}?`));
+      head.appendChild(all);
+    }
+    box.appendChild(head);
+    const list = el("div", "hist-items");
+    const open = this.expanded.has(sess.id);
+    const shown = open ? sess.items : sess.items.slice(0, this.SHOW);
+    for (const it of shown) {
+      const row = el("div", "q-row q-hist");
+      row.appendChild(el("span", `q-label${it.op === "copy" ? " copy" : ""}`, it.label || ""));
+      const name = el("span", "q-name", it.name);
+      name.title = it.dest;
+      row.appendChild(name);
+      if (it.status === "sorted") {
+        const b = el("button", "link-btn", it.op === "copy" ? "Remove copy" : "Put back");
+        b.type = "button";
+        b.addEventListener("click", () => this.putBack([it]));
+        row.appendChild(b);
+      } else {
+        row.appendChild(el("span", "q-state", it.status === "current" ? "this session · Z" : "moved since"));
+      }
+      list.appendChild(row);
+    }
+    if (sess.items.length > shown.length) {
+      const more = el("button", "link-btn", `Show all ${sess.items.length}`);
+      more.type = "button";
+      more.addEventListener("click", () => { this.expanded.add(sess.id); this.render(); });
+      list.appendChild(more);
+    }
+    box.appendChild(list);
+    return box;
+  },
+
+  async putBack(items, confirmText) {
+    if (confirmText) {
+      const ok = await modal({
+        title: confirmText,
+        body: "Moved tracks go back to their original folders (with a new name if the old one is taken). Copies are deleted; originals are untouched.",
+        buttons: [{ label: "Cancel", value: false }, { label: "Put back", value: true, primary: true }],
+      });
+      if (!ok) return;
+    }
+    try {
+      const res = await api("history_restore", { entry_ids: items.map((i) => i.id) });
+      const ok = res.filter((r) => r.ok).length;
+      const failed = res.filter((r) => !r.ok);
+      if (ok) toast(ok === 1 ? res.find((r) => r.ok).message : `Put back ${ok} tracks`);
+      for (const f of failed.slice(0, 3)) toast(f.message, { level: "warning", ms: 6000 });
+      if (S.session) await refreshState();
+      refreshCountsSoon(0);
+      this.render();
     } catch (e) { toast(e.message, { level: "error" }); }
   },
 };
@@ -200,6 +364,10 @@ const SETTINGS_SCHEMA = [
   { key: "startup_preset_id", type: "startup_preset", label: "Preset on startup" },
   { key: "show_help_guide_on_startup", type: "bool", label: "Show the shortcut guide on startup" },
   { key: "show_queue_panel_on_startup", type: "bool", label: "Open the queue on startup" },
+  { key: "check_for_updates", type: "bool", label: "Check for new versions on startup", note: "One request to GitHub. Nothing is downloaded or sent about you or your music." },
+  { section: "Advanced" },
+  { key: "advanced_features", type: "bool", label: "Show advanced features", note: "Playlist export for Rekordbox / Serato, and filtering the queue by BPM and key." },
+  { type: "export" },
   { section: "Presets" },
   { type: "presets" },
 ];
@@ -223,6 +391,18 @@ const SettingsDrawer = {
     for (const item of SETTINGS_SCHEMA) {
       if (item.section) { body.appendChild(el("h3", "set-section", item.section)); continue; }
       if (item.type === "presets") { this.renderPresets(body); continue; }
+      if (item.type === "export") {
+        if (!S.settings.advanced_features) continue;
+        const row = el("div", "set-row");
+        const b = el("button", "ghost-btn small-btn", "Export playlists (M3U8)");
+        b.type = "button";
+        b.disabled = !S.session;
+        b.addEventListener("click", exportPlaylists);
+        row.appendChild(b);
+        row.appendChild(el("div", "set-note", "One playlist per sorted folder in BAKKIS_SORTED/_Playlists. In Rekordbox: File → Import → Playlist. In Serato: drag the files onto the crate list."));
+        body.appendChild(row);
+        continue;
+      }
       body.appendChild(this.renderItem(item));
     }
     this.renderAbout(body);
@@ -304,7 +484,8 @@ const SettingsDrawer = {
       });
       if (!ok) { cb.checked = false; return; }
     }
-    this.save({ [item.key]: cb.checked });
+    await this.save({ [item.key]: cb.checked });
+    if (item.key === "advanced_features") this.render();
   },
 
   renderAbout(body) {
@@ -315,6 +496,12 @@ const SettingsDrawer = {
     logo.setAttribute("aria-label", "BAKKIS");
     box.appendChild(logo);
     box.appendChild(el("div", "muted small", `BAKKIS MUSIC SORTER ${S.version || ""} · Free and open source (MIT)`));
+    if (S.update && S.update.newer) {
+      const up = el("button", "link-btn", `Version ${S.update.latest} is available: download`);
+      up.type = "button";
+      up.addEventListener("click", () => openExternal(S.update.url));
+      box.appendChild(up);
+    }
     const follow = el("div", "about-links");
     follow.appendChild(el("span", "muted small", "Follow BAKKIS"));
     for (const [label, url] of FOLLOW_LINKS) {
@@ -638,6 +825,19 @@ const Guide = {
 function setupPanels() {
   for (const b of document.querySelectorAll("[data-close-drawer]")) b.addEventListener("click", () => Drawers.close());
   document.getElementById("queue-list").addEventListener("scroll", () => QueueDrawer.renderList(), { passive: true });
+  let searchTimer = 0;
+  const search = document.getElementById("queue-search");
+  search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      QueueDrawer.query = search.value.trim();
+      document.getElementById("queue-list").scrollTop = 0;
+      QueueDrawer.refresh();
+    }, 120);
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); if (search.value) { search.value = ""; search.dispatchEvent(new Event("input")); } else search.blur(); }
+  });
   document.getElementById("guide-close").addEventListener("click", () => Guide.close());
   document.getElementById("guide").addEventListener("click", (e) => { if (e.target.id === "guide") Guide.close(); });
   document.getElementById("guide-startup").addEventListener("change", (e) => {

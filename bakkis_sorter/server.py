@@ -139,6 +139,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._handle_get()
 
     def do_POST(self) -> None:  # noqa: N802
+        # Read the body before any early return: an unread body would be parsed as the start of the
+        # next request on this keep-alive connection (seen as "501 Unsupported method ('{}GET')").
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            return self._error(HTTPStatus.BAD_REQUEST)
+        if length < 0 or length > MAX_BODY:
+            self.close_connection = True
+            return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        raw = self.rfile.read(length) if length else b""
         if not self._host_ok():
             return self._error(HTTPStatus.FORBIDDEN)
         route = self._route()
@@ -147,13 +158,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._token_ok(self.headers.get("X-Bakkis-Token")):
             return self._error(HTTPStatus.FORBIDDEN)
         try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            return self._error(HTTPStatus.BAD_REQUEST)
-        if length > MAX_BODY:
-            return self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-        try:
-            params = json.loads(self.rfile.read(length) or b"{}")
+            params = json.loads(raw or b"{}")
         except ValueError:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON"})
         if not isinstance(params, dict):

@@ -615,6 +615,7 @@ function renderTopbar() {
     sel.appendChild(edit);
   }
   $("op-badge").hidden = !(S.settings && S.settings.file_operation === "copy");
+  $("filter-badge").hidden = !(S.session && S.session.filter);
   const sess = S.session;
   if (sess && sess.total) {
     const done = sess.total - sess.remaining;
@@ -751,6 +752,11 @@ function fillCard(track, meta) {
     c.appendChild(el("b", null, value));
     chips.appendChild(c);
   };
+  if (meta && meta.duplicate) {
+    const c = el("span", "chip chip-warn", `Already in ${meta.duplicate.folder}`);
+    c.title = meta.duplicate.path;
+    chips.appendChild(c);
+  }
   if (meta && meta.bpm) chip("BPM", meta.bpm);
   if (meta && meta.key) chip("Key", meta.key);
   if (meta && meta.duration) chip("", fmtTime(meta.duration));
@@ -821,7 +827,33 @@ function renderDone() {
   box.appendChild(el("div", "n muted", fmtTime(sess.elapsed)));
   const verb = S.settings && S.settings.file_operation === "copy" ? "copied" : "moved";
   renderDoneFollow();
+  const held = sess.held || 0;
+  $("btn-done-clear-filter").hidden = !held;
+  document.querySelector("#screen-done h1").textContent = held ? "No more tracks match the filter" : "All done";
+  $("btn-done-export").hidden = !(S.settings && S.settings.advanced_features) || !total;
   $("done-note").textContent = total ? `Files were ${verb} into BAKKIS_SORTED inside ${sess.root.split("/").filter(Boolean).pop()}.` : "";
+}
+
+/** Advanced: M3U8 per destination folder, then offer to show them in Finder. */
+async function exportPlaylists() {
+  try {
+    const r = await api("export_playlists");
+    const n = r.playlists.length;
+    if (!n) { toast("Nothing sorted yet to export"); return; }
+    toast(`Exported ${n} playlist${n === 1 ? "" : "s"} to BAKKIS_SORTED/_Playlists`, {
+      ms: 8000,
+      action: { label: "Show", fn: () => api("reveal", { target: "playlists" }).catch(() => {}) },
+    });
+  } catch (e) { toast(e.message, { level: "error" }); }
+}
+
+/** One request to GitHub Releases per launch; silent unless a newer version exists. */
+async function checkForUpdate() {
+  try {
+    const r = await api("check_update");
+    S.update = r;
+    if (r.newer && r.url) toast(`BAKKIS MUSIC SORTER ${r.latest} is available`, { ms: 15000, action: { label: "Download", fn: () => openExternal(r.url) } });
+  } catch (_) { /* never bother the user about this */ }
 }
 
 /** One quiet promo line on the end screen. */
@@ -1056,14 +1088,15 @@ async function loadFolder(path) {
 
 // ------------------------------------------------------------------ toasts & modal
 
-function toast(message, { level = "info", undo: withUndo = false, ms } = {}) {
+function toast(message, { level = "info", undo: withUndo = false, ms, action } = {}) {
   const box = $("toasts");
   const t = el("div", `toast ${level}`);
   t.appendChild(el("span", "msg", message));
-  if (withUndo) {
-    const b = el("button", null, "Undo");
+  if (withUndo) action = { label: "Undo", fn: undo };
+  if (action) {
+    const b = el("button", null, action.label);
     b.type = "button";
-    b.addEventListener("click", () => { t.remove(); undo(); });
+    b.addEventListener("click", () => { t.remove(); action.fn(); });
     t.appendChild(b);
   }
   box.appendChild(t);
@@ -1117,7 +1150,7 @@ function onKey(e) {
     if (["Escape", "h", "H", "?"].includes(e.key)) { e.preventDefault(); Guide.close(); }
     return;
   }
-  if (Drawers.open === "settings") {
+  if (Drawers.open === "settings" || Drawers.open === "history") {
     if (e.key === "Escape") { e.preventDefault(); Drawers.close(); }
     return; // the settings form owns the keyboard
   }
@@ -1336,10 +1369,14 @@ async function boot() {
   $("btn-done-undo").addEventListener("click", undo);
   setupPanels();
   $("btn-queue").addEventListener("click", () => Drawers.toggle("queue"));
+  $("btn-history").addEventListener("click", () => Drawers.toggle("history"));
   $("btn-settings").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.toggle("settings"); });
   $("btn-help").addEventListener("click", () => Guide.toggle());
   $("coach-close").addEventListener("click", finishCoach);
+  $("filter-badge").addEventListener("click", () => Drawers.show("queue"));
+  $("btn-done-clear-filter").addEventListener("click", () => FilterPanel.clear());
   $("op-badge").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.show("settings"); });
+  $("btn-done-export").addEventListener("click", exportPlaylists);
   $("btn-done-reveal").addEventListener("click", () => api("reveal").catch((e) => toast(e.message, { level: "error" })));
   $("btn-load-default").addEventListener("click", () => S.settings.default_folder_path && loadFolder(S.settings.default_folder_path));
   $("preset-select").addEventListener("change", async (e) => {
@@ -1388,6 +1425,7 @@ async function boot() {
     refreshCountsSoon(0);
   }
   if (S.settings.show_queue_panel_on_startup && S.session) Drawers.show("queue");
+  if (S.settings.check_for_updates) setTimeout(checkForUpdate, 4000);
   if (S.settings.show_help_guide_on_startup || !S.settings.guide_seen) {
     Guide.show();
     if (!S.settings.guide_seen) api("set_settings", { guide_seen: true }).then((x) => (S.settings = x)).catch(() => {});
