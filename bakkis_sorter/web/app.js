@@ -171,10 +171,13 @@ const Player = {
     this.cur.volume = this.next.volume = Math.max(0, Math.min(1, v / 100));
   },
 
+  /** The chosen start point, or, when the track is too short for it, about a third of the way in. */
   startPointFor(duration) {
     const start = (S.settings && S.settings.playback_start_seconds) || 0;
     if (!isFinite(duration) || duration <= 0) return start;
-    return duration < start + 30 ? 0 : start;
+    if (duration >= start + 30) return start;
+    if (duration < 60) return 0;
+    return Math.floor((duration / 3) / 15) * 15; // e.g. a 3:30 radio edit with "5:00" starts at 1:00
   },
 
   /** Make `id` the playing track. Uses the preloaded element when it holds this track. */

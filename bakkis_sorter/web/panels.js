@@ -11,7 +11,7 @@ const PALETTE = [
   ["Teal", "#00D6B4"], ["Blue", "#18A0FB"], ["Purple", "#7C5CFF"], ["Gray", "#8A8F98"], ["Orange", "#FF7A1A"],
   ["Pink", "#D65CFF"], ["Red", "#FF2D55"], ["Yellow", "#FFF200"], ["Dark", "#2A2F36"],
 ];
-const START_CHOICES = [[0, "0:00"], [30, "0:30"], [60, "1:00"], [90, "1:30"], [120, "2:00"], [180, "3:00"]];
+const START_CHOICES = [[0, "0:00"], [30, "0:30"], [60, "1:00"], [90, "1:30"], [120, "2:00"], [150, "2:30"], [180, "3:00"], [240, "4:00"], [300, "5:00"], [360, "6:00"]];
 
 // Promo / contact. Links open in the default browser via the backend (never inside the app window).
 const CONTACT_EMAIL = "bakkis@bakkis.com";
@@ -358,7 +358,7 @@ const SETTINGS_SCHEMA = [
   { key: "end_of_track", type: "select", label: "When a track ends", options: [["skip", "Skip it and play the next"], ["stop", "Stop"]] },
   { key: "sort_confirmation_sound", type: "bool", label: "Click sound on sort" },
   { section: "Playback" },
-  { key: "playback_start_seconds", type: "select", label: "Start tracks at", options: START_CHOICES, number: true, note: "Tracks shorter than start + 30 s play from 0:00." },
+  { key: "playback_start_seconds", type: "select", label: "Start tracks at", options: START_CHOICES, number: true, note: "If a track is too short for this (less than start + 30 s), it starts about a third of the way in. Tracks under a minute start at 0:00." },
   { section: "Startup" },
   { key: "default_mode_on_startup", type: "select", label: "Mode on startup", options: [["swipe", "Swipe"], ["grid", "Grid"]] },
   { key: "startup_preset_id", type: "startup_preset", label: "Preset on startup" },

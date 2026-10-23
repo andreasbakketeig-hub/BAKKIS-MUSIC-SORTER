@@ -53,7 +53,7 @@ Then open the app again.
 ## Getting started
 
 1. **Choose a music folder**: click **Choose music folder**, or drag a folder (or a track inside it) into the window. Subfolders are included.
-2. The first track starts playing at **2:00** (tracks shorter than 2:30 start from the beginning; you can change this in Settings).
+2. The first track starts playing at **2:00**. Choose anything from 0:00 to 6:00 in Settings → Playback; a track too short for that starts about a third of the way in.
 3. **Decide.** The track is filed and the next one plays immediately.
 
 The first time you sort, the app asks whether to **move** or **copy** files:

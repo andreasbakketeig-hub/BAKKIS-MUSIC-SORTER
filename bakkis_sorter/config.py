@@ -27,8 +27,8 @@ MODES = ("swipe", "grid")
 SWIPE_SLOTS = 3
 GRID_SLOTS = 9
 
-# Auto-play start choices; if a track is shorter than start + 30 s, playback begins at 0:00.
-PLAYBACK_START_OPTIONS_SEC: tuple[float, ...] = (0.0, 30.0, 60.0, 90.0, 120.0, 180.0)
+# Auto-play start choices. Tracks shorter than start + 30 s start about a third of the way in (see app.js).
+PLAYBACK_START_OPTIONS_SEC: tuple[float, ...] = (0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0, 240.0, 300.0, 360.0)
 DEFAULT_PLAYBACK_START_SEC = 120.0
 
 DEFAULT_SWIPE_LABELS = ["Keep", "Archive", "Favorite"]

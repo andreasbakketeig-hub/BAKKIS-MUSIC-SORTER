@@ -35,6 +35,8 @@ def test_normalize_v1_settings_migrates_aliases_and_drops_dead_keys():
     assert s["default_folder_path"] == "/Users/x/Music"
     assert s["auto_load_default_folder"] is True
     assert s["playback_start_seconds"] == 90.0
+    assert config.normalize_settings({"playback_start_seconds": 300})["playback_start_seconds"] == 300.0
+    assert config.normalize_settings({"playback_start_seconds": 1000})["playback_start_seconds"] == 360.0
     assert s["default_mode_on_startup"] == "grid"
     assert s["track_order"] == "in_order"
     assert s["create_dated_sorting_sessions"] is False
