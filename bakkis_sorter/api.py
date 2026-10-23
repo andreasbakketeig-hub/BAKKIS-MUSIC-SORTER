@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import __version__, library
-from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, safe_segment, save_settings
+from .config import (
+    MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, reset_settings, safe_segment,
+    save_settings,
+)
 from . import feedback, history, keys, listen, playlists, updates, waveform
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
@@ -302,7 +305,7 @@ class AppBackend:
         if s is None:
             return {"total": 0, "offset": 0, "items": []}
         page = s.queue_slice(offset, limit, q)
-        if self.settings.get("advanced_features"):
+        if self.settings.get("queue_filter"):
             for item in page["items"]:  # BPM / key from the cache (filled by prefetch and filters)
                 m = self.meta.peek(s.track_path(item["id"]) or Path())
                 if m is not None:
@@ -433,7 +436,7 @@ class AppBackend:
         self._session().clear_filter()
         return self._after_queue_change()
 
-    # ------------------------------------------------------------------ listen mode (advanced; never moves files)
+    # ------------------------------------------------------------------ listen mode (Discover; never moves files)
 
     def api_listen_sources(self) -> list:
         s = self._session()
@@ -533,6 +536,14 @@ class AppBackend:
         return [s.folder_count(preset, i) for i in range(len(preset["labels"]))]
 
     # ------------------------------------------------------------------ settings
+
+    def api_reset_settings(self) -> dict:
+        """Settings back to defaults; presets, history and the default folder stay."""
+        with self.lock:
+            self.settings = save_settings(reset_settings(self.settings))
+            out = dict(self.settings)
+        self._changed()
+        return out
 
     def api_set_settings(self, **changes: object) -> dict:
         with self.lock:

@@ -281,3 +281,13 @@ def test_repair_leaves_external_disks_and_own_home_alone(tmp_path):
 def test_colored_tiles_setting():
     assert config.default_settings()["colored_tiles"] is True
     assert config.normalize_settings({"colored_tiles": "false"})["colored_tiles"] is False
+
+
+def test_feature_switches_and_reset():
+    d = config.default_settings()
+    assert d["discover_in_topbar"] is True and d["queue_filter"] is True and "advanced_features" not in d
+    assert "advanced_features" not in config.normalize_settings({"advanced_features": False})
+    cur = dict(d, volume=12, colored_tiles=False, default_folder_path="/Music", welcome_seen=True, sorted_total=99)
+    out = config.reset_settings(cur)
+    assert out["volume"] == d["volume"] and out["colored_tiles"] is True
+    assert (out["default_folder_path"], out["welcome_seen"], out["sorted_total"]) == ("/Music", True, 99)

@@ -67,3 +67,10 @@ def test_close_right_after_a_sort_does_not_hang(app, music):
     t.join(5)
     assert not t.is_alive()  # the session's worker shares the backend lock; close must not hold it
     assert (music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Keep" / "a.mp3").exists()
+
+
+def test_reset_settings_over_api(app):
+    _, server = app
+    api(server, "set_settings", colored_tiles=False, default_folder_path="/Music")
+    out = api(server, "reset_settings")[1]["result"]
+    assert out["colored_tiles"] is True and out["default_folder_path"] == "/Music"

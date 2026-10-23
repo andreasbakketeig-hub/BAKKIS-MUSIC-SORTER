@@ -665,7 +665,7 @@ function renderTopbar() {
   body.classList.toggle("mode-listen", S.mode === "listen");
   body.classList.toggle("plain-tiles", !!S.settings && S.settings.colored_tiles === false);
   const listenBtn = document.querySelector('.mode-switch [data-mode="listen"]');
-  if (listenBtn) listenBtn.hidden = !(S.settings && S.settings.advanced_features && S.session);
+  if (listenBtn) listenBtn.hidden = !(S.settings && S.settings.discover_in_topbar && S.session);
 
   const sel = $("preset-select");
   sel.textContent = "";
@@ -964,7 +964,7 @@ function renderDone() {
   const held = sess.held || 0;
   $("btn-done-clear-filter").hidden = !held;
   document.querySelector("#screen-done h1").textContent = held ? "No more tracks match the filter" : "All done";
-  $("btn-done-export").hidden = !(S.settings && S.settings.advanced_features) || !total;
+  $("btn-done-export").hidden = !total;
   const folder = sess.root.split("/").filter(Boolean).pop();
   const tree = sess.in_place ? folder : verb === "copied" ? "BAKKIS_SORTED_COPIES" : "BAKKIS_SORTED";
   let note = total ? `Files were ${verb} into ${sess.in_place ? "preset folders inside " + folder : tree + " inside " + folder}.` : "";
@@ -1344,7 +1344,7 @@ function onKey(e) {
     return;
   }
   if (Listen.active && !meta && !ctrl && Listen.onKey(e, key)) return;
-  if (key === "l" && !meta && !ctrl && S.session && S.settings.advanced_features) { e.preventDefault(); Listen.openPicker(); return; }
+  if (key === "l" && !meta && !ctrl && S.session && S.settings.discover_in_topbar) { e.preventDefault(); Listen.openPicker(); return; }
 
   // Undo
   if (key === "z" && (meta && shift || ctrl && !meta)) { e.preventDefault(); if (!e.repeat) undoAll(); return; }

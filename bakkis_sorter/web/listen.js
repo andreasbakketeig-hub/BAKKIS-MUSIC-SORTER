@@ -1,4 +1,4 @@
-/* BAKKIS MUSIC SORTER v2 — Discover mode (advanced; "listen" in the code): play without sorting anything.
+/* BAKKIS MUSIC SORTER v2 — Discover mode ("listen" in the code): play without sorting anything.
  *
  * Plays a shuffled list from the unsorted queue and/or sorted folders, as full tracks or as
  * snippets from the middle of each track with a crossfade. No key in this mode can move a file:

@@ -30,6 +30,7 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 | Empty folders (2.0.0) | "Remove source folders that become empty" is **on by default** (move mode only; undo recreates them). |
 | Welcome (2.0.0) | Personal "Hi, I'm BAKKIS" card once on first launch (replaces the auto-opening guide; points to H), reopen from Settings → About → "Why I built this". No trademark names ("Tinder") in the app. |
 | Ko-fi spots (2.0.0) | Settings → About, a quiet link on the welcome card, one toast after 250 sorted tracks (once), README + FUNDING.yml. **Not** in the top bar or on the end screen. |
+| Settings layout (2.0.2) | Main view: Music folder, Sorting (Move/Copy, Swipe direction), Playback, Presets. Everything else in a collapsed **Advanced** part (Files, Controls, Look and sound, Features, Startup, Reset all settings). Options without effect are hidden (copy-only / move-only). "Show advanced features" is gone: Discover and the BPM/key filter are on by default with their own switches; playlist export is always available. Welcome card closes only via its button, Enter or Esc. |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)

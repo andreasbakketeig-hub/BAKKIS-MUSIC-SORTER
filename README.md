@@ -84,7 +84,7 @@ Your Folder/
 ```
 
 - **No track is ever deleted or overwritten.** If a file with the same name already exists, the new one is saved as `name (2).mp3`.
-- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Sorting). Undo recreates them.
+- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Advanced → Files). Undo recreates them.
 - Undo puts the file back where it came from, and never overwrites anything there.
 - **Date folders:** a preset can put each day's sorting in its own folder (`Promos/2026-10-23/Keep/`). Promos and Demos do this out of the box; switch it per preset in *Edit presets*.
 
@@ -109,13 +109,13 @@ Inside `BAKKIS_SORTED_COPIES` the tracks are already copies, so a second pass mo
 | Favorite | **↑** or drag up (↑ can sort to Archive instead, see Settings) |
 | Skip | **↓** or drag down |
 
-Prefer Keep on the left? Change **Settings → Sorting → Keep is**. The trackpad flick follows your fingers whether macOS "natural scrolling" is on or off.
+Prefer Keep on the left? Change **Settings → Sorting → Swipe direction**. The trackpad flick follows your fingers whether macOS "natural scrolling" is on or off.
 
 ### Grid mode
 
 Press **1–9** to sort into one of nine tiles, laid out 1-2-3 on the top row. The default tiles are House, Tech House, Deep House, Minimal, Afro House, Melodic, Techno, Garage and Other. Edit them in Settings → Presets.
 
-Prefer a calmer screen? Turn off **Settings → Sorting → Colored tiles**: the tiles turn dark and keep their colour as a thin stripe on top.
+Prefer a calmer screen? Turn off **Settings → Advanced → Colored tiles**: the colour wash goes and only a thin stripe on top remains.
 
 ### Presets
 
@@ -149,7 +149,7 @@ Edit them, delete them or create your own in **Settings → Presets**. A deleted
 | Q | Queue |
 | H or ? | Shortcut guide |
 | Tab | Focus mode (hides everything but the track) |
-| L | Discover (advanced features) |
+| L | Discover |
 | ⌘F | Full screen |
 | Esc | Close a panel / leave full screen |
 
@@ -200,9 +200,9 @@ Use headphones: with speakers the microphone also hears the music, and vocals ca
 
 ---
 
-## Advanced features
+## More features
 
-Turn on **Settings → Advanced → Show advanced features** to get:
+These are on by default. Switch them off under **Settings → Advanced → Features** if you don't use them:
 
 - **Playlist export for Rekordbox and Serato**: one M3U8 playlist per sorted folder, written to `_Playlists/` inside `BAKKIS_SORTED` (and `BAKKIS_SORTED_COPIES`). In Rekordbox use *File → Import → Playlist*; in Serato, drag the files onto the crate list.
 - **Discover** (press **L** or choose *Discover* in the top bar): listen through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** hearts a track (press again to remove the heart). Your hearted list is kept until you use it: copy the tracks into a folder in `BAKKIS_SORTED_COPIES/Discover/` (the originals stay where they are) or export it as a playlist. Nothing is moved while you listen.
@@ -213,7 +213,7 @@ Turn on **Settings → Advanced → Show advanced features** to get:
 ## Privacy
 
 - The app works entirely on your Mac. It never uploads your music, file names or listening data.
-- The only network request is an optional check for a new version on GitHub at startup (Settings → Startup → *Check for new versions*). Nothing is downloaded automatically.
+- The only network request is an optional check for a new version on GitHub at startup (Settings → Advanced → Startup → *Check for new versions*). Nothing is downloaded automatically.
 - Links (Follow BAKKIS, Support, Report a problem) open in your browser or mail app.
 
 ## Settings and uninstalling

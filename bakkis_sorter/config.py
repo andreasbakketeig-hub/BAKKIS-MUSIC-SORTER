@@ -216,7 +216,8 @@ def default_settings() -> dict:
         "guide_seen": False,  # the guide opens once on first launch
         "coach_done": False,  # first-session hint above the tiles
         "check_for_updates": True,  # one request to GitHub Releases at startup
-        "advanced_features": False,  # playlist export, BPM/key filter
+        "discover_in_topbar": True,  # Discover (listen) mode in the top bar
+        "queue_filter": True,  # BPM / key filter in the queue drawer
         "colored_tiles": True,  # off: grid tiles look like swipe tiles (dark, colour stripe on top)
         "welcome_seen": False,  # the "why I built this" card, once on first launch
         "sorted_total": 0,  # tracks sorted across sessions (for the one-time support note)
@@ -245,7 +246,8 @@ def normalize_settings(raw: object) -> dict:
         "guide_seen",
         "coach_done",
         "check_for_updates",
-        "advanced_features",
+        "discover_in_topbar",
+        "queue_filter",
         "welcome_seen",
         "support_nudged",
         "colored_tiles",
@@ -283,6 +285,20 @@ def normalize_settings(raw: object) -> dict:
     out["file_operation"] = "copy" if str(src.get("file_operation", "")).lower() == "copy" else "move"
     out["swipe_keep_direction"] = "left" if str(src.get("swipe_keep_direction", "")).lower() == "left" else "right"
     out["end_of_track"] = "stop" if str(src.get("end_of_track", "")).lower() == "stop" else "skip"
+    return out
+
+
+# Kept by "Reset all settings": where the music is, what was already shown once, and the sort counter.
+RESET_KEEPS = ("default_folder_path", "welcome_seen", "guide_seen", "coach_done", "move_warning_acknowledged",
+               "sorted_total", "support_nudged")
+
+
+def reset_settings(current: dict) -> dict:
+    """Default settings, keeping RESET_KEEPS from ``current``."""
+    out = default_settings()
+    for k in RESET_KEEPS:
+        if k in current:
+            out[k] = current[k]
     return out
 
 

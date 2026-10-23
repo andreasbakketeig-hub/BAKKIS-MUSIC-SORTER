@@ -181,7 +181,7 @@ const QueueDrawer = {
   },
 };
 
-// ------------------------------------------------------------------ advanced: BPM / key filter (queue drawer)
+// ------------------------------------------------------------------ BPM / key filter (queue drawer)
 
 const KEY_CODES = Array.from({ length: 12 }, (_, i) => [`${i + 1}A`, `${i + 1}B`]).flat();
 const KEY_NAMES = {
@@ -213,7 +213,7 @@ const FilterPanel = {
 
   render() {
     const box = document.getElementById("queue-filter");
-    const on = !!(S.settings && S.settings.advanced_features && S.session);
+    const on = !!(S.settings && S.settings.queue_filter && S.session);
     box.hidden = !on;
     if (!on) return;
     this.build();
@@ -348,38 +348,52 @@ const HistoryDrawer = {
 
 // ------------------------------------------------------------------ settings drawer
 
+// The main view holds what most people change; everything else waits in the collapsed Advanced part.
+// `show` hides a setting while it has no effect (e.g. copy-only options in move mode).
+const isCopy = () => S.settings && S.settings.file_operation === "copy";
 const SETTINGS_SCHEMA = [
-  { section: "Library" },
+  { section: "Music folder" },
   { key: "default_folder_path", type: "folder", label: "Default folder" },
-  { key: "auto_load_default_folder", type: "bool", label: "Load the default folder on startup" },
-  { key: "include_subfolders", type: "bool", label: "Include subfolders", note: "Applies the next time a folder is loaded." },
+  { key: "auto_load_default_folder", type: "bool", label: "Load it on startup", show: () => !!S.settings.default_folder_path },
+  { key: "include_subfolders", type: "bool", label: "Include subfolders" },
   { key: "track_order", type: "select", label: "Track order", options: [["random", "Random"], ["in_order", "In order"]] },
   { section: "Sorting" },
   {
-    key: "file_operation", type: "select", label: "When sorting", options: [["move", "Move files"], ["copy", "Copy files"]],
-    note: "Moving breaks Rekordbox / Serato library links. Copying keeps the originals in place.",
+    key: "file_operation", type: "select", label: "Files", options: [["move", "Move tracks"], ["copy", "Copy tracks"]],
+    note: () => isCopy()
+      ? "Copies go to BAKKIS_SORTED_COPIES; your originals stay where they are."
+      : "Tracks move into BAKKIS_SORTED. Rekordbox and Serato lose track of moved files; choose Copy if that matters.",
   },
-  { key: "hide_copied_on_rescan", type: "bool", label: "Hide tracks I already copied", note: "Copy mode only. Applies when a folder is loaded." },
-  { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "<preset>/YYYY-MM-DD/<folder>. Each preset has its own switch: Edit presets." },
-  { key: "cleanup_empty_source_folders_after_sort", type: "bool", label: "Remove source folders that become empty", note: "Move mode only. Undo recreates them." },
-  { key: "swipe_keep_direction", type: "select", label: "Keep is", options: [["right", "→ Right (Archive ←)"], ["left", "← Left (Archive →)"]] },
-  { key: "swipe_archive_hotkey", type: "select", label: "↑ arrow sorts to", options: [["down", "Favorite"], ["up", "Archive"]] },
-  { key: "end_of_track", type: "select", label: "When a track ends", options: [["skip", "Skip it and play the next"], ["stop", "Stop"]] },
-  { key: "sort_confirmation_sound", type: "bool", label: "Click sound on sort" },
-  { key: "colored_tiles", type: "bool", label: "Colored tiles", note: "Off: plain dark tiles; the colour stays as a thin stripe on top." },
+  {
+    key: "swipe_keep_direction", type: "select", label: "Swipe direction",
+    options: [["right", "Keep → right, Archive ← left"], ["left", "Keep ← left, Archive → right"]],
+  },
   { section: "Playback" },
-  { key: "playback_start_seconds", type: "select", label: "Start tracks at", options: START_CHOICES, number: true, note: "If a track is too short for this (less than start + 30 s), it starts about a third of the way in. Tracks under a minute start at 0:00." },
-  { section: "Startup" },
-  { key: "default_mode_on_startup", type: "select", label: "Mode on startup", options: [["swipe", "Swipe"], ["grid", "Grid"]] },
-  { key: "startup_preset_id", type: "startup_preset", label: "Preset on startup" },
-  { key: "show_help_guide_on_startup", type: "bool", label: "Show the shortcut guide on startup" },
-  { key: "show_queue_panel_on_startup", type: "bool", label: "Open the queue on startup" },
-  { key: "check_for_updates", type: "bool", label: "Check for new versions on startup", note: "One request to GitHub. Nothing is downloaded or sent about you or your music." },
-  { section: "Advanced" },
-  { key: "advanced_features", type: "bool", label: "Show advanced features", note: "Discover mode, playlist export for Rekordbox / Serato, and filtering the queue by BPM and key." },
-  { type: "export" },
+  { key: "playback_start_seconds", type: "select", label: "Start tracks at", options: START_CHOICES, number: true, note: "Short tracks start about a third of the way in." },
+  { key: "end_of_track", type: "select", label: "When a track ends", options: [["skip", "Skip it and play the next"], ["stop", "Stop"]] },
   { section: "Presets" },
   { type: "presets" },
+  { advanced: true },
+  { sub: "Files" },
+  { key: "cleanup_empty_source_folders_after_sort", type: "bool", label: "Remove folders that become empty", note: "Undo recreates them.", show: () => !isCopy() },
+  { key: "hide_copied_on_rescan", type: "bool", label: "Hide tracks I already copied", note: "When the folder is loaded again.", show: isCopy },
+  { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "A folder per day: <preset>/YYYY-MM-DD/. Each preset has its own switch." },
+  { sub: "Controls" },
+  { key: "swipe_archive_hotkey", type: "select", label: "Up arrow key", options: [["down", "Favorite"], ["up", "Archive (drag the card up for Favorite)"]] },
+  { sub: "Look and sound" },
+  { key: "colored_tiles", type: "bool", label: "Colored tiles", note: "Off: plain dark tiles with a thin colour stripe." },
+  { key: "sort_confirmation_sound", type: "bool", label: "Click sound on sort" },
+  { sub: "Features" },
+  { key: "discover_in_topbar", type: "bool", label: "Discover in the top bar", note: "Listen through your folders and heart tracks. Never moves files. Shortcut: L." },
+  { key: "queue_filter", type: "bool", label: "BPM and key filter in the queue" },
+  { type: "export" },
+  { sub: "Startup" },
+  { key: "default_mode_on_startup", type: "select", label: "Mode on startup", options: [["swipe", "Swipe"], ["grid", "Grid"]] },
+  { key: "startup_preset_id", type: "startup_preset", label: "Preset on startup" },
+  { key: "show_help_guide_on_startup", type: "bool", label: "Show shortcuts on startup" },
+  { key: "show_queue_panel_on_startup", type: "bool", label: "Open the queue on startup" },
+  { key: "check_for_updates", type: "bool", label: "Check for new versions", note: "One request to GitHub at startup. Nothing about you or your music is sent." },
+  { type: "reset" },
 ];
 
 const SettingsDrawer = {
@@ -398,22 +412,16 @@ const SettingsDrawer = {
     body.textContent = "";
     if (this.view !== "main") { PresetEditor.render(body, this.view); return; }
     document.getElementById("settings-title").textContent = "Settings";
+    let box = body;
     for (const item of SETTINGS_SCHEMA) {
-      if (item.section) { body.appendChild(el("h3", "set-section", item.section)); continue; }
-      if (item.type === "presets") { this.renderPresets(body); continue; }
-      if (item.type === "export") {
-        if (!S.settings.advanced_features) continue;
-        const row = el("div", "set-row");
-        const b = el("button", "ghost-btn small-btn", "Export playlists (M3U8)");
-        b.type = "button";
-        b.disabled = !S.session;
-        b.addEventListener("click", exportPlaylists);
-        row.appendChild(b);
-        row.appendChild(el("div", "set-note", "One playlist per sorted folder, saved in _Playlists inside BAKKIS_SORTED (and BAKKIS_SORTED_COPIES). In Rekordbox: File → Import → Playlist. In Serato: drag the files onto the crate list."));
-        body.appendChild(row);
-        continue;
-      }
-      body.appendChild(this.renderItem(item));
+      if (item.show && !item.show()) continue;
+      if (item.section) { box.appendChild(el("h3", "set-section", item.section)); continue; }
+      if (item.sub) { box.appendChild(el("h4", "set-sub", item.sub)); continue; }
+      if (item.advanced) { box = this.advancedBox(body); continue; }
+      if (item.type === "presets") { this.renderPresets(box); continue; }
+      if (item.type === "export") { box.appendChild(this.exportRow()); continue; }
+      if (item.type === "reset") { box.appendChild(this.resetRow()); continue; }
+      box.appendChild(this.renderItem(item));
     }
     this.renderAbout(body);
     if (this.scrollTo) {
@@ -421,6 +429,49 @@ const SettingsDrawer = {
       if (target) target.scrollIntoView();
       this.scrollTo = null;
     }
+  },
+
+  /** The collapsed "Advanced" part; remembers whether it was open. */
+  advancedBox(body) {
+    const d = el("details", "set-advanced");
+    try { d.open = localStorage.getItem("bakkis.settings.advanced") === "1"; } catch (_) { /* private mode */ }
+    d.addEventListener("toggle", () => { try { localStorage.setItem("bakkis.settings.advanced", d.open ? "1" : "0"); } catch (_) { /* ignore */ } });
+    d.appendChild(el("summary", "set-section", "Advanced"));
+    body.appendChild(d);
+    return d;
+  },
+
+  exportRow() {
+    const row = el("div", "set-row");
+    const b = el("button", "ghost-btn small-btn", "Export playlists (M3U8)");
+    b.type = "button";
+    b.disabled = !S.session;
+    b.addEventListener("click", exportPlaylists);
+    row.appendChild(b);
+    row.appendChild(el("div", "set-note", "One playlist per sorted folder, for Rekordbox (File → Import → Playlist) or Serato (drag onto the crate list)."));
+    return row;
+  },
+
+  resetRow() {
+    const row = el("div", "set-row");
+    const b = el("button", "ghost-btn small-btn", "Reset all settings");
+    b.type = "button";
+    b.addEventListener("click", async () => {
+      const ok = await modal({
+        title: "Reset all settings?",
+        body: "Settings go back to their defaults. Your presets, history, default folder and sorted files stay as they are.",
+        buttons: [{ label: "Cancel", value: false }, { label: "Reset", value: true, danger: true }],
+      });
+      if (!ok) return;
+      try {
+        S.settings = await api("reset_settings");
+        renderAll();
+        this.render();
+        toast("Settings reset");
+      } catch (e) { toast(e.message, { level: "error" }); }
+    });
+    row.appendChild(b);
+    return row;
   },
 
   renderItem(item) {
@@ -457,7 +508,7 @@ const SettingsDrawer = {
         if (item.type === "startup_preset" && !v) v = null;
         const changes = { [item.key]: v };
         if (item.key === "file_operation" && v === "move") changes.move_warning_acknowledged = true;
-        this.save(changes);
+        this.save(changes).then(() => { if (item.key === "file_operation") this.render(); }); // options that depend on it
       });
       row.appendChild(sel);
     } else if (item.type === "folder") {
@@ -482,13 +533,14 @@ const SettingsDrawer = {
         b.addEventListener("click", fn);
         btns.appendChild(b);
       };
-      mk("Use current folder", () => this.save({ default_folder_path: S.session.root }).then(refreshState), !S.session);
+      mk("Use current folder", () => this.save({ default_folder_path: S.session.root }).then(refreshState).then(() => this.render()), !S.session);
       mk("Choose…", async () => { const p = await pickFolderPath(); if (p) { await this.save({ default_folder_path: p }); await refreshState(); this.render(); } });
       mk("Clear", () => this.save({ default_folder_path: null }).then(() => this.render()), !path);
       if (path && S.defaultFolderExists) mk("Load now", () => { Drawers.close(); loadFolder(path); });
       row.appendChild(btns);
     }
-    if (item.note) row.appendChild(el("div", "set-note", item.note));
+    const note = typeof item.note === "function" ? item.note() : item.note;
+    if (note) row.appendChild(el("div", "set-note", note));
     return row;
   },
 
@@ -502,7 +554,6 @@ const SettingsDrawer = {
       if (!ok) { cb.checked = false; return; }
     }
     await this.save({ [item.key]: cb.checked });
-    if (item.key === "advanced_features") this.render();
   },
 
   renderAbout(body) {
@@ -841,8 +892,8 @@ const Guide = {
       ["Weekly promos", "The Promos preset gives every day its own folder."],
       ["Set prep", "Set Builder sorts by moment, from warm-up to after hours."],
     ], "guide-flows"]);
-    if (S.settings && S.settings.advanced_features) {
-      groups.push(["Discover (advanced)", [["L", "Start / stop Discover"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Heart / un-heart"], ["Space", "Play / pause"]]]);
+    if (S.settings && S.settings.discover_in_topbar) {
+      groups.push(["Discover", [["L", "Start / stop Discover"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Heart / un-heart"], ["Space", "Play / pause"]]]);
     }
     for (const [title, rows, cls] of groups) {
       const g = el("div", cls ? `guide-group ${cls}` : "guide-group");
@@ -902,7 +953,6 @@ function setupPanels() {
   document.getElementById("guide-close").addEventListener("click", () => Guide.close());
   document.getElementById("welcome-go").addEventListener("click", () => Welcome.close());
   document.getElementById("welcome-support").addEventListener("click", () => openExternal(SUPPORT_URL));
-  document.getElementById("welcome").addEventListener("click", (e) => { if (e.target.id === "welcome") Welcome.close(); });
   document.getElementById("guide").addEventListener("click", (e) => { if (e.target.id === "guide") Guide.close(); });
   document.getElementById("guide-startup").addEventListener("change", (e) => {
     api("set_settings", { show_help_guide_on_startup: e.target.checked }).then((s) => (S.settings = s)).catch(() => {});

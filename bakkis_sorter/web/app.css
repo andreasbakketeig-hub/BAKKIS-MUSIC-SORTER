@@ -484,6 +484,12 @@ body.drawer-open.drawer-wide-open .toasts { left: calc((100vw - 480px) / 2); }
 /* settings */
 .set-section { margin-top: 24px; }
 .set-row { padding: 8px 0; }
+.set-sub { font-size: var(--fs-s); font-weight: 600; color: var(--soft); margin: 16px 0 0; }
+.set-advanced { margin-top: 24px; border-top: 1px solid var(--line); }
+.set-advanced > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.set-advanced > summary::-webkit-details-marker { display: none; }
+.set-advanced > summary::before { content: "▸"; font-size: var(--fs-m); transition: transform 0.15s; }
+.set-advanced[open] > summary::before { transform: rotate(90deg); }
 .set-label { display: block; color: var(--ink); margin-bottom: 4px; }
 .set-note { font-size: var(--fs-s); color: var(--soft); margin-top: 4px; }
 .set-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
