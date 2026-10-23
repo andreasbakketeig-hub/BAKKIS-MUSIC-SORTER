@@ -2,6 +2,8 @@
 
 **Fast. Instinctive. Sorting.**
 
+*Clear the backlog. Keep the bangers.*
+
 A free macOS app for DJs to sort big folders of promos and downloads, one track at a time. Listen from the best part of the track, decide with one key (or a swipe), and the file is filed away instantly while the next track is already playing.
 
 Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
