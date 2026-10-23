@@ -539,3 +539,6 @@ body.is-empty .footer-slogan { visibility: hidden; }
 .qf-order { width: auto; padding: 4px 6px; margin-left: auto; }
 .filter-badge { border-color: var(--accent); color: var(--accent); }
 .q-meta { font: var(--fs-s) var(--mono); color: var(--muted); white-space: nowrap; }
+
+/* departing copy of the track card (see flyOutCard) */
+.card-ghost { position: fixed; margin: 0; z-index: 15; pointer-events: none; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45); }

@@ -119,6 +119,13 @@ function ctx() {
   return audioCtx;
 }
 
+/** Create the WebAudio context ahead of the first sort: setting up the audio device can take ~200 ms. */
+function warmUpAudio() {
+  if (audioCtx || !S.settings || !S.settings.sort_confirmation_sound) return;
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 300));
+  idle(() => { try { ctx(); } catch (_) { /* optional */ } });
+}
+
 function clickSound() {
   if (!S.settings || !S.settings.sort_confirmation_sound) return;
   try {
@@ -884,6 +891,7 @@ function applySession(snap) {
   const prevId = S.session && S.session.current && S.session.current.id;
   S.session = snap;
   if (snap && snap.last_notice > S.noticeSeq) pollNotices();
+  if (snap && snap.current) warmUpAudio();
   renderAll();
   Drawers.onSession();
   const cur = snap && snap.current;
@@ -972,13 +980,13 @@ async function decide({ kind, slot, auto }) {
     const snap = kind === "skip"
       ? await api("skip", { track_id: cur.id, mode: S.mode })
       : await api("sort", { track_id: cur.id, mode: S.mode, slot });
-    if (!auto) {
-      clickSound();
-      if (S.settings && !S.settings.coach_done && ++S.coachSorts >= COACH_SORTS) finishCoach();
-    }
+    if (!auto && S.settings && !S.settings.coach_done && ++S.coachSorts >= COACH_SORTS) finishCoach();
     if (kind === "sort") { S.counts[slot] = (S.counts[slot] || 0) + 1; pressTile(slot); }
     else pressTile("skip");
+    flyOutCard(flyDirection(kind, slot));
     applySession(snap);
+    cardEnter();
+    if (!auto) clickSound(); // after the next track has started, so sound setup never delays it
     const verb = S.settings.file_operation === "copy" ? "Copied to" : "Moved to";
     const name = trackDisplay(cur, S.meta.get(cur.id)).title;
     if (auto === "error") toast(`Can't play “${name}” — skipped`, { level: "warning", undo: true });
@@ -1213,6 +1221,59 @@ function onKey(e) {
   }
 }
 
+// ------------------------------------------------------------------ card fly-out (feedback for every sort method)
+
+const FLY_MS = 180;
+const FLY_GRID_MS = 160;
+const reduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+
+/** Where the card goes: the tile's direction in swipe mode, a short drop toward the tiles in grid mode. */
+function flyDirection(kind, slot) {
+  if (S.mode === "grid") return "grid";
+  if (kind === "skip") return "down";
+  const t = swipeLayout().find((x) => x.slot === slot);
+  return t ? t.dir : "right";
+}
+
+/** A copy of the card slides out while the real card already shows the next track (no added latency). */
+function flyOutCard(dir) {
+  const card = $("card");
+  const from = card.style.transform || ""; // set when the decision came from a mouse drag
+  card.classList.remove("springing");
+  card.style.transform = "";
+  $("drag-hint").classList.remove("show");
+  if (reduceMotion.matches || !body.classList.contains("is-player") || !card.animate) return;
+  if (S.ghost) S.ghost.remove(); // fast sorting: never stack animations
+  const r = card.getBoundingClientRect();
+  const g = card.cloneNode(true);
+  g.removeAttribute("id");
+  for (const n of g.querySelectorAll("[id]")) n.removeAttribute("id");
+  g.classList.add("card-ghost");
+  Object.assign(g.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, transform: from });
+  document.body.appendChild(g);
+  const D = 150;
+  const [dx, dy, rot] = { right: [D, 0, 5], left: [-D, 0, -5], up: [0, -D * 0.7, 0], down: [0, D * 0.6, 0], grid: [0, 48, 0] }[dir];
+  const anim = g.animate(
+    [
+      { transform: `${from} translate(0, 0) rotate(0deg)`, opacity: 0.95 },
+      { transform: `${from} translate(${dx}px, ${dy}px) rotate(${rot}deg)`, opacity: 0 },
+    ],
+    { duration: dir === "grid" ? FLY_GRID_MS : FLY_MS, easing: "cubic-bezier(.25,.7,.35,1)" },
+  );
+  S.ghost = g;
+  S.ghostCount = (S.ghostCount || 0) + 1;
+  const done = () => { g.remove(); if (S.ghost === g) S.ghost = null; };
+  anim.onfinish = done;
+  anim.oncancel = done;
+}
+
+/** The next track settles in under the departing copy. */
+function cardEnter() {
+  const card = $("card");
+  if (reduceMotion.matches || !card.animate) return;
+  card.animate([{ opacity: 0.35, transform: "scale(0.985)" }, { opacity: 1, transform: "scale(1)" }], { duration: 140, easing: "ease-out" });
+}
+
 // ------------------------------------------------------------------ gestures
 
 function gestureTarget(dir) {
@@ -1257,10 +1318,14 @@ function setupDrag() {
     const dir = dirOf(e.clientX - start.x, e.clientY - start.y);
     start = null;
     card.classList.remove("dragging");
-    card.classList.add("springing");
-    card.style.transform = "";
-    hint.classList.remove("show");
-    if (dir && e.type === "pointerup") decide(gestureTarget(dir).action);
+    const springBack = () => {
+      card.classList.add("springing");
+      card.style.transform = "";
+      hint.classList.remove("show");
+    };
+    if (!dir || e.type !== "pointerup") { springBack(); return; }
+    // Stay where released; flyOutCard() continues from here if the sort goes through.
+    decide(gestureTarget(dir).action).finally(() => { if (card.style.transform) springBack(); });
   };
   card.addEventListener("pointerup", end);
   card.addEventListener("pointercancel", end);
