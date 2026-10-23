@@ -276,3 +276,8 @@ def test_repair_leaves_external_disks_and_own_home_alone(tmp_path):
         assert not config.repair_default_folder(s, home)
         assert s["default_folder_path"] == path
     assert not config.repair_default_folder({"default_folder_path": None}, home)
+
+
+def test_colored_tiles_setting():
+    assert config.default_settings()["colored_tiles"] is True
+    assert config.normalize_settings({"colored_tiles": "false"})["colored_tiles"] is False

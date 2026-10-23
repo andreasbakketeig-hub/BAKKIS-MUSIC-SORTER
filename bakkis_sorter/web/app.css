@@ -344,6 +344,14 @@ body.mode-grid .tiles-grid { display: grid; grid-template-columns: repeat(3, 1fr
 .tiles-grid .tile .badge { background: rgba(0, 0, 0, 0.18); }
 .tiles-grid .tile .label { font-size: var(--fs-l); }
 .tiles-grid .tile .key { background: rgba(0, 0, 0, 0.14); }
+/* Settings → Colored tiles off: grid tiles get the calm swipe look, keeping the colour as a stripe. */
+body.plain-tiles .tiles-grid .tile,
+body.plain-tiles .tiles-swipe .tile {
+  background: var(--panel); color: var(--ink);
+  border-color: var(--line); border-top: 3px solid var(--tile-color, var(--line));
+}
+body.plain-tiles .tiles-grid .tile .badge, body.plain-tiles .tiles-grid .tile .key { background: rgba(255, 255, 255, 0.06); }
+body.plain-tiles .tile.pressed { background: color-mix(in srgb, var(--tile-color) 30%, var(--panel)); }
 
 /* ---------------------------------------------------------------- footer, toasts, modal */
 

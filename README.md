@@ -115,6 +115,8 @@ Prefer Keep on the left? Change **Settings → Sorting → Keep is**. The trackp
 
 Press **1–9** to sort into one of nine tiles, laid out 1-2-3 on the top row. The default tiles are House, Tech House, Deep House, Minimal, Afro House, Melodic, Techno, Garage and Other. Edit them in Settings → Presets.
 
+Prefer a calmer screen? Turn off **Settings → Sorting → Colored tiles**: the tiles turn dark and keep their colour as a thin stripe on top.
+
 ### Presets
 
 A preset is a set of tiles with labels, colors and folder names. Switch between them from the menu in the top bar; each preset gets its own folder in `BAKKIS_SORTED`. The app comes with:

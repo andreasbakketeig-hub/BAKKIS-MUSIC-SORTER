@@ -669,6 +669,7 @@ function renderTopbar() {
   body.classList.toggle("mode-swipe", S.mode === "swipe");
   body.classList.toggle("mode-grid", S.mode === "grid");
   body.classList.toggle("mode-listen", S.mode === "listen");
+  body.classList.toggle("plain-tiles", !!S.settings && S.settings.colored_tiles === false);
   const listenBtn = document.querySelector('.mode-switch [data-mode="listen"]');
   if (listenBtn) listenBtn.hidden = !(S.settings && S.settings.advanced_features && S.session);
 

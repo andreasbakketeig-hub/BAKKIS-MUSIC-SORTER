@@ -217,6 +217,7 @@ def default_settings() -> dict:
         "coach_done": False,  # first-session hint above the tiles
         "check_for_updates": True,  # one request to GitHub Releases at startup
         "advanced_features": False,  # playlist export, BPM/key filter
+        "colored_tiles": True,  # off: grid tiles look like swipe tiles (dark, colour stripe on top)
         "welcome_seen": False,  # the "why I built this" card, once on first launch
         "sorted_total": 0,  # tracks sorted across sessions (for the one-time support note)
         "support_nudged": False,
@@ -247,6 +248,7 @@ def normalize_settings(raw: object) -> dict:
         "advanced_features",
         "welcome_seen",
         "support_nudged",
+        "colored_tiles",
     ):
         if k in src:
             out[k] = coerce_bool(src[k])

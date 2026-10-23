@@ -366,6 +366,7 @@ const SETTINGS_SCHEMA = [
   { key: "swipe_archive_hotkey", type: "select", label: "↑ arrow sorts to", options: [["down", "Favorite"], ["up", "Archive"]] },
   { key: "end_of_track", type: "select", label: "When a track ends", options: [["skip", "Skip it and play the next"], ["stop", "Stop"]] },
   { key: "sort_confirmation_sound", type: "bool", label: "Click sound on sort" },
+  { key: "colored_tiles", type: "bool", label: "Colored tiles", note: "Off: calm dark tiles with a thin colour stripe on top." },
   { section: "Playback" },
   { key: "playback_start_seconds", type: "select", label: "Start tracks at", options: START_CHOICES, number: true, note: "If a track is too short for this (less than start + 30 s), it starts about a third of the way in. Tracks under a minute start at 0:00." },
   { section: "Startup" },
