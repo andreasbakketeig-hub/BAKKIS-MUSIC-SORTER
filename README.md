@@ -255,4 +255,6 @@ tests/           pytest suite
 
 `bakkis_music_sorter.py` is the original v1 (Tkinter) and is kept for reference until v2 is released.
 
+The app icon is drawn by `tools/make_icon.py` (writes `assets/icon/icon-1024.png` and `AppIcon.icns`).
+
 Building the `.app` is described in [PACKAGING.md](PACKAGING.md).

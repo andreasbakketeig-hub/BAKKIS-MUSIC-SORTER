@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Optional
 
 from . import APP_NAME
 from .api import AppBackend
-from .config import migrate_from_v1
+from .config import bundle_dir, migrate_from_v1
 from .library import is_audio_path
 from .server import AppServer
 
@@ -119,6 +120,21 @@ class NativeBridge:
         self.window.evaluate_js(f"loadFolder({json.dumps(folder)})")
 
 
+def set_dock_icon() -> None:
+    """Running from source, macOS shows the Python rocket; use our icon instead (the .app has its own)."""
+    if getattr(sys, "frozen", False):
+        return
+    icon = bundle_dir() / "assets" / "icon" / "icon-1024.png"
+    try:
+        import AppKit
+
+        image = AppKit.NSImage.alloc().initWithContentsOfFile_(str(icon))
+        if image is not None:
+            AppKit.NSApplication.sharedApplication().setApplicationIconImage_(image)
+    except Exception:  # noqa: BLE001 - cosmetic only
+        pass
+
+
 def main() -> int:
     import webview
 
@@ -140,6 +156,7 @@ def main() -> int:
     bridge = NativeBridge(window, backend)
     bridge.register()
     window.events.loaded += bridge.on_loaded
+    set_dock_icon()
     try:
         webview.start(private_mode=True, debug=debug)
     finally:
