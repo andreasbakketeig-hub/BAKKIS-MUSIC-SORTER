@@ -48,6 +48,23 @@ def destination_folders(music_root: Path) -> list[tuple[str, Path]]:
     return out
 
 
+def write_playlist(music_root: Path, name: str, files: list[Path], get_meta: Callable[[Path], TrackMeta]) -> dict:
+    """One M3U8 in BAKKIS_SORTED/_Playlists. Returns {name, tracks, path}."""
+    target = library.sorted_root(music_root) / PLAYLIST_DIR
+    lines = ["#EXTM3U", f"#PLAYLIST:{name}"]
+    for f in files:
+        m = get_meta(f)
+        label = f"{m.artist} - {m.title}" if m.artist and m.title else m.display
+        lines.append(f"#EXTINF:{int(round(m.duration or 0))},{label}")
+        lines.append(str(f))
+    target.mkdir(parents=True, exist_ok=True)
+    out = target / f"{safe_segment(name, 'Playlist')}.m3u8"
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, out)
+    return {"name": name, "tracks": len(files), "path": str(out)}
+
+
 def export(music_root: Path, get_meta: Callable[[Path], TrackMeta]) -> dict:
     """Write the playlists. Returns {"folder": <_Playlists path>, "playlists": [{name, tracks}]}."""
     target = library.sorted_root(music_root) / PLAYLIST_DIR
@@ -56,16 +73,5 @@ def export(music_root: Path, get_meta: Callable[[Path], TrackMeta]) -> dict:
         files = _audio_files(folder)
         if not files:
             continue
-        lines = ["#EXTM3U", f"#PLAYLIST:{name}"]
-        for f in files:
-            m = get_meta(f)
-            label = f"{m.artist} - {m.title}" if m.artist and m.title else m.display
-            lines.append(f"#EXTINF:{int(round(m.duration or 0))},{label}")
-            lines.append(str(f))
-        target.mkdir(parents=True, exist_ok=True)
-        out = target / f"{safe_segment(name, 'Playlist')}.m3u8"
-        tmp = out.with_suffix(".tmp")
-        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.replace(tmp, out)
-        written.append({"name": name, "tracks": len(files), "path": str(out)})
+        written.append(write_playlist(music_root, name, files, get_meta))
     return {"folder": str(target), "playlists": written}

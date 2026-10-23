@@ -1,8 +1,9 @@
-/* BAKKIS MUSIC SORTER v2 — Listen mode (advanced): discover music without sorting anything.
+/* BAKKIS MUSIC SORTER v2 — Discover mode (advanced; "listen" in the code): play without sorting anything.
  *
  * Plays a shuffled list from the unsorted queue and/or sorted folders, as full tracks or as
  * snippets from the middle of each track with a crossfade. No key in this mode can move a file:
- * decide() refuses while Listen.active, and the arrow keys mean previous / next / like.
+ * decide() refuses while Listen.active, and the arrow keys mean previous / next / heart.
+ * Hearts toggle on and off and are kept by the backend until they are copied into a folder.
  * Loaded before app.js; everything it calls from there is looked up at call time.
  */
 "use strict";
@@ -92,7 +93,7 @@ const Listen = {
     this.style = style;
     this.snippetSec = snippetSec;
     this.starts.clear();
-    this.liked.clear();
+    this.liked = new Set(this.tracks.filter((t) => t.hearted).map((t) => t.id));
     this.idx = 0;
     S.mode = "listen";
     Drawers.close();
@@ -151,19 +152,22 @@ const Listen = {
     this.play(this.idx - 1, false);
   },
 
+  /** Toggle the heart on the playing track. */
   async like() {
     const t = this.current;
     if (!t) return;
+    const on = !this.liked.has(t.id);
     try {
-      const r = await api("listen_like", { track_id: t.id });
-      this.liked.add(t.id);
+      const r = await api("listen_heart", { track_id: t.id, on });
+      if (r.hearted) this.liked.add(t.id); else this.liked.delete(t.id);
+      this.hearted = r.count;
       this.renderStatus();
       const btn = document.getElementById("listen-like");
       btn.classList.remove("pulse");
       void btn.offsetWidth;
-      btn.classList.add("pulse");
-      toast(r.added ? `Saved to “Liked while listening” (${r.count})` : "Already in “Liked while listening”", {
-        action: { label: "Show", fn: () => api("reveal", { target: "playlists" }).catch(() => {}) },
+      if (r.hearted) btn.classList.add("pulse");
+      toast(r.hearted ? `Hearted (${r.count} in your list)` : `Heart removed (${r.count} in your list)`, {
+        action: { label: "View list", fn: () => Drawers.show("hearts") },
       });
     } catch (e) { toast(e.message, { level: "error" }); }
   },
@@ -188,7 +192,7 @@ const Listen = {
 
   onError() {
     const t = this.current;
-    toast(`Can't play “${t ? t.name : "this track"}” — next`, { level: "warning" });
+    toast(`Can't play “${t ? t.name : "this track"}”, playing the next one`, { level: "warning" });
     this.next(false);
   },
 
@@ -234,7 +238,8 @@ const Listen = {
     document.getElementById("listen-pos").textContent = `${this.idx + 1} / ${this.tracks.length}`;
     const like = document.getElementById("listen-like");
     like.classList.toggle("on", this.liked.has(t.id));
-    like.title = this.liked.has(t.id) ? "Saved to “Liked while listening”" : "Save to “Liked while listening” (↑ or F)";
+    like.title = this.liked.has(t.id) ? "Hearted. Click (or ↑ / F) to remove the heart" : "Heart this track (↑ or F)";
+    if (this.hearted != null) document.getElementById("listen-hearted").textContent = `♥ Hearted (${this.hearted})`;
     document.getElementById("listen-mode-label").textContent = this.style === "snippet" ? `${this.snippetSec} s snippets` : "Full tracks";
   },
 
@@ -258,4 +263,86 @@ function setupListen() {
   document.getElementById("listen-like").addEventListener("click", () => Listen.like());
   document.getElementById("listen-change").addEventListener("click", () => Listen.openPicker());
   document.getElementById("listen-exit").addEventListener("click", () => Listen.exit());
+  document.getElementById("listen-hearted").addEventListener("click", () => Drawers.show("hearts"));
+  document.getElementById("hearts-create").addEventListener("click", () => HeartsDrawer.createFolder());
+  document.getElementById("hearts-export").addEventListener("click", () => HeartsDrawer.exportPlaylist());
+  document.getElementById("hearts-clear").addEventListener("click", () => HeartsDrawer.clearList());
 }
+
+// ------------------------------------------------------------------ hearted list (drawer)
+
+const HeartsDrawer = {
+  items: [],
+
+  async render() {
+    const list = document.getElementById("hearts-list");
+    list.textContent = "";
+    try { this.items = await api("hearts"); } catch (e) { list.appendChild(el("p", "warn small", e.message)); return; }
+    Listen.hearted = this.items.length;
+    if (Listen.active) Listen.renderStatus();
+    const name = document.getElementById("hearts-name");
+    if (!name.value) name.value = `${new Date().toISOString().slice(0, 10)} Hearted`;
+    document.getElementById("hearts-count").textContent = this.items.length ? `${this.items.length}` : "";
+    for (const id of ["hearts-create", "hearts-export", "hearts-clear"]) document.getElementById(id).disabled = !this.items.length;
+    if (!this.items.length) { list.appendChild(el("div", "q-empty", "Nothing hearted yet. Press ↑ or F in Discover.")); return; }
+    for (const it of this.items) {
+      const row = el("div", "q-row q-hist");
+      row.appendChild(el("span", "q-label", "♥"));
+      const nm = el("span", "q-name", it.name.replace(/\.[^.]+$/, ""));
+      nm.title = it.current || it.path;
+      row.appendChild(nm);
+      if (it.missing) row.appendChild(el("span", "q-state err", "missing"));
+      else if (it.source) row.appendChild(el("span", "q-state", it.source));
+      const x = el("button", "link-btn danger", "✕");
+      x.type = "button";
+      x.title = "Remove the heart";
+      x.addEventListener("click", async () => {
+        await api("hearts_remove", { path: it.path }).catch(() => {});
+        if (Listen.active) {
+          const t = Listen.tracks.find((tr) => tr.name === it.name && Listen.liked.has(tr.id));
+          if (t) Listen.liked.delete(t.id);
+        }
+        this.render();
+      });
+      row.appendChild(x);
+      list.appendChild(row);
+    }
+  },
+
+  async createFolder() {
+    const name = document.getElementById("hearts-name").value.trim();
+    try {
+      const r = await api("hearts_create_folder", { name: name || null });
+      if (!r.copied) { toast("None of the hearted files could be found", { level: "warning" }); return; }
+      const where = r.folder.split("/BAKKIS_SORTED/").pop();
+      toast(`Copied ${r.copied} track${r.copied === 1 ? "" : "s"} to BAKKIS_SORTED/${where}`, {
+        ms: 8000, action: { label: "Show", fn: () => api("reveal", { target: "discover" }).catch(() => {}) },
+      });
+      if (r.missing.length) toast(`${r.missing.length} could not be found: ${r.missing.slice(0, 3).join(", ")}`, { level: "warning", ms: 8000 });
+      if (Listen.active) Listen.liked.clear();
+      document.getElementById("hearts-name").value = "";
+      this.render();
+    } catch (e) { toast(e.message, { level: "error" }); }
+  },
+
+  async exportPlaylist() {
+    try {
+      const r = await api("hearts_export_playlist");
+      toast(`Playlist with ${r.tracks} tracks saved to BAKKIS_SORTED/_Playlists`, {
+        ms: 8000, action: { label: "Show", fn: () => api("reveal", { target: "playlists" }).catch(() => {}) },
+      });
+    } catch (e) { toast(e.message, { level: "error" }); }
+  },
+
+  async clearList() {
+    const ok = await modal({
+      title: "Clear the hearted list?",
+      body: "Only the list is cleared. No music files are touched.",
+      buttons: [{ label: "Cancel", value: false }, { label: "Clear list", value: true, danger: true }],
+    });
+    if (!ok) return;
+    await api("hearts_clear").catch(() => {});
+    if (Listen.active) Listen.liked.clear();
+    this.render();
+  },
+};

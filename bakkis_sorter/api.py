@@ -274,7 +274,9 @@ class AppBackend:
         path = library.sorted_root(s.music_root)
         if target == "playlists":
             path = path / playlists.PLAYLIST_DIR
-        if target not in ("sorted", "playlists") or not path.is_dir():
+        elif target == "discover":
+            path = path / listen.DISCOVER_DIR
+        if target not in ("sorted", "playlists", "discover") or not path.is_dir():
             path = s.music_root
         self._open_in_finder(path)
         return str(path)
@@ -388,14 +390,45 @@ class AppBackend:
             raise ApiError("Nothing to listen to in the chosen folders", 409)
         self.listen = listen.ListenSession(items, shuffle=bool(shuffle))
         self.meta.prefetch([t.path for t in self.listen.tracks[:8]])
-        return {"total": len(self.listen.tracks), "tracks": self.listen.public(s.music_root)}
+        hearted = {i["path"] for i in self._hearts().items}
+        return {"total": len(self.listen.tracks), "tracks": self.listen.public(s.music_root, hearted)}
 
-    def api_listen_like(self, track_id: str) -> dict:
-        s = self._session()
+    def _hearts(self) -> listen.Hearts:
+        if getattr(self, "_hearts_store", None) is None:
+            self._hearts_store = listen.Hearts()
+        return self._hearts_store
+
+    def api_listen_heart(self, track_id: str, on: bool = True) -> dict:
+        """Heart / un-heart the playing Discover track."""
         p = self.listen.track_path(track_id) if self.listen else None
         if p is None:
-            raise ApiError("Not a listen track", 404)
-        return listen.like(s.music_root, p, self.meta.get)
+            raise ApiError("Not a Discover track", 404)
+        source = self.listen.source_of.get(str(track_id), "") if self.listen else ""
+        state = self._hearts().set(p, bool(on), source)
+        return {"hearted": state, "count": len(self._hearts().items)}
+
+    def api_hearts(self) -> list:
+        return self._hearts().public(lambda p: listen.current_location(p, self.journal))
+
+    def api_hearts_remove(self, path: str) -> int:
+        self._hearts().set(Path(path), False)
+        return len(self._hearts().items)
+
+    def api_hearts_clear(self) -> bool:
+        self._hearts().clear()
+        return True
+
+    def api_hearts_create_folder(self, name: Optional[str] = None, clear: bool = True) -> dict:
+        s = self._session()
+        res = listen.create_folder(s.music_root, self._hearts(), self.journal, name)
+        if clear and res["copied"]:
+            self._hearts().clear()
+        return res
+
+    def api_hearts_export_playlist(self) -> dict:
+        s = self._session()
+        items = [Path(i["current"]) for i in self.api_hearts() if i["current"]]
+        return playlists.write_playlist(s.music_root, "Discover - Hearted", items, self.meta.get)
 
     def api_listen_prefetch(self, track_ids: list) -> bool:
         if self.listen:

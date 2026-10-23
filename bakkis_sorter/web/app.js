@@ -682,7 +682,7 @@ function renderTopbar() {
   const sess = S.session;
   if (sess && sess.total) {
     const done = sess.total - sess.remaining;
-    $("count").textContent = Listen.active ? "Listening" : `${Math.min(done + 1, sess.total)} / ${sess.total}`;
+    $("count").textContent = Listen.active ? "Discover" : `${Math.min(done + 1, sess.total)} / ${sess.total}`;
     $("top-progress-fill").style.width = `${(done / sess.total) * 100}%`;
   } else {
     $("count").textContent = "";
@@ -767,7 +767,7 @@ function renderHints() {
   h.textContent = "";
   const add = (k, label) => { const s = el("span"); s.appendChild(el("kbd", null, k)); s.appendChild(document.createTextNode(label)); h.appendChild(s); };
   if (!S.session) { add("H", "shortcuts"); return; }
-  if (Listen.active) { add("← →", "previous / next"); add("↑ or F", "like"); add("Space", "play"); add("1–9", "jump"); add("L", "back to sorting"); return; }
+  if (Listen.active) { add("← →", "previous / next"); add("↑ or F", "heart"); add("Space", "play"); add("1–9", "jump"); add("L", "back to sorting"); return; }
   if (S.mode === "swipe") { add("← → ↑", "sort"); add("↓", "skip"); add("1–9", "jump"); }
   else { add("1–9", "sort"); add("↓", "skip"); }
   add("Space", "play"); add("A D", "±30s"); add("Z", "undo"); add("H", "all shortcuts");
@@ -1220,7 +1220,7 @@ function onKey(e) {
     if (["Escape", "h", "H", "?"].includes(e.key)) { e.preventDefault(); Guide.close(); }
     return;
   }
-  if (Drawers.open === "settings" || Drawers.open === "history") {
+  if (Drawers.open === "settings" || Drawers.open === "history" || Drawers.open === "hearts") {
     if (e.key === "Escape") { e.preventDefault(); Drawers.close(); }
     return; // the settings form owns the keyboard
   }

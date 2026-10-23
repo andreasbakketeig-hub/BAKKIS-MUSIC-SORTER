@@ -608,3 +608,5 @@ body.playing .listen-btn .i-play { display: none; }
 .listen-snippet-row { display: flex; align-items: center; gap: 8px; padding-left: 24px; }
 .listen-snippet-row .set-select { width: auto; padding: 4px 8px; }
 .listen-picker-foot { padding: 16px 24px; justify-content: flex-end; }
+.hearts-actions { margin-top: 8px; }
+#listen-hearted { color: var(--danger); }

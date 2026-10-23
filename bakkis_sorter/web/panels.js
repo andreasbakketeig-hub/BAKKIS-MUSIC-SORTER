@@ -67,6 +67,7 @@ const Drawers = {
     if (name === "queue") QueueDrawer.refresh();
     if (name === "settings") SettingsDrawer.render();
     if (name === "history") HistoryDrawer.render();
+    if (name === "hearts") HeartsDrawer.render();
   },
 
   close() {
@@ -366,7 +367,7 @@ const SETTINGS_SCHEMA = [
   { key: "show_queue_panel_on_startup", type: "bool", label: "Open the queue on startup" },
   { key: "check_for_updates", type: "bool", label: "Check for new versions on startup", note: "One request to GitHub. Nothing is downloaded or sent about you or your music." },
   { section: "Advanced" },
-  { key: "advanced_features", type: "bool", label: "Show advanced features", note: "Playlist export for Rekordbox / Serato, and filtering the queue by BPM and key." },
+  { key: "advanced_features", type: "bool", label: "Show advanced features", note: "Discover mode, playlist export for Rekordbox / Serato, and filtering the queue by BPM and key." },
   { type: "export" },
   { section: "Presets" },
   { type: "presets" },
@@ -804,7 +805,7 @@ const Guide = {
       ["Window", [["Q", "Queue"], ["H  or  ?", "This guide"], ["Tab", "Focus mode"], ["⌘F", "Fullscreen"], ["Esc", "Close / exit fullscreen"]]],
     ];
     if (S.settings && S.settings.advanced_features) {
-      groups.push(["Listen mode (advanced)", [["L", "Start / stop listening"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Save to “Liked while listening”"], ["Space", "Play / pause"]]]);
+      groups.push(["Discover (advanced)", [["L", "Start / stop Discover"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Heart / un-heart"], ["Space", "Play / pause"]]]);
     }
     for (const [title, rows] of groups) {
       const g = el("div", "guide-group");

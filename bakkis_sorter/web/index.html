@@ -20,7 +20,7 @@
   <div class="mode-switch" role="tablist" aria-label="Sorting mode">
     <button type="button" data-mode="swipe" role="tab">Swipe</button>
     <button type="button" data-mode="grid" role="tab">Grid</button>
-    <button type="button" data-mode="listen" role="tab" hidden title="Listen without sorting (L)">Listen</button>
+    <button type="button" data-mode="listen" role="tab" hidden title="Discover: listen through your folders without sorting (L)">Discover</button>
   </div>
   <div class="top-progress" aria-hidden="true"><div id="top-progress-fill"></div></div>
   <div class="count" id="count"></div>
@@ -108,7 +108,7 @@
           <svg viewBox="0 0 24 24" class="i-pause"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></svg>
         </button>
         <button type="button" class="listen-btn" id="listen-next" title="Next (→)"><svg viewBox="0 0 24 24"><path d="m6 6 9 6-9 6zM18 6v12"/></svg></button>
-        <button type="button" class="listen-btn like" id="listen-like" title="Save to “Liked while listening” (↑ or F)"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></button>
+        <button type="button" class="listen-btn like" id="listen-like" title="Heart this track (↑ or F)"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></button>
       </div>
       <div class="listen-info">
         <span id="listen-from"></span>
@@ -116,10 +116,11 @@
         <span class="muted" id="listen-mode-label"></span>
         <span class="muted" id="listen-countdown"></span>
         <span class="spacer"></span>
+        <button type="button" class="link-btn" id="listen-hearted">♥ Hearted</button>
         <button type="button" class="link-btn" id="listen-change">Change folders</button>
         <button type="button" class="ghost-btn small-btn" id="listen-exit">Back to sorting (L)</button>
       </div>
-      <p class="muted small listen-note">Listening never moves or copies files. ↑ saves the track to a playlist in BAKKIS_SORTED/_Playlists.</p>
+      <p class="muted small listen-note">Discover never moves or copies files. Heart tracks with ↑ or F, then copy your hearted list into a folder.</p>
     </div>
 
     <div class="coach" id="coach" hidden>
@@ -197,6 +198,21 @@
   </div>
 </aside>
 
+<aside class="drawer" id="drawer-hearts" hidden aria-label="Hearted">
+  <div class="drawer-head"><h2>Hearted <span class="muted" id="hearts-count"></span></h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
+  <div class="drawer-section">
+    <p class="muted small">Tracks you hearted in Discover. Copy them into a folder in BAKKIS_SORTED/Discover; the originals stay where they are.</p>
+    <label class="set-label" for="hearts-name">Folder name</label>
+    <input class="set-input" id="hearts-name" maxlength="80" autocomplete="off">
+    <div class="set-btns hearts-actions">
+      <button type="button" class="primary-btn small-btn" id="hearts-create">Copy to folder</button>
+      <button type="button" class="ghost-btn small-btn" id="hearts-export">Export playlist</button>
+      <button type="button" class="ghost-btn small-btn" id="hearts-clear">Clear list</button>
+    </div>
+  </div>
+  <div class="drawer-scroll" id="hearts-list"></div>
+</aside>
+
 <aside class="drawer drawer-wide" id="drawer-history" hidden aria-label="History">
   <div class="drawer-head"><h2>History</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
   <div class="drawer-scroll" id="history-body"></div>
@@ -218,10 +234,10 @@
 <div class="drop-overlay" id="drop-overlay" hidden><div>Drop folder to load</div></div>
 
 <div class="guide-backdrop" id="listen-picker" hidden>
-  <div class="guide listen-picker" role="dialog" aria-modal="true" aria-label="Listen">
-    <div class="drawer-head"><h2>Listen</h2></div>
+  <div class="guide listen-picker" role="dialog" aria-modal="true" aria-label="Discover">
+    <div class="drawer-head"><h2>Discover</h2></div>
     <div class="listen-picker-body">
-      <p class="muted small">Play through your music without sorting. Nothing is moved or copied.</p>
+      <p class="muted small">Listen through your folders and heart what you want to keep. Nothing is moved or copied while you listen.</p>
       <h3 class="set-section">Folders</h3>
       <div id="listen-sources"></div>
       <h3 class="set-section">Play</h3>
@@ -236,7 +252,7 @@
     </div>
     <div class="row-btns listen-picker-foot">
       <button type="button" class="ghost-btn" id="listen-cancel">Cancel</button>
-      <button type="button" class="primary-btn" id="listen-start">Start listening</button>
+      <button type="button" class="primary-btn" id="listen-start">Start Discover</button>
     </div>
   </div>
 </div>

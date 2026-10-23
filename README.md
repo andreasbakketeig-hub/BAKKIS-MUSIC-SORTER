@@ -123,7 +123,7 @@ A preset is a set of tiles with labels, colors and folder names, for example *Qu
 | Q | Queue |
 | H or ? | Shortcut guide |
 | Tab | Focus mode (hides everything but the track) |
-| L | Listen mode (advanced features) |
+| L | Discover (advanced features) |
 | ⌘F | Full screen |
 | Esc | Close a panel / leave full screen |
 
@@ -149,7 +149,7 @@ Click anywhere on the waveform to jump there.
 Turn on **Settings → Advanced → Show advanced features** to get:
 
 - **Playlist export for Rekordbox and Serato**: one M3U8 playlist per sorted folder, written to `BAKKIS_SORTED/_Playlists/`. In Rekordbox use *File → Import → Playlist*; in Serato, drag the files onto the crate list.
-- **Listen mode** (press **L** or choose *Listen* in the top bar): play through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** saves the track to a *Liked while listening* playlist in `BAKKIS_SORTED/_Playlists/`. Nothing is moved or copied while listening.
+- **Discover** (press **L** or choose *Discover* in the top bar): listen through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** hearts a track (press again to remove the heart). Your hearted list is kept until you use it: copy the tracks into a folder in `BAKKIS_SORTED/Discover/` (the originals stay where they are) or export it as a playlist. Nothing is moved while you listen.
 - **Filter the queue by BPM and key**: show only, for example, 120–124 BPM in 8A (optionally with harmonically compatible keys), ordered by BPM or key. Other tracks are set aside, not moved, and come back when you clear the filter. Keys are read as Camelot (8A), musical (Am) or Open Key (1m).
 
 ---
