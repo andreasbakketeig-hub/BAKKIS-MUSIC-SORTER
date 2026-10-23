@@ -122,7 +122,13 @@ def load_copied_index(music_root: Path) -> dict:
 
 
 def save_copied_index(music_root: Path, index: dict) -> None:
-    write_json_atomic(copied_index_path(music_root), {"version": 1, "sources": index})
+    path = copied_index_path(music_root)
+    if not index:
+        # Nothing copied any more: no file, so an undone copy session leaves BAKKIS_SORTED clean.
+        if path.exists():
+            path.unlink()
+        return
+    write_json_atomic(path, {"version": 1, "sources": index})
 
 
 def filter_already_copied(paths: list[Path], music_root: Path, index: Optional[dict] = None) -> list[Path]:
@@ -362,6 +368,7 @@ class Session:
                     pass
 
         if error is not None:
+            library.prune_sorted_dirs(a.dest_dir, self.music_root)  # the folder we just made, if empty
             with self.lock:
                 a.status = "failed"
                 if a in self.history:
@@ -442,6 +449,7 @@ class Session:
             self.notify("error", f"Could not undo {a.src.name}: {e}", action_id=a.id)
             return
 
+        library.prune_sorted_dirs(a.dest.parent, self.music_root)
         with self.lock:
             a.track.path = restored
         if restored != a.src:

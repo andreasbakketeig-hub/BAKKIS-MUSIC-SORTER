@@ -334,3 +334,38 @@ def cleanup_empty_parents(src: Path, music_root: Path) -> tuple[list[Path], Opti
             return deleted, f"Could not remove empty folder {d}: {e}"
         deleted.append(d)
     return deleted, None
+
+
+def music_root_of(sorted_path: Path) -> Optional[Path]:
+    """The music folder that owns a path inside its BAKKIS_SORTED tree."""
+    for parent in Path(sorted_path).parents:
+        if parent.name == BAKKIS_SORTED_NAME:
+            return parent.parent
+    return None
+
+
+def prune_sorted_dirs(start: Path, music_root: Path) -> list[Path]:
+    """Remove folders in BAKKIS_SORTED that are empty (or hold only junk), from ``start`` upward.
+
+    Used after undo, put back and failed sorts so no empty Keep/2026-10-23/… folders are left behind.
+    Stops at the first folder that still has content and never touches anything outside BAKKIS_SORTED.
+    """
+    sroot = sorted_root(music_root)
+    p = Path(start).resolve()
+    removed: list[Path] = []
+    while p == sroot or _is_within(p, sroot):
+        if p.is_dir():
+            junk = _junk_if_removable(p)
+            if junk is None:
+                break
+            try:
+                for j in junk:
+                    j.unlink()
+                p.rmdir()
+            except OSError:
+                break
+            removed.append(p)
+        if p == sroot:
+            break
+        p = p.parent
+    return removed

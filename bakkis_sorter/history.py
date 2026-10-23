@@ -127,6 +127,9 @@ def restore(
         except OSError as err:
             results.append({"id": eid, "ok": False, "message": f"Could not put back {src.name}: {err}"})
             continue
+        owner = library.music_root_of(dest)
+        if owner is not None:
+            library.prune_sorted_dirs(dest.parent, owner)
         journal.append({**{k: e.get(k) for k in ("op", "mode", "preset", "label", "src", "dest", "session", "root")},
                         "event": "restore", "restored": str(restored)})
         msg = "Put back" if restored == src else f"Put back as {restored.name} (the name was taken)"
