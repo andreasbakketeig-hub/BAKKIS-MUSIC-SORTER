@@ -85,7 +85,10 @@ function luminance(hex) {
   const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
   return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
 }
-const fgFor = (hex) => (luminance(hex) > 0.5 ? "#000000" : "#F2F2F2");
+const fgFor = (hex) => (luminance(hex) > 0.5 ? "#000000" : token("--ink"));
+/** A colour token from :root in app.css, e.g. token("--accent"). Cached: the waveform asks every frame. */
+const tokenCache = {};
+const token = (name) => (tokenCache[name] ??= getComputedStyle(document.documentElement).getPropertyValue(name).trim());
 
 function activePreset(mode = S.mode) {
   if (!S.presets) return null;
@@ -434,8 +437,8 @@ const Wave = {
       }
       return c;
     };
-    this.base = mk("#3a3f46");
-    this.played = mk("#00d6b4");
+    this.base = mk(token("--line-strong"));
+    this.played = mk(token("--accent"));
   },
 
   draw() {
@@ -450,9 +453,11 @@ const Wave = {
       if (x > 0) g.drawImage(this.played, 0, 0, x, h, 0, 0, x, h);
       // active start marker
       const sx = Math.round((Player.activeStart / d) * w);
-      g.fillStyle = "rgba(0,214,180,0.5)";
+      g.globalAlpha = 0.5;
+      g.fillStyle = token("--accent");
       g.fillRect(sx, 0, Math.max(1, window.devicePixelRatio || 1), h);
-      g.fillStyle = "#f2f3f5";
+      g.globalAlpha = 1;
+      g.fillStyle = token("--ink");
       g.fillRect(x, 0, Math.max(1, window.devicePixelRatio || 1), h);
     }
   },
@@ -1685,5 +1690,5 @@ async function boot() {
 }
 
 boot().catch((e) => {
-  document.body.innerHTML = `<pre style="padding:24px;color:#ff2d55">Failed to start: ${String(e.message || e)}</pre>`;
+  document.body.innerHTML = `<pre style="padding:24px;color:#ff7a7f">Failed to start: ${String(e.message || e)}</pre>`;
 });
