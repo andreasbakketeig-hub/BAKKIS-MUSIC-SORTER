@@ -820,7 +820,29 @@ function renderDone() {
   box.appendChild(el("div", "muted", "Time"));
   box.appendChild(el("div", "n muted", fmtTime(sess.elapsed)));
   const verb = S.settings && S.settings.file_operation === "copy" ? "copied" : "moved";
+  renderDoneFollow();
   $("done-note").textContent = total ? `Files were ${verb} into BAKKIS_SORTED inside ${sess.root.split("/").filter(Boolean).pop()}.` : "";
+}
+
+/** One quiet promo line on the end screen. */
+function renderDoneFollow() {
+  const p = $("done-follow");
+  p.textContent = "";
+  p.appendChild(el("span", "muted", "Sorted with BAKKIS MUSIC SORTER · Follow BAKKIS on "));
+  FOLLOW_LINKS.slice(0, 3).forEach(([label, url], i) => {
+    if (i) p.appendChild(el("span", "muted", " · "));
+    const b = el("button", "link-btn", label);
+    b.type = "button";
+    b.addEventListener("click", () => openExternal(url));
+    p.appendChild(b);
+  });
+  if (SUPPORT_URL) {
+    p.appendChild(el("span", "muted", " · "));
+    const b = el("button", "link-btn", "Support");
+    b.type = "button";
+    b.addEventListener("click", () => openExternal(SUPPORT_URL));
+    p.appendChild(b);
+  }
 }
 
 // ------------------------------------------------------------------ session updates

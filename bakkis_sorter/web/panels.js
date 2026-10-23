@@ -13,6 +13,45 @@ const PALETTE = [
 ];
 const START_CHOICES = [[0, "0:00"], [30, "0:30"], [60, "1:00"], [90, "1:30"], [120, "2:00"], [180, "3:00"]];
 
+// Promo / contact. Links open in the default browser via the backend (never inside the app window).
+const CONTACT_EMAIL = "bakkis@bakkis.com";
+const SUPPORT_URL = null; // Ko-fi link once the account exists; the Support button stays hidden until then
+const FOLLOW_LINKS = [
+  ["Spotify", "https://open.spotify.com/artist/4gKuT9rOlvCpHJUkWp4JFv"],
+  ["SoundCloud", "https://soundcloud.com/bakkismusic"],
+  ["Instagram", "https://www.instagram.com/bakkismusic/"],
+  ["Beatport", "https://www.beatport.com/artist/bakkis/1216154"],
+  ["Traxsource", "https://www.traxsource.com/artist/842861/bakkis"],
+  ["bakkis.com", "https://bakkis.com"],
+];
+
+function openExternal(url) {
+  api("open_url", { url }).catch(() => toast("Could not open the link", { level: "error" }));
+}
+
+/** mailto: link with app + macOS version and the latest warnings, so a bug report is useful right away. */
+async function reportProblem() {
+  let about = {};
+  try { about = await api("about"); } catch (_) { /* send what we have */ }
+  let recent = [];
+  try { recent = (await api("notices", { since: 0 })).filter((n) => n.level !== "info").slice(-5); } catch (_) { /* no session */ }
+  const lines = [
+    "What happened?",
+    "",
+    "",
+    "What did you expect?",
+    "",
+    "",
+    "---",
+    `App: BAKKIS MUSIC SORTER ${about.version || S.version || ""}`,
+    `macOS: ${about.macos || ""}`,
+    `Mode: ${S.mode} · ${S.settings ? S.settings.file_operation : ""}`,
+  ];
+  if (recent.length) lines.push("Recent messages:", ...recent.map((n) => `- [${n.level}] ${n.message}`));
+  const subject = `BAKKIS MUSIC SORTER ${about.version || ""} – problem`;
+  openExternal(`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`);
+}
+
 // ------------------------------------------------------------------ drawers
 
 const Drawers = {
@@ -186,8 +225,7 @@ const SettingsDrawer = {
       if (item.type === "presets") { this.renderPresets(body); continue; }
       body.appendChild(this.renderItem(item));
     }
-    const foot = el("div", "set-foot muted small", `Version ${S.version || ""}`);
-    body.appendChild(foot);
+    this.renderAbout(body);
     if (this.scrollTo) {
       const target = body.querySelector(`[data-anchor="${this.scrollTo}"]`);
       if (target) target.scrollIntoView();
@@ -267,6 +305,38 @@ const SettingsDrawer = {
       if (!ok) { cb.checked = false; return; }
     }
     this.save({ [item.key]: cb.checked });
+  },
+
+  renderAbout(body) {
+    body.appendChild(el("h3", "set-section", "About"));
+    const box = el("div", "about");
+    const logo = el("span", "logo logo-boxed about-logo");
+    logo.setAttribute("role", "img");
+    logo.setAttribute("aria-label", "BAKKIS");
+    box.appendChild(logo);
+    box.appendChild(el("div", "muted small", `BAKKIS MUSIC SORTER ${S.version || ""} · Free and open source (MIT)`));
+    const follow = el("div", "about-links");
+    follow.appendChild(el("span", "muted small", "Follow BAKKIS"));
+    for (const [label, url] of FOLLOW_LINKS) {
+      const a = el("button", "link-btn", label);
+      a.type = "button";
+      a.title = url;
+      a.addEventListener("click", () => openExternal(url));
+      follow.appendChild(a);
+    }
+    box.appendChild(follow);
+    const btns = el("div", "set-btns");
+    const mk = (label, fn, cls = "ghost-btn small-btn") => {
+      const b = el("button", cls, label);
+      b.type = "button";
+      b.addEventListener("click", fn);
+      btns.appendChild(b);
+    };
+    if (SUPPORT_URL) mk("♥ Support", () => openExternal(SUPPORT_URL), "primary-btn small-btn");
+    mk("Report a problem", reportProblem);
+    mk(`Contact: ${CONTACT_EMAIL}`, () => openExternal(`mailto:${CONTACT_EMAIL}`));
+    box.appendChild(btns);
+    body.appendChild(box);
   },
 
   renderPresets(body) {

@@ -224,3 +224,16 @@ def test_queue_paging_and_reveal(app, music, monkeypatch):
     assert state["default_folder_exists"] is False
     api(server, "set_settings", default_folder_path=str(music))
     assert api(server, "state")[1]["result"]["default_folder_exists"] is True
+
+
+def test_open_url_only_https_and_mailto(app, monkeypatch):
+    backend, server = app
+    opened = []
+    monkeypatch.setattr(backend, "_open_external", opened.append)
+    assert api(server, "open_url", url="https://bakkis.com")[0] == 200
+    assert api(server, "open_url", url="mailto:bakkis@bakkis.com?subject=Hi")[0] == 200
+    for bad in ("file:///etc/passwd", "http://bakkis.com", "javascript:alert(1)", "https://", "/Applications/Calculator.app"):
+        assert api(server, "open_url", url=bad)[0] == 400, bad
+    assert opened == ["https://bakkis.com", "mailto:bakkis@bakkis.com?subject=Hi"]
+    about = api(server, "about")[1]["result"]
+    assert about["version"] and about["macos"]

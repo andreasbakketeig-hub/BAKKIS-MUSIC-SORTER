@@ -513,3 +513,10 @@ body.is-empty .footer-slogan { visibility: hidden; }
 .coach[hidden] { display: none; }
 .coach span { flex: 1; }
 .coach kbd { font: var(--fs-s) var(--mono); background: var(--surface-2); border-radius: 4px; padding: 0 4px; color: var(--text); }
+
+/* about + promo */
+.about { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 16px; }
+.about-logo { height: 28px; color: var(--text); align-self: flex-start; }
+.about-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.done-follow { margin-top: 24px; white-space: nowrap; }
+.done-follow .link-btn { font-size: inherit; padding: 0 2px; }

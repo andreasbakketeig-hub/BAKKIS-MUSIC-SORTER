@@ -7,8 +7,10 @@ Native window actions (folder dialog, fullscreen, reveal in Finder) are added by
 from __future__ import annotations
 
 import inspect
+import platform
 import subprocess
 import threading
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -238,6 +240,20 @@ class AppBackend:
 
     def _open_in_finder(self, path: Path) -> None:
         subprocess.Popen(["open", str(path)])
+
+    def api_open_url(self, url: str) -> bool:
+        """Open a link in the user's browser / mail app. Only https: and mailto: links are allowed."""
+        parts = urlsplit(str(url))
+        if parts.scheme not in ("https", "mailto") or (parts.scheme == "https" and not parts.netloc):
+            raise ApiError("Only https and mailto links can be opened")
+        self._open_external(str(url))
+        return True
+
+    def _open_external(self, url: str) -> None:
+        subprocess.Popen(["open", url])
+
+    def api_about(self) -> dict:
+        return {"version": __version__, "macos": platform.mac_ver()[0] or platform.platform(), "python": platform.python_version()}
 
     def api_folder_counts(self, mode: str) -> list:
         s = self._session()
