@@ -826,8 +826,8 @@ function fillCard(track, meta) {
   if (meta && meta.bpm) chip("BPM", meta.bpm);
   if (meta && meta.key) chip("Key", meta.key);
   if (meta && meta.duration) chip("", fmtTime(meta.duration));
-  if (track.folder) chip("", track.folder);
   chip("", track.name.split(".").pop().toUpperCase());
+  renderCardPath(track);
   requestAnimationFrame(() => {
     const wrap = t.parentElement;
     if (t.scrollWidth > wrap.clientWidth + 2) {
@@ -876,6 +876,23 @@ function renderEmpty() {
 }
 
 /** Session summary: one row per destination folder, plus skipped and time spent. */
+/** Where the file is: "<loaded folder> › sub › file.mp3"; click shows it in Finder, hover shows the full path. */
+function renderCardPath(track) {
+  const box = $("card-path");
+  const root = (S.session && S.session.root) || "";
+  const rel = track.rel || track.name;
+  const rootName = root.split("/").filter(Boolean).pop() || "";
+  box.textContent = "";
+  box.appendChild(el("span", "card-path-icon", "📁"));
+  [rootName, ...rel.split("/")].filter(Boolean).forEach((part, i, all) => {
+    if (i) box.appendChild(el("span", "card-path-sep", "›"));
+    box.appendChild(el("span", i === all.length - 1 ? "card-path-file" : null, part));
+  });
+  box.title = `${root}/${rel}\nClick to show in Finder`;
+  box.onclick = (e) => { e.stopPropagation(); api("reveal_track", { track_id: track.id }).catch((err) => toast(err.message, { level: "error" })); };
+  box.onpointerdown = (e) => e.stopPropagation(); // clicking the path must not start a card drag
+}
+
 function renderDone() {
   const box = $("done-stats");
   box.textContent = "";

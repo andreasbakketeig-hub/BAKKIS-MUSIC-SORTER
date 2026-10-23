@@ -269,6 +269,14 @@ class AppBackend:
                     item["bpm"], item["key"] = m.bpm, keys.to_camelot(m.key) or m.key
         return page
 
+    def api_reveal_track(self, track_id: str) -> str:
+        """Show a track's file selected in Finder."""
+        p = self.audio_path(str(track_id))
+        if p is None or not p.exists():
+            raise ApiError("The file is not there any more", 404)
+        subprocess.Popen(["open", "-R", str(p)])
+        return str(p)
+
     def api_reveal(self, target: str = "sorted") -> str:
         """Open the BAKKIS_SORTED folder (or the music folder) in Finder."""
         s = self._session()

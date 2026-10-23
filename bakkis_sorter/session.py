@@ -619,4 +619,5 @@ class Session:
             "id": t.id,
             "name": t.path.name,
             "folder": library.source_folder_display(t.path, self.music_root),
+            "rel": library.relative_posix(t.path, self.music_root),
         }

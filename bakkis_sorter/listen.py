@@ -83,6 +83,7 @@ class ListenSession:
                 "name": t.path.name,
                 "folder": library.source_folder_display(t.path, music_root),
                 "source": self.source_of[t.id],
+                "rel": library.relative_posix(t.path, music_root),
                 "hearted": str(t.path) in hearted,
             }
             for t in self.tracks

@@ -614,3 +614,20 @@ body.playing .listen-btn .i-play { display: none; }
 .q-head .link-btn { text-transform: none; letter-spacing: 0; }
 .hist-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .set-path-name { color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: var(--fs-m); }
+
+/* where the file is (bottom of the track card) */
+.card-path {
+  display: flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  margin-top: 12px; padding: 2px 0;
+  border: 0; background: transparent;
+  font-size: var(--fs-s); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-align: left;
+  cursor: pointer;
+}
+.card-path span { overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 40%; }
+.card-path .card-path-file { flex: 1 1 auto; max-width: none; min-width: 0; color: var(--text); opacity: 0.75; }
+.card-path:hover { color: var(--text); }
+.card-path:hover .card-path-file { opacity: 1; text-decoration: underline; }
+.card-path-sep { opacity: 0.5; }
+.card-path-icon { filter: grayscale(1); opacity: 0.7; }
