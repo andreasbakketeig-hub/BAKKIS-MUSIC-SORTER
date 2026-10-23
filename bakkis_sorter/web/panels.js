@@ -360,7 +360,7 @@ const SETTINGS_SCHEMA = [
     note: "Moving breaks Rekordbox / Serato library links. Copying keeps the originals in place.",
   },
   { key: "hide_copied_on_rescan", type: "bool", label: "Hide tracks I already copied", note: "Copy mode only. Applies when a folder is loaded." },
-  { key: "create_dated_sorting_sessions", type: "bool", label: "Create dated session folders", note: "BAKKIS_SORTED/<preset>/YYYY-MM-DD/<folder>" },
+  { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "<preset>/YYYY-MM-DD/<folder>. Each preset has its own switch: Edit presets." },
   { key: "cleanup_empty_source_folders_after_sort", type: "bool", label: "Remove source folders that become empty", note: "Move mode only. Undo recreates them." },
   { key: "swipe_keep_direction", type: "select", label: "Keep is", options: [["right", "→ Right (Archive ←)"], ["left", "← Left (Archive →)"]] },
   { key: "swipe_archive_hotkey", type: "select", label: "↑ arrow sorts to", options: [["down", "Favorite"], ["up", "Archive"]] },
@@ -408,7 +408,7 @@ const SettingsDrawer = {
         b.disabled = !S.session;
         b.addEventListener("click", exportPlaylists);
         row.appendChild(b);
-        row.appendChild(el("div", "set-note", "One playlist per sorted folder in BAKKIS_SORTED/_Playlists. In Rekordbox: File → Import → Playlist. In Serato: drag the files onto the crate list."));
+        row.appendChild(el("div", "set-note", "One playlist per sorted folder, saved in _Playlists inside BAKKIS_SORTED (and BAKKIS_SORTED_COPIES). In Rekordbox: File → Import → Playlist. In Serato: drag the files onto the crate list."));
         body.appendChild(row);
         continue;
       }
@@ -536,6 +536,7 @@ const SettingsDrawer = {
       btns.appendChild(b);
     };
     if (SUPPORT_URL) mk("♥ Support", () => openExternal(SUPPORT_URL), "primary-btn small-btn");
+    mk("Why I built this", () => { Drawers.close(); Welcome.show(); });
     mk("Report a problem", reportProblem);
     mk(`Contact: ${CONTACT_EMAIL}`, () => openExternal(`mailto:${CONTACT_EMAIL}`));
     box.appendChild(btns);
@@ -626,6 +627,7 @@ const PresetEditor = {
         labels: [...base.labels],
         colors: [...base.colors],
         folders: [...base.folders],
+        dated: !!(S.settings && S.settings.create_dated_sorting_sessions),
       };
     }
   },
@@ -647,9 +649,23 @@ const PresetEditor = {
     name.maxLength = 80;
     name.addEventListener("input", () => (d.name = name.value));
     nameRow.appendChild(name);
-    nameRow.appendChild(el("div", "set-note", `Output: BAKKIS_SORTED/${d.name || "…"}/`));
-    name.addEventListener("input", () => (nameRow.lastChild.textContent = `Output: BAKKIS_SORTED/${d.name || "…"}/`));
+    const tree = S.settings && S.settings.file_operation === "copy" ? "BAKKIS_SORTED_COPIES" : "BAKKIS_SORTED";
+    const output = () => `Output: ${tree}/${d.name || "…"}/${d.dated ? "YYYY-MM-DD/" : ""}`;
+    nameRow.appendChild(el("div", "set-note", output()));
+    name.addEventListener("input", () => (nameRow.lastChild.textContent = output()));
     body.appendChild(nameRow);
+
+    const datedRow = el("div", "set-row");
+    const datedLab = el("label", "set-check");
+    const dated = el("input");
+    dated.type = "checkbox";
+    dated.checked = !!d.dated;
+    dated.addEventListener("change", () => { d.dated = dated.checked; nameRow.lastChild.textContent = output(); });
+    datedLab.appendChild(dated);
+    datedLab.appendChild(el("span", null, "Date folders"));
+    datedRow.appendChild(datedLab);
+    datedRow.appendChild(el("div", "set-note", "A new folder for each day you sort. Handy for weekly promos; leave it off to keep one folder per genre."));
+    body.appendChild(datedRow);
 
     const slots = el("div", "slot-list");
     const n = d.mode === "swipe" ? 3 : 9;
@@ -755,7 +771,7 @@ const PresetEditor = {
     if (!d.name.trim()) { toast("Give the preset a name", { level: "warning" }); return; }
     const problem = this.validate(d);
     if (problem) { toast(problem, { level: "warning", ms: 6000 }); return; }
-    const fields = { name: d.name.trim(), labels: d.labels, colors: d.colors, folders: d.folders };
+    const fields = { name: d.name.trim(), labels: d.labels, colors: d.colors, folders: d.folders, dated: !!d.dated };
     try {
       if (d.id) await api("preset_update", { preset_id: d.id, ...fields });
       else {
@@ -819,11 +835,16 @@ const Guide = {
       ["Session", [["Z  or  ⌘Z", "Undo last"], ["⇧⌘Z  or  ⌃Z", "Undo all (asks first)"], ["U  /  O", "Random order / in order"], ["S  /  G", "Swipe / Grid mode"]]],
       ["Window", [["Q", "Queue"], ["H  or  ?", "This guide"], ["Tab", "Focus mode"], ["⌘F", "Fullscreen"], ["Esc", "Close / exit fullscreen"]]],
     ];
+    groups.push(["Workflows", [
+      ["Genre → Quick Sort", "Genre Sort a big folder first. Then load one genre folder from BAKKIS_SORTED and Quick Sort it."],
+      ["Weekly promos", "The Promos preset gives every day its own folder."],
+      ["Set prep", "Set Builder sorts by moment, from warm-up to after hours."],
+    ], "guide-flows"]);
     if (S.settings && S.settings.advanced_features) {
       groups.push(["Discover (advanced)", [["L", "Start / stop Discover"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Heart / un-heart"], ["Space", "Play / pause"]]]);
     }
-    for (const [title, rows] of groups) {
-      const g = el("div", "guide-group");
+    for (const [title, rows, cls] of groups) {
+      const g = el("div", cls ? `guide-group ${cls}` : "guide-group");
       g.appendChild(el("h3", null, title));
       for (const [k, v] of rows) {
         const r = el("div", "guide-row");
@@ -836,6 +857,26 @@ const Guide = {
     const cb = document.getElementById("guide-startup");
     cb.checked = !!(S.settings && S.settings.show_help_guide_on_startup);
     document.getElementById("guide").hidden = false;
+  },
+};
+
+// ------------------------------------------------------------------ welcome card
+
+/** "Why I built this": once on first launch, and from About. */
+const Welcome = {
+  get isOpen() { return !document.getElementById("welcome").hidden; },
+
+  show() {
+    document.getElementById("welcome").hidden = false;
+    document.getElementById("welcome-go").focus();
+  },
+
+  close() {
+    document.getElementById("welcome").hidden = true;
+    if (S.settings && !S.settings.welcome_seen) {
+      S.settings.welcome_seen = true;
+      api("set_settings", { welcome_seen: true, guide_seen: true }).then((x) => (S.settings = x)).catch(() => {});
+    }
   },
 };
 
@@ -858,6 +899,9 @@ function setupPanels() {
     if (e.key === "Escape") { e.stopPropagation(); if (search.value) { search.value = ""; search.dispatchEvent(new Event("input")); } else search.blur(); }
   });
   document.getElementById("guide-close").addEventListener("click", () => Guide.close());
+  document.getElementById("welcome-go").addEventListener("click", () => Welcome.close());
+  document.getElementById("welcome-support").addEventListener("click", () => openExternal(SUPPORT_URL));
+  document.getElementById("welcome").addEventListener("click", (e) => { if (e.target.id === "welcome") Welcome.close(); });
   document.getElementById("guide").addEventListener("click", (e) => { if (e.target.id === "guide") Guide.close(); });
   document.getElementById("guide-startup").addEventListener("change", (e) => {
     api("set_settings", { show_help_guide_on_startup: e.target.checked }).then((s) => (S.settings = s)).catch(() => {});

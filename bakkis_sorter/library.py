@@ -1,4 +1,8 @@
-"""Scanning music folders and computing ``BAKKIS_SORTED`` destination paths.
+"""Scanning music folders and computing destination paths.
+
+Moved tracks go to ``BAKKIS_SORTED``, copies to ``BAKKIS_SORTED_COPIES`` (so the copies are easy to tell
+apart and safe to delete). A folder that already lies inside one of those trees is sorted in place:
+``BAKKIS_SORTED/Genre Sort/Techno/Quick Sort/Keep``, and always by moving (the files are ours already).
 
 Pure filesystem helpers with no UI. File moves themselves live in ``session.py``.
 """
@@ -18,6 +22,8 @@ from .config import safe_segment
 SUPPORTED_FORMATS = frozenset({".mp3", ".wav", ".aiff", ".aif", ".flac", ".m4a", ".aac", ".alac", ".ogg"})
 
 BAKKIS_SORTED_NAME = "BAKKIS_SORTED"
+COPIES_NAME = "BAKKIS_SORTED_COPIES"
+SORTED_TREE_NAMES = frozenset({BAKKIS_SORTED_NAME.lower(), COPIES_NAME.lower()})
 SKIPPED_NAME = "Skipped"
 # v1 used flat output roots before BAKKIS_SORTED; never scan into them.
 LEGACY_SKIP_DIR_NAMES = frozenset({"keep", "archive", "favorites", "skipped", "genres"})
@@ -39,17 +45,20 @@ def should_ignore_file(name: str) -> bool:
     return name.startswith(".")
 
 
-def should_skip_dir(name: str, *, at_root: bool) -> bool:
+def should_skip_dir(name: str, *, at_root: bool, root_skip: frozenset = frozenset()) -> bool:
     """Directories the scan never enters.
 
-    Hidden folders and ``BAKKIS_SORTED`` are skipped at any depth. v1's old flat output folders
+    Hidden folders and the sorted trees are skipped at any depth. v1's old flat output folders
     (KEEP, ARCHIVE, …, also ``YYYY-MM-DD - KEEP``) only exist at the top of a music folder, so they are
     skipped there only; a source folder that happens to share a preset or genre name is still scanned.
+    ``root_skip`` adds lower-case names to skip at the top (preset folders when sorting in place).
     """
     if name.startswith("."):
         return True
     low = name.lower()
-    if low == BAKKIS_SORTED_NAME.lower():
+    if low in SORTED_TREE_NAMES:
+        return True
+    if at_root and low in root_skip:
         return True
     if at_root:
         m = _DATE_PREFIXED_DIR_RE.match(name)
@@ -57,13 +66,13 @@ def should_skip_dir(name: str, *, at_root: bool) -> bool:
     return False
 
 
-def iter_audio_files(root: Path, *, recursive: bool = True) -> Iterator[Path]:
+def iter_audio_files(root: Path, *, recursive: bool = True, root_skip: frozenset = frozenset()) -> Iterator[Path]:
     """Yield audio files under ``root`` (root is resolved once; files are not individually resolved)."""
     base = Path(root).resolve()
     if recursive:
         for dirpath, dirs, files in os.walk(base, topdown=True):
             at_root = dirpath == str(base)
-            dirs[:] = [d for d in dirs if not should_skip_dir(d, at_root=at_root)]
+            dirs[:] = [d for d in dirs if not should_skip_dir(d, at_root=at_root, root_skip=root_skip)]
             for name in files:
                 if should_ignore_file(name):
                     continue
@@ -93,10 +102,11 @@ def scan(
     recursive: bool = True,
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[Callable[[int], None]] = None,
+    root_skip: frozenset = frozenset(),
 ) -> Optional[list[Path]]:
     """Collect audio files. Returns None if ``cancel`` was set during the scan."""
     out: list[Path] = []
-    for p in iter_audio_files(root, recursive=recursive):
+    for p in iter_audio_files(root, recursive=recursive, root_skip=root_skip):
         if cancel is not None and cancel.is_set():
             return None
         out.append(p)
@@ -118,8 +128,10 @@ class ScanJob:
         on_progress: Optional[Callable[[int], None]] = None,
         on_done: Optional[Callable[[list[Path]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
+        root_skip: frozenset = frozenset(),
     ) -> None:
         self.root = Path(root)
+        self._root_skip = root_skip
         self._cancel = threading.Event()
         self._recursive = recursive
         self._on_progress = on_progress
@@ -153,6 +165,7 @@ class ScanJob:
                 recursive=self._recursive,
                 cancel=self._cancel,
                 on_progress=self._progress,
+                root_skip=self._root_skip,
             )
         except Exception as e:  # noqa: BLE001 - reported to caller
             if self._on_error is not None and not self._cancel.is_set():
@@ -219,13 +232,57 @@ def source_folder_display(path: Path, root: Path) -> str:
 # --------------------------------------------------------------------------- destinations
 
 
+def tree_of(path: Path) -> Optional[Path]:
+    """The BAKKIS_SORTED or BAKKIS_SORTED_COPIES folder that ``path`` is (or lies in), else None."""
+    p = Path(path).resolve()
+    for cand in (p, *p.parents):
+        if cand.name.lower() in SORTED_TREE_NAMES:
+            return cand
+    return None
+
+
+def owner_root(music_root: Path) -> Path:
+    """The music folder that owns the sorted trees: ``music_root`` itself unless it lies inside one."""
+    tree = tree_of(music_root)
+    return tree.parent if tree is not None else Path(music_root).resolve()
+
+
+def sorts_in_place(music_root: Path) -> bool:
+    """True when the loaded folder is inside a sorted tree (second pass: sort in place, always move)."""
+    return tree_of(music_root) is not None
+
+
+def effective_operation(music_root: Path, op: str) -> str:
+    return "move" if op != "copy" or sorts_in_place(music_root) else "copy"
+
+
 def sorted_root(music_root: Path) -> Path:
-    return Path(music_root).resolve() / BAKKIS_SORTED_NAME
+    """``<owner>/BAKKIS_SORTED``: where moved tracks go."""
+    return owner_root(music_root) / BAKKIS_SORTED_NAME
 
 
-def preset_session_root(music_root: Path, preset_name: str, *, dated: bool, today: Optional[date] = None) -> Path:
-    """``<root>/BAKKIS_SORTED/<preset>[/YYYY-MM-DD]``."""
-    base = sorted_root(music_root) / safe_segment(preset_name)
+def copies_root(music_root: Path) -> Path:
+    """``<owner>/BAKKIS_SORTED_COPIES``: where copies go (and Discover's hearted folders)."""
+    return owner_root(music_root) / COPIES_NAME
+
+
+def tree_roots(music_root: Path) -> list[Path]:
+    """Both sorted trees of the owning music folder (they may not exist)."""
+    return [sorted_root(music_root), copies_root(music_root)]
+
+
+def output_base(music_root: Path, op: str = "move") -> Path:
+    """Folder that holds the ``<preset>/…`` folders for a sort from ``music_root``."""
+    if sorts_in_place(music_root):
+        return Path(music_root).resolve()
+    return copies_root(music_root) if op == "copy" else sorted_root(music_root)
+
+
+def preset_session_root(
+    music_root: Path, preset_name: str, *, dated: bool, today: Optional[date] = None, op: str = "move"
+) -> Path:
+    """``<base>/<preset>[/YYYY-MM-DD]``; base is BAKKIS_SORTED, BAKKIS_SORTED_COPIES or the folder itself."""
+    base = output_base(music_root, op) / safe_segment(preset_name)
     if dated:
         return base / (today or date.today()).isoformat()
     return base
@@ -241,15 +298,17 @@ def slot_folder_name(preset: dict, slot: int) -> str:
     return safe_segment(preset["folders"][slot], "Genre")
 
 
-def slot_destination_dir(music_root: Path, preset: dict, slot: int, *, dated: bool, today: Optional[date] = None) -> Path:
-    return preset_session_root(music_root, preset["name"], dated=dated, today=today) / slot_folder_name(preset, slot)
+def slot_destination_dir(
+    music_root: Path, preset: dict, slot: int, *, dated: bool, today: Optional[date] = None, op: str = "move"
+) -> Path:
+    return preset_session_root(music_root, preset["name"], dated=dated, today=today, op=op) / slot_folder_name(preset, slot)
 
 
 def skipped_destination_dir(
-    music_root: Path, preset: dict, src: Path, *, dated: bool, today: Optional[date] = None
+    music_root: Path, preset: dict, src: Path, *, dated: bool, today: Optional[date] = None, op: str = "move"
 ) -> Path:
     """``…/<preset>/[date/]Skipped/<relative source subfolders>``."""
-    base = preset_session_root(music_root, preset["name"], dated=dated, today=today) / SKIPPED_NAME
+    base = preset_session_root(music_root, preset["name"], dated=dated, today=today, op=op) / SKIPPED_NAME
     rel_parent = Path(relative_posix(src, music_root)).parent
     return base if rel_parent == Path(".") else base / rel_parent
 
@@ -280,13 +339,13 @@ def _is_within(child: Path, ancestor: Path) -> bool:
 
 
 def cleanup_chain(src: Path, music_root: Path) -> list[Path]:
-    """Ancestors of ``src`` below ``music_root`` (deepest first), excluding the root and ``BAKKIS_SORTED``."""
+    """Ancestors of ``src`` below ``music_root`` (deepest first), excluding the root and the sorted trees."""
     root = Path(music_root).resolve()
-    sroot = root / BAKKIS_SORTED_NAME
+    trees = [root / BAKKIS_SORTED_NAME, root / COPIES_NAME]
     out: list[Path] = []
     p = Path(src).parent.resolve()
     while p != root and _is_within(p, root):
-        if not _is_within(p, sroot):
+        if not any(_is_within(p, t) for t in trees):
             out.append(p)
         if p.parent == p:
             break
@@ -337,23 +396,25 @@ def cleanup_empty_parents(src: Path, music_root: Path) -> tuple[list[Path], Opti
 
 
 def music_root_of(sorted_path: Path) -> Optional[Path]:
-    """The music folder that owns a path inside its BAKKIS_SORTED tree."""
-    for parent in Path(sorted_path).parents:
-        if parent.name == BAKKIS_SORTED_NAME:
-            return parent.parent
-    return None
+    """The music folder that owns a path inside one of its sorted trees."""
+    tree = tree_of(Path(sorted_path).parent)
+    return tree.parent if tree is not None else None
 
 
-def prune_sorted_dirs(start: Path, music_root: Path) -> list[Path]:
-    """Remove folders in BAKKIS_SORTED that are empty (or hold only junk), from ``start`` upward.
+def prune_sorted_dirs(start: Path, music_root: Optional[Path] = None) -> list[Path]:
+    """Remove folders in a sorted tree that are empty (or hold only junk), from ``start`` upward.
 
     Used after undo, put back and failed sorts so no empty Keep/2026-10-23/… folders are left behind.
-    Stops at the first folder that still has content and never touches anything outside BAKKIS_SORTED.
+    Stops at the first folder that still has content, never removes the loaded ``music_root`` and never
+    touches anything outside the sorted tree that ``start`` lies in.
     """
-    sroot = sorted_root(music_root)
+    sroot = tree_of(start)
+    if sroot is None:
+        return []
+    keep = Path(music_root).resolve() if music_root is not None else None
     p = Path(start).resolve()
     removed: list[Path] = []
-    while p == sroot or _is_within(p, sroot):
+    while (p == sroot or _is_within(p, sroot)) and p != keep:
         if p.is_dir():
             junk = _junk_if_removable(p)
             if junk is None:

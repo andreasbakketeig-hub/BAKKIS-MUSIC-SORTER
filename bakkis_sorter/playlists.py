@@ -1,22 +1,21 @@
 """Export M3U8 playlists of the sorted folders, for importing into Rekordbox or Serato.
 
-One playlist per destination folder (Skipped is left out), all written to
-``BAKKIS_SORTED/_Playlists/``. Paths are absolute so the files work wherever the playlist is opened.
+One playlist per destination folder (Skipped is left out), written to ``_Playlists/`` of the tree it
+comes from (BAKKIS_SORTED or BAKKIS_SORTED_COPIES). Paths are absolute so the files work wherever the
+playlist is opened.
 """
 
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from . import library
 from .config import safe_segment
 from .metadata import TrackMeta
 
 PLAYLIST_DIR = "_Playlists"
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _audio_files(folder: Path) -> list[Path]:
@@ -29,28 +28,32 @@ def _audio_files(folder: Path) -> list[Path]:
         return []
 
 
-def destination_folders(music_root: Path) -> list[tuple[str, Path]]:
-    """(playlist name, folder) for every ``<preset>/[date/]<folder>`` under BAKKIS_SORTED."""
-    root = library.sorted_root(music_root)
-    out: list[tuple[str, Path]] = []
-    try:
-        presets = sorted((p for p in root.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))), key=lambda p: p.name.lower())
-    except OSError:
-        return out
-    for preset in presets:
-        for child in sorted((c for c in preset.iterdir() if c.is_dir()), key=lambda p: p.name.lower()):
-            if _DATE_RE.match(child.name):
-                for leaf in sorted((c for c in child.iterdir() if c.is_dir()), key=lambda p: p.name.lower()):
-                    if leaf.name != library.SKIPPED_NAME:
-                        out.append((f"{preset.name} - {child.name} - {leaf.name}", leaf))
-            elif child.name != library.SKIPPED_NAME:
-                out.append((f"{preset.name} - {child.name}", child))
+def tree_folders(tree: Path) -> list[Path]:
+    """Every folder below ``tree`` that holds tracks, e.g. ``<preset>/[date/]<folder>`` and the folders of a
+    second pass (``Genre Sort/Techno/Quick Sort/Keep``). Skipped, hidden and ``_`` folders are left out."""
+    out: list[Path] = []
+    for dirpath, dirs, _files in os.walk(tree):
+        dirs[:] = sorted((d for d in dirs if not d.startswith((".", "_")) and d != library.SKIPPED_NAME), key=str.lower)
+        if dirpath != str(tree) and _audio_files(Path(dirpath)):
+            out.append(Path(dirpath))
     return out
 
 
-def write_playlist(music_root: Path, name: str, files: list[Path], get_meta: Callable[[Path], TrackMeta]) -> dict:
-    """One M3U8 in BAKKIS_SORTED/_Playlists. Returns {name, tracks, path}."""
-    target = library.sorted_root(music_root) / PLAYLIST_DIR
+def destination_folders(music_root: Path) -> list[tuple[str, Path, Path]]:
+    """(playlist name, folder, tree) for every folder with tracks in BAKKIS_SORTED and BAKKIS_SORTED_COPIES."""
+    out: list[tuple[str, Path, Path]] = []
+    for tree in library.tree_roots(music_root):
+        suffix = " (copies)" if tree.name == library.COPIES_NAME else ""
+        for folder in tree_folders(tree):
+            out.append((" - ".join(folder.relative_to(tree).parts) + suffix, folder, tree))
+    return out
+
+
+def write_playlist(
+    music_root: Path, name: str, files: list[Path], get_meta: Callable[[Path], TrackMeta], tree: Optional[Path] = None
+) -> dict:
+    """One M3U8 in ``<tree>/_Playlists`` (BAKKIS_SORTED by default). Returns {name, tracks, path}."""
+    target = (tree or library.sorted_root(music_root)) / PLAYLIST_DIR
     lines = ["#EXTM3U", f"#PLAYLIST:{name}"]
     for f in files:
         m = get_meta(f)
@@ -66,12 +69,12 @@ def write_playlist(music_root: Path, name: str, files: list[Path], get_meta: Cal
 
 
 def export(music_root: Path, get_meta: Callable[[Path], TrackMeta]) -> dict:
-    """Write the playlists. Returns {"folder": <_Playlists path>, "playlists": [{name, tracks}]}."""
-    target = library.sorted_root(music_root) / PLAYLIST_DIR
+    """Write the playlists. Returns {"folder": <first _Playlists path written>, "playlists": [{name, tracks}]}."""
     written = []
-    for name, folder in destination_folders(music_root):
-        files = _audio_files(folder)
-        if not files:
-            continue
-        written.append(write_playlist(music_root, name, files, get_meta))
-    return {"folder": str(target), "playlists": written}
+    folders: list[Path] = []
+    for name, folder, tree in destination_folders(music_root):
+        written.append(write_playlist(music_root, name, _audio_files(folder), get_meta, tree))
+        if tree / PLAYLIST_DIR not in folders:
+            folders.append(tree / PLAYLIST_DIR)
+    first = folders[0] if folders else library.sorted_root(music_root) / PLAYLIST_DIR
+    return {"folder": str(first), "playlists": written}

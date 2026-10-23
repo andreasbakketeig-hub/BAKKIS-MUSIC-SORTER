@@ -681,7 +681,7 @@ function renderTopbar() {
     edit.value = "__edit__";
     sel.appendChild(edit);
   }
-  $("op-badge").hidden = !(S.settings && S.settings.file_operation === "copy");
+  $("op-badge").hidden = currentOperation() !== "copy";
   $("filter-badge").hidden = !(S.session && S.session.filter);
   const sess = S.session;
   if (sess && sess.total) {
@@ -960,13 +960,31 @@ function renderDone() {
   box.appendChild(el("div", "n", String(total)));
   box.appendChild(el("div", "muted", "Time"));
   box.appendChild(el("div", "n muted", fmtTime(sess.elapsed)));
-  const verb = S.settings && S.settings.file_operation === "copy" ? "copied" : "moved";
+  const verb = currentOperation() === "copy" ? "copied" : "moved";
   renderDoneFollow();
   const held = sess.held || 0;
   $("btn-done-clear-filter").hidden = !held;
   document.querySelector("#screen-done h1").textContent = held ? "No more tracks match the filter" : "All done";
   $("btn-done-export").hidden = !(S.settings && S.settings.advanced_features) || !total;
-  $("done-note").textContent = total ? `Files were ${verb} into BAKKIS_SORTED inside ${sess.root.split("/").filter(Boolean).pop()}.` : "";
+  const folder = sess.root.split("/").filter(Boolean).pop();
+  const tree = sess.in_place ? folder : verb === "copied" ? "BAKKIS_SORTED_COPIES" : "BAKKIS_SORTED";
+  let note = total ? `Files were ${verb} into ${sess.in_place ? "preset folders inside " + folder : tree + " inside " + folder}.` : "";
+  // Sorting in steps: after a grid sort, the genre folders are ready for a Quick Sort of their own.
+  const grid = rows.find((r) => r.order !== 99 && S.presets.presets.some((p) => p.mode === "grid" && p.name === r.sub));
+  if (grid && !sess.in_place) note += ` Next step: load ${tree}/${grid.sub}/${grid.label} and Quick Sort it.`;
+  $("done-note").textContent = note;
+}
+
+/** "move" or "copy" for the loaded folder: inside a sorted tree tracks are always moved. */
+function currentOperation() {
+  if (S.session && S.session.operation) return S.session.operation;
+  return S.settings && S.settings.file_operation === "copy" ? "copy" : "move";
+}
+
+/** ".../music/BAKKIS_SORTED_COPIES/Discover/x" -> "BAKKIS_SORTED_COPIES/Discover/x" */
+function treePath(path) {
+  const m = /\/(BAKKIS_SORTED(?:_COPIES)?\/.*)$/.exec(path || "");
+  return m ? m[1] : path;
 }
 
 /** Copy a plain-text summary of a session's decisions (promo reports, demo replies). */
@@ -984,7 +1002,7 @@ async function exportPlaylists() {
     const r = await api("export_playlists");
     const n = r.playlists.length;
     if (!n) { toast("Nothing sorted yet to export"); return; }
-    toast(`Exported ${n} playlist${n === 1 ? "" : "s"} to BAKKIS_SORTED/_Playlists`, {
+    toast(`Exported ${n} playlist${n === 1 ? "" : "s"} to ${treePath(r.folder)}`, {
       ms: 8000,
       action: { label: "Show", fn: () => api("reveal", { target: "playlists" }).catch(() => {}) },
     });
@@ -1012,13 +1030,6 @@ function renderDoneFollow() {
     b.addEventListener("click", () => openExternal(url));
     p.appendChild(b);
   });
-  if (SUPPORT_URL) {
-    p.appendChild(el("span", "muted", " · "));
-    const b = el("button", "link-btn", "Support");
-    b.type = "button";
-    b.addEventListener("click", () => openExternal(SUPPORT_URL));
-    p.appendChild(b);
-  }
 }
 
 // ------------------------------------------------------------------ session updates
@@ -1026,7 +1037,13 @@ function renderDoneFollow() {
 /** Apply a session snapshot; starts the new current track and preloads the next one. */
 function applySession(snap) {
   const prevId = S.session && S.session.current && S.session.current.id;
+  const prevRoot = S.session && S.session.root;
   S.session = snap;
+  if (snap && snap.in_place && snap.root !== prevRoot) {
+    const copying = S.settings && S.settings.file_operation === "copy";
+    toast(`Sorting inside ${snap.root.split("/").filter(Boolean).pop()}: results go into preset folders right here.` +
+      (copying ? " These tracks are already copies, so they are moved, not copied again. Your originals stay untouched." : ""), { ms: 9000 });
+  }
   if (snap && snap.last_notice > S.noticeSeq) pollNotices();
   if (snap && snap.current) warmUpAudio();
   renderAll();
@@ -1127,11 +1144,16 @@ async function decide({ kind, slot, auto }) {
     applySession(snap);
     cardEnter();
     if (!auto) clickSound(); // after the next track has started, so sound setup never delays it
-    const verb = S.settings.file_operation === "copy" ? "Copied to" : "Moved to";
+    const verb = snap.operation === "copy" ? "Copied to" : "Moved to";
     const name = trackDisplay(cur, S.meta.get(cur.id)).title;
     if (auto === "error") toast(`Can't play “${name}” — skipped`, { level: "warning", undo: true });
     else if (auto === "ended") toast(`Track ended — skipped “${name}”`, { undo: true });
     else toast(kind === "skip" ? `Skipped “${name}”` : `${verb} ${label}`, { undo: true });
+    if (snap.support_nudge && SUPPORT_URL) {
+      toast(`${snap.support_nudge} tracks sorted! If it saves you time, buy me a coffee ☕`, {
+        ms: 12000, action: { label: "Support", fn: () => openExternal(SUPPORT_URL) },
+      });
+    }
     refreshCountsSoon();
   } catch (e) {
     S.pendingDecisionAt = 0;
@@ -1295,6 +1317,10 @@ function onKey(e) {
   if (modalOpen()) {
     if (e.key === "Escape") { e.preventDefault(); modal.cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); modal.confirm(); }
+    return;
+  }
+  if (Welcome.isOpen) {
+    if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); Welcome.close(); }
     return;
   }
   if (Guide.isOpen) {
@@ -1649,7 +1675,9 @@ async function boot() {
   }
   if (S.settings.show_queue_panel_on_startup && S.session) Drawers.show("queue");
   if (S.settings.check_for_updates) setTimeout(checkForUpdate, 4000);
-  if (S.settings.show_help_guide_on_startup || !S.settings.guide_seen) {
+  if (!S.settings.welcome_seen) {
+    Welcome.show(); // first launch: the welcome card points to H instead of opening the guide on top
+  } else if (S.settings.show_help_guide_on_startup || !S.settings.guide_seen) {
     Guide.show();
     if (!S.settings.guide_seen) api("set_settings", { guide_seen: true }).then((x) => (S.settings = x)).catch(() => {});
   }

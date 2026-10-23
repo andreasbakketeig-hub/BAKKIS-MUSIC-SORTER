@@ -135,7 +135,23 @@ def test_v1_store_roundtrips_unchanged(isolated_config):
     path = isolated_config / "mode_presets.json"
     path.write_text(json.dumps(V1_STORE))
     store = config.PresetStore()
-    assert store.data["presets"][:2] == V1_STORE["presets"]  # v1 presets untouched
+    # v1 presets untouched apart from the v2-only "dated" key (v1 ignores it)
+    assert [{k: v for k, v in p.items() if k != "dated"} for p in store.data["presets"][:2]] == V1_STORE["presets"]
+    assert [p["dated"] for p in store.data["presets"][:2]] == [False, False]
+    assert config.PresetStore(dated_default=True).data["presets"][0]["dated"] is False  # saved now
+
+
+def test_preset_dates(isolated_config):
+    path = isolated_config / "mode_presets.json"
+    path.write_text(json.dumps(V1_STORE))
+    store = config.PresetStore(dated_default=True)  # an old global "dated" setting carries over
+    assert [p["dated"] for p in store.data["presets"][:2]] == [True, True]
+    by_name = {p["name"]: p for p in store.presets}
+    assert by_name["Promos"]["dated"] and by_name["Demos"]["dated"] and not by_name["Set Builder"]["dated"]
+    p = store.update(by_name["Promos"]["id"], dated=False)
+    assert p["dated"] is False and config.PresetStore().get(p["id"])["dated"] is False
+    assert store.create("swipe", "X", [], [], dated=True)["dated"] is True
+    assert config.coerce_preset({"mode": "swipe", "name": "Demos"})["dated"] is True
     assert store.data["active_swipe_preset_id"] == V1_STORE["active_swipe_preset_id"]
     assert store.active("swipe")["name"] == "DJ Sorting"
     assert store.active("grid")["id"] == "bc5f5cebff104560ad7569d323056f47"

@@ -31,3 +31,14 @@ def test_export_one_playlist_per_folder(music):
 
 def test_export_with_nothing_sorted(music):
     assert playlists.export(music, metadata.read_meta)["playlists"] == []
+
+
+def test_export_covers_copies_and_second_pass_folders(music):
+    r = music.resolve()
+    make_mp3(r / "BAKKIS_SORTED" / "Genre Sort" / "Techno" / "Quick Sort" / "Keep" / "a.mp3")
+    make_mp3(r / "BAKKIS_SORTED_COPIES" / "Quick Sort" / "Keep" / "b.mp3")
+    res = playlists.export(music / "BAKKIS_SORTED" / "Genre Sort" / "Techno", metadata.read_meta)  # from a second pass
+    assert sorted(p["name"] for p in res["playlists"]) == ["Genre Sort - Techno - Quick Sort - Keep", "Quick Sort - Keep (copies)"]
+    assert (r / "BAKKIS_SORTED" / "_Playlists" / "Genre Sort - Techno - Quick Sort - Keep.m3u8").exists()
+    assert (r / "BAKKIS_SORTED_COPIES" / "_Playlists" / "Quick Sort - Keep (copies).m3u8").exists()
+    assert res["folder"] == str(r / "BAKKIS_SORTED" / "_Playlists")

@@ -23,7 +23,13 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 | Architecture | **Universal** app (Apple Silicon + Intel), built with python.org Python 3.12 universal2. Minimum **macOS 13 Ventura**. |
 | Distribution | **GitHub Releases** (zip per version). App name "BAKKIS MUSIC SORTER", version 2.0.0, bundle id `com.bakkis.music-sorter`. |
 | License | **Open source, MIT** (decided). The app doubles as a promo tool. BAKKIS name and logo excluded from the license. Audit git history for personal data before the repo goes public. |
-| Promo & support | Discreet only, no popups: "Follow BAKKIS" music links + one support link (Buy Me a Coffee / Ko-fi suggested, plus GitHub Sponsors button) in README, Settings → About, and one line on the session end screen. Links open in the browser; the app sends no data. In the app: Spotify, SoundCloud, Instagram, Beatport, Traxsource, bakkis.com (done). **README links: bakkis.com (https://bakkis.com), Instagram (https://www.instagram.com/bakkismusic/) and all streaming links via songshare (https://songshare.com/artist/z7iy15wo).** Support: Ko-fi https://ko-fi.com/bakkis (in the app; also in README and a GitHub Sponsor button via .github/FUNDING.yml). |
+| Promo & support | Discreet only, no popups: "Follow BAKKIS" music links + one support link (Buy Me a Coffee / Ko-fi suggested, plus GitHub Sponsors button) in README, Settings → About (see "Ko-fi spots" below; the end screen keeps only the Follow links). Links open in the browser; the app sends no data. In the app: Spotify, SoundCloud, Instagram, Beatport, Traxsource, bakkis.com (done). **README links: bakkis.com (https://bakkis.com), Instagram (https://www.instagram.com/bakkismusic/) and all streaming links via songshare (https://songshare.com/artist/z7iy15wo).** Support: Ko-fi https://ko-fi.com/bakkis (in the app; also in README and a GitHub Sponsor button via .github/FUNDING.yml). |
+| Copies (2.0.0) | Copy mode writes to a separate `BAKKIS_SORTED_COPIES` tree (never mixed with moved tracks; safe to delete). Discover's hearted folders go there too. |
+| Sorting in steps (2.0.0) | Flexible, no "next step" button. A folder inside a sorted tree is sorted **in place** (`Genre Sort/Techno/Quick Sort/Keep`) and always **moved** (the files are ours). Rescans skip preset folders there. Shown as an example workflow: one line on the end screen after a grid sort, a "Workflows" block in the H guide, and README. |
+| Date folders (2.0.0) | Per preset (simple on/off in Edit presets). Settings → "Date folders for new presets" (default off) only sets what new presets start with. Promos and Demos start dated. Presets saved before keep the old global setting. |
+| Empty folders (2.0.0) | "Remove source folders that become empty" is **on by default** (move mode only; undo recreates them). |
+| Welcome (2.0.0) | Personal "Hi, I'm BAKKIS" card once on first launch (replaces the auto-opening guide; points to H), reopen from Settings → About → "Why I built this". No trademark names ("Tinder") in the app. |
+| Ko-fi spots (2.0.0) | Settings → About, a quiet link on the welcome card, one toast after 250 sorted tracks (once), README + FUNDING.yml. **Not** in the top bar or on the end screen. |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)
@@ -126,13 +132,13 @@ Folder & scanning
 - [x] Track order: random / in order (U/O + setting); reorder preserves current track
 
 Sorting
-- [x] Output tree `BAKKIS_SORTED/<preset>/[YYYY-MM-DD/]<target>/…` ("Create dated sessions" setting)
+- [x] Output tree `BAKKIS_SORTED/<preset>/[YYYY-MM-DD/]<target>/…` (date folders per preset since 2.0.0)
 - [x] Swipe: Keep / Archive / Favorite (labels, colors, folder names from active swipe preset)
 - [x] Grid: 9 slots (labels, colors, folders from active grid preset)
 - [x] Skip → `…/Skipped/` preserving relative subfolders
 - [x] Name collisions → `name (2).ext`
 - [x] Clean up empty source folders after sort (setting; ignores `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`); undo recreates them
-- [x] **New**: Copy mode; in copy mode remember sorted sources (`BAKKIS_SORTED/.bakkis_copied.json`) and hide them on rescan (setting)
+- [x] **New**: Copy mode; in copy mode remember sorted sources (`BAKKIS_SORTED_COPIES/.bakkis_copied.json`) and hide them on rescan (setting)
 - [x] Undo last / undo all; undo never overwrites (unique name + notice); undo of a copy deletes only the copy we made
 - [x] **New**: persistent journal `~/Library/Application Support/BAKKIS MUSIC SORTER/journal/YYYY-MM-DD.jsonl`
 - [x] Soft click sound on sort/skip (setting) — synthesize in WebAudio, no file

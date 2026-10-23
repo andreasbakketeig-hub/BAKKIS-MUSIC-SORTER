@@ -42,8 +42,8 @@ def make_session(music, settings, tmp_path):
         s.close()
 
 
-def keep_dir(music):
-    return music.resolve() / "BAKKIS_SORTED" / "Quick Sort" / "Keep"
+def keep_dir(music, tree="BAKKIS_SORTED"):
+    return music.resolve() / tree / "Quick Sort" / "Keep"
 
 
 def journal_lines(tmp_path):
@@ -75,10 +75,10 @@ def test_sort_moves_file_and_advances(music, make_session, tmp_path):
     assert entry["event"] == "sort" and entry["op"] == "move" and entry["dest"].endswith("Keep/a.mp3")
 
 
-def test_dated_sessions_and_grid(music, make_session, settings):
-    settings["create_dated_sorting_sessions"] = True
+def test_dated_sessions_and_grid(music, make_session):
     (a,) = tracks(music, "a.mp3")
     s = make_session([a])
+    s.presets.update(s.presets.active("grid")["id"], dated=True)
     s.sort(s.current.id, "grid", 6)
     s.flush()
     assert (music.resolve() / "BAKKIS_SORTED" / "Genre Sort" / "2026-10-23" / "Techno" / "a.mp3").exists()
@@ -260,9 +260,10 @@ def test_copy_mode_keeps_source_and_indexes(music, make_session, settings):
     s = make_session([a, b])
     s.sort(s.current.id, "swipe", 0)
     s.flush()
-    assert a.exists() and (keep_dir(music) / "a.mp3").exists()
+    assert a.exists() and (keep_dir(music, "BAKKIS_SORTED_COPIES") / "a.mp3").exists()
+    assert not (music / "BAKKIS_SORTED").exists()  # copies never mix with moved tracks
     idx = load_copied_index(music)
-    assert idx["Sub/a.mp3"]["dest"] == "BAKKIS_SORTED/Quick Sort/Keep/a.mp3"
+    assert idx["Sub/a.mp3"]["dest"] == "BAKKIS_SORTED_COPIES/Quick Sort/Keep/a.mp3"
     assert filter_already_copied([a, b], music) == [b]
     # A replaced source (different size) shows up again.
     a.write_bytes(b"a different, longer file")
@@ -278,8 +279,28 @@ def test_copy_mode_undo_deletes_only_the_copy(music, make_session, settings):
     s.undo_last()
     s.flush()
     assert a.read_bytes() == b"a.mp3"
-    assert not (keep_dir(music) / "a.mp3").exists()
+    assert not (music / "BAKKIS_SORTED_COPIES").exists()  # copy, index and empty folders all gone
     assert load_copied_index(music) == {}
+
+
+def test_second_pass_inside_a_sorted_tree_sorts_in_place_and_moves(music, make_session, settings, tmp_path):
+    settings["file_operation"] = "copy"  # ignored inside a sorted tree: those files are ours already
+    techno = music.resolve() / "BAKKIS_SORTED_COPIES" / "Genre Sort" / "Techno"
+    a, b = (touch(techno / n, n.encode()) for n in ("a.mp3", "b.mp3"))
+    s = Session(techno, [a, b], presets=PresetStore(), settings=lambda: settings, journal=Journal(tmp_path / "j2"), today=lambda: DAY)
+    try:
+        assert s.operation() == "move"
+        s.sort(s.current.id, "swipe", 0)
+        s.skip(s.current.id, "swipe")
+        s.flush()
+        assert not a.exists() and (techno / "Quick Sort" / "Keep" / "a.mp3").exists()
+        assert (techno / "Quick Sort" / "Skipped" / "b.mp3").exists()
+        assert not (techno / "BAKKIS_SORTED").exists() and not (techno / "BAKKIS_SORTED_COPIES").exists()
+        s.undo_all()
+        s.flush()
+        assert a.exists() and b.exists() and not (techno / "Quick Sort").exists() and techno.is_dir()
+    finally:
+        s.close()
 
 
 # ------------------------------------------------------------------ queue

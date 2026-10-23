@@ -107,7 +107,7 @@ def _copy(src: Path, dest: Path) -> None:
 
 
 def copied_index_path(music_root: Path) -> Path:
-    return library.sorted_root(music_root) / COPIED_INDEX_NAME
+    return library.copies_root(music_root) / COPIED_INDEX_NAME
 
 
 def load_copied_index(music_root: Path) -> dict:
@@ -124,7 +124,7 @@ def load_copied_index(music_root: Path) -> dict:
 def save_copied_index(music_root: Path, index: dict) -> None:
     path = copied_index_path(music_root)
     if not index:
-        # Nothing copied any more: no file, so an undone copy session leaves BAKKIS_SORTED clean.
+        # Nothing copied any more: no file, so an undone copy session leaves BAKKIS_SORTED_COPIES clean.
         if path.exists():
             path.unlink()
         return
@@ -246,6 +246,11 @@ class Session:
 
     # ------------------------------------------------------------------ helpers
 
+    def operation(self) -> str:
+        """"move" or "copy" for the next sort; a folder inside a sorted tree is always moved."""
+        op = "copy" if self._settings().get("file_operation") == "copy" else "move"
+        return library.effective_operation(self.music_root, op)
+
     def _new_track(self, path: Path) -> Track:
         t = new_track(path)
         self.tracks[t.id] = t
@@ -307,14 +312,14 @@ class Session:
         if head.id != str(track_id):
             raise SessionError("Track is no longer current")
         s = self._settings()
-        dated = bool(s.get("create_dated_sorting_sessions"))
-        op = "copy" if s.get("file_operation") == "copy" else "move"
+        dated = bool(preset.get("dated"))
+        op = self.operation()
         today = self._today()
         if slot == SKIP_SLOT:
-            dest_dir = library.skipped_destination_dir(self.music_root, preset, head.path, dated=dated, today=today)
+            dest_dir = library.skipped_destination_dir(self.music_root, preset, head.path, dated=dated, today=today, op=op)
             label = "Skipped"
         else:
-            dest_dir = library.slot_destination_dir(self.music_root, preset, slot, dated=dated, today=today)
+            dest_dir = library.slot_destination_dir(self.music_root, preset, slot, dated=dated, today=today, op=op)
             label = preset["labels"][slot]
         a = Action(
             id=next(self._action_ids),
@@ -585,9 +590,8 @@ class Session:
 
     def folder_count(self, preset: dict, slot: int) -> int:
         """Audio files currently in a slot's destination folder (today's folder when dated)."""
-        s = self._settings()
         d = library.slot_destination_dir(
-            self.music_root, preset, slot, dated=bool(s.get("create_dated_sorting_sessions")), today=self._today()
+            self.music_root, preset, slot, dated=bool(preset.get("dated")), today=self._today(), op=self.operation()
         )
         try:
             return sum(1 for e in os.scandir(d) if e.is_file() and library.is_audio_path(Path(e.name)))
@@ -613,6 +617,8 @@ class Session:
                 "pending": sum(1 for a in self.history if a.status == "pending"),
                 "elapsed": time.time() - self.started_at,
                 "last_notice": self.notices[-1]["seq"] if self.notices else 0,
+                "operation": self.operation(),
+                "in_place": library.sorts_in_place(self.music_root),
             }
 
     def _track_public(self, t: Track) -> dict:

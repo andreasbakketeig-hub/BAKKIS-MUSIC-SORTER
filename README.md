@@ -8,6 +8,8 @@ A free macOS app for DJs to sort big folders of promos and downloads, one track 
 
 Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
 
+> *My music folders were huge and messy, and sorting them meant endless clicking and dragging. So I built the app I wanted: listen, swipe, next. No mouse needed.* (BAKKIS)
+
 - Swipe mode: Keep, Archive, Favorite or Skip with the arrow keys, a mouse drag or a two-finger trackpad flick
 - Grid mode: sort into up to nine genres with the number keys
 - Plays MP3, WAV, AIFF, FLAC, ALAC, AAC/M4A (and Ogg where macOS supports it)
@@ -63,28 +65,36 @@ Then open the app again.
 The first time you sort, the app asks whether to **move** or **copy** files:
 
 - **Move** (default) keeps your folders tidy, but if the tracks are in a **Rekordbox or Serato library, their links will break**.
-- **Copy** leaves the originals where they are and puts copies in the sorted folders. Copied tracks are hidden the next time you load the folder.
+- **Copy** leaves the originals where they are and puts the copies in a separate `BAKKIS_SORTED_COPIES` folder, so you can always tell them apart (and delete them all if you change your mind). Copied tracks are hidden the next time you load the folder.
 
-A short guide shows the shortcuts on first launch. Press **H** or **?** at any time to see it again.
+Press **H** or **?** at any time to see all shortcuts.
 
 ### Where your files go
 
-Everything goes into a `BAKKIS_SORTED` folder inside the folder you chose:
+Moved tracks go into a `BAKKIS_SORTED` folder inside the folder you chose (copies into `BAKKIS_SORTED_COPIES`):
 
 ```
 Your Folder/
 └── BAKKIS_SORTED/
     └── Quick Sort/            ← the preset you sort with
-        └── 2026-10-23/        ← one folder per day (optional)
-            ├── Keep/
-            ├── Archive/
-            ├── Favorite/
-            └── Skipped/       ← keeps your original subfolders
+        ├── Keep/
+        ├── Archive/
+        ├── Favorite/
+        └── Skipped/           ← keeps your original subfolders
 ```
 
-- **Nothing is deleted.** If a file with the same name already exists, the new one is saved as `name (2).mp3`.
+- **No track is ever deleted or overwritten.** If a file with the same name already exists, the new one is saved as `name (2).mp3`.
+- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Sorting). Undo recreates them.
 - Undo puts the file back where it came from, and never overwrites anything there.
-- Optionally, source folders that become empty can be removed (Settings → Sorting). Undo recreates them.
+- **Date folders:** a preset can put each day's sorting in its own folder (`Promos/2026-10-23/Keep/`). Promos and Demos do this out of the box; switch it per preset in *Edit presets*.
+
+### Example workflow: genre first, then Quick Sort
+
+1. Load your big downloads folder and sort it with **Genre Sort** (grid mode, keys 1–9).
+2. Load one of the genre folders, for example `BAKKIS_SORTED/Genre Sort/Techno`, and sort it with **Quick Sort**.
+3. The result lands right inside that genre folder: `Genre Sort/Techno/Quick Sort/Keep/`. Loading the genre folder again only shows the tracks you have not sorted yet.
+
+Inside `BAKKIS_SORTED_COPIES` the tracks are already copies, so a second pass moves them instead of copying them again. Your originals are never touched.
 
 ---
 
@@ -173,7 +183,7 @@ It is on the end screen, in the queue panel (*Copy feedback so far*, for when yo
 
 - **Unplayable tracks** (a broken file, or a format your Mac can't play) are skipped automatically. Undo brings them back.
 - **When a track ends**, it is skipped and the next one plays (or the app stops, see Settings). After three tracks end in a row without you touching anything, the app pauses, so it never empties a whole folder on its own.
-- **Already sorted?** If the same track (title, artist and length) is already somewhere in `BAKKIS_SORTED`, the card shows *Already in …*.
+- **Already sorted?** If the same track (title, artist and length) is already somewhere in `BAKKIS_SORTED` or `BAKKIS_SORTED_COPIES`, the card shows *Already in …*.
 - Titles are cleaned up for display (download-site stamps like `myfreemp3.vip`, `%28Original Mix%29`, key/BPM prefixes). Your files and tags are never changed.
 
 ### Hands-free with macOS Voice Control
@@ -192,8 +202,8 @@ Use headphones: with speakers the microphone also hears the music, and vocals ca
 
 Turn on **Settings → Advanced → Show advanced features** to get:
 
-- **Playlist export for Rekordbox and Serato**: one M3U8 playlist per sorted folder, written to `BAKKIS_SORTED/_Playlists/`. In Rekordbox use *File → Import → Playlist*; in Serato, drag the files onto the crate list.
-- **Discover** (press **L** or choose *Discover* in the top bar): listen through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** hearts a track (press again to remove the heart). Your hearted list is kept until you use it: copy the tracks into a folder in `BAKKIS_SORTED/Discover/` (the originals stay where they are) or export it as a playlist. Nothing is moved while you listen.
+- **Playlist export for Rekordbox and Serato**: one M3U8 playlist per sorted folder, written to `_Playlists/` inside `BAKKIS_SORTED` (and `BAKKIS_SORTED_COPIES`). In Rekordbox use *File → Import → Playlist*; in Serato, drag the files onto the crate list.
+- **Discover** (press **L** or choose *Discover* in the top bar): listen through your sorted folders and/or the unsorted tracks without sorting anything, as full tracks or as 30–90 second snippets from the middle of each track with a crossfade. **→ / ←** next and previous, **↑** or **F** hearts a track (press again to remove the heart). Your hearted list is kept until you use it: copy the tracks into a folder in `BAKKIS_SORTED_COPIES/Discover/` (the originals stay where they are) or export it as a playlist. Nothing is moved while you listen.
 - **Filter the queue by BPM and key**: show only, for example, 120–124 BPM in 8A (optionally with harmonically compatible keys), ordered by BPM or key. Other tracks are set aside, not moved, and come back when you clear the filter. Keys are read as Camelot (8A), musical (Am) or Open Key (1m).
 
 ---
@@ -240,7 +250,7 @@ To uninstall, delete the app from Applications and, if you like, that folder. Yo
 
 ## Disclaimer
 
-BAKKIS MUSIC SORTER moves or copies the files you tell it to. It is careful by design: nothing is deleted, existing files are never overwritten, and every action can be undone. Still, it is free software provided **as is, without warranty of any kind** (see the [license](LICENSE)). You use it at your own risk; keep a backup of music you care about.
+BAKKIS MUSIC SORTER moves or copies the files you tell it to. It is careful by design: no track is ever deleted (only source folders that became empty), existing files are never overwritten, and every action can be undone. Still, it is free software provided **as is, without warranty of any kind** (see the [license](LICENSE)). You use it at your own risk; keep a backup of music you care about.
 
 ## License
 

@@ -202,8 +202,8 @@ def default_settings() -> dict:
         "include_subfolders": True,
         "sort_confirmation_sound": True,
         "swipe_archive_hotkey": "down",
-        "create_dated_sorting_sessions": True,
-        "cleanup_empty_source_folders_after_sort": False,
+        "create_dated_sorting_sessions": False,  # what new presets start with; each preset has its own "dated"
+        "cleanup_empty_source_folders_after_sort": True,  # move mode only; undo recreates them
         "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
         "volume": 80,
@@ -217,6 +217,9 @@ def default_settings() -> dict:
         "coach_done": False,  # first-session hint above the tiles
         "check_for_updates": True,  # one request to GitHub Releases at startup
         "advanced_features": False,  # playlist export, BPM/key filter
+        "welcome_seen": False,  # the "why I built this" card, once on first launch
+        "sorted_total": 0,  # tracks sorted across sessions (for the one-time support note)
+        "support_nudged": False,
     }
 
 
@@ -242,9 +245,15 @@ def normalize_settings(raw: object) -> dict:
         "coach_done",
         "check_for_updates",
         "advanced_features",
+        "welcome_seen",
+        "support_nudged",
     ):
         if k in src:
             out[k] = coerce_bool(src[k])
+    try:
+        out["sorted_total"] = max(0, int(src.get("sorted_total", 0)))
+    except (TypeError, ValueError):
+        out["sorted_total"] = 0
 
     out["default_mode_on_startup"] = norm_mode(src.get("default_mode_on_startup", "swipe"))
 
@@ -355,6 +364,7 @@ def default_swipe_preset() -> dict:
         "labels": list(DEFAULT_SWIPE_LABELS),
         "colors": list(DEFAULT_SWIPE_COLORS),
         "folders": list(DEFAULT_SWIPE_FOLDERS),
+        "dated": False,
     }
 
 
@@ -367,10 +377,16 @@ def default_grid_preset(use_genre_file: bool = True) -> dict:
         "labels": labels,
         "colors": colors,
         "folders": [safe_segment(lb, "Genre") for lb in labels],
+        "dated": False,
     }
 
 
-def coerce_preset(blob: object) -> Optional[dict]:
+# Presets saved before per-preset date folders: these built-ins get them (weekly batches), others follow
+# the old global setting.
+DATED_BY_DEFAULT = frozenset({"promos", "demos"})
+
+
+def coerce_preset(blob: object, dated_default: bool = False) -> Optional[dict]:
     """Validate one preset dict; returns a clean copy or None if unusable."""
     if not isinstance(blob, dict):
         return None
@@ -403,15 +419,19 @@ def coerce_preset(blob: object) -> Optional[dict]:
             str(folders[i]).strip() if i < len(folders) and str(folders[i]).strip() else safe_segment(ls[i], "Genre")
             for i in range(n)
         ]
-    return {"id": pid, "name": name, "mode": mode, "labels": ls, "colors": cs, "folders": fs}
+    if "dated" in blob:
+        dated = coerce_bool(blob["dated"])
+    else:
+        dated = dated_default or name.strip().lower() in DATED_BY_DEFAULT
+    return {"id": pid, "name": name, "mode": mode, "labels": ls, "colors": cs, "folders": fs, "dated": dated}
 
 
-def normalize_preset_store(raw: object) -> dict:
+def normalize_preset_store(raw: object, dated_default: bool = False) -> dict:
     data = raw if isinstance(raw, dict) else {}
     presets: list[dict] = []
     seen: set[str] = set()
     for item in data.get("presets") or []:
-        p = coerce_preset(item)
+        p = coerce_preset(item, dated_default)
         if p is None:
             continue
         if p["id"] in seen:
@@ -445,6 +465,7 @@ BUILTIN_PRESETS: tuple[dict, ...] = (
         "name": "Promos",  # a DJ answering label promos (promo report wording)
         "labels": ["Maybe", "Not for me", "Feeling it"],
         "colors": ["#00D6B4", "#FF2D55", "#FFF200"],
+        "dated": True,  # one folder per batch of promos
     },
     {
         "key": "demos",
@@ -452,6 +473,7 @@ BUILTIN_PRESETS: tuple[dict, ...] = (
         "name": "Demos",  # a label answering demo submissions
         "labels": ["Hold", "Reject", "Sign"],
         "colors": ["#00D6B4", "#FF2D55", "#FFF200"],
+        "dated": True,
     },
     {
         "key": "set-builder",
@@ -459,6 +481,7 @@ BUILTIN_PRESETS: tuple[dict, ...] = (
         "name": "Set Builder",
         "labels": ["Warm-up", "Deep", "Groove", "Build-up", "Peak time", "Driving", "Closing", "After hours", "Other"],
         "colors": ["#18A0FB", "#7C5CFF", "#00D6B4", "#FFF200", "#FF2D55", "#FF7A1A", "#D65CFF", "#2A2F36", "#8A8F98"],
+        "dated": False,
     },
 )
 
@@ -474,7 +497,10 @@ def add_builtin_presets(data: dict) -> bool:
         changed = True
         if b["name"].lower() in names:
             continue
-        p = coerce_preset({"id": new_preset_id(), "mode": b["mode"], "name": b["name"], "labels": b["labels"], "colors": b["colors"], "folders": list(b["labels"])})
+        p = coerce_preset(
+            {"id": new_preset_id(), "mode": b["mode"], "name": b["name"], "labels": b["labels"], "colors": b["colors"],
+             "folders": list(b["labels"]), "dated": b["dated"]}
+        )
         if p is not None:
             data["presets"].append(p)
     return changed
@@ -487,10 +513,11 @@ class PresetError(ValueError):
 class PresetStore:
     """In-memory preset store backed by ``mode_presets.json``. Not thread-safe; use from one thread."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Optional[Path] = None, dated_default: bool = False) -> None:
+        """``dated_default``: date folders for presets saved before they had their own switch."""
         self.path = Path(path) if path is not None else config_dir() / MODE_PRESETS_JSON
         raw = _read_json(self.path)
-        self.data = normalize_preset_store(raw)
+        self.data = normalize_preset_store(raw, dated_default)
         add_builtin_presets(self.data)
         if raw != self.data:
             self.save()
@@ -528,9 +555,12 @@ class PresetStore:
         self.save()
         return p
 
-    def create(self, mode: str, name: str, labels: list, colors: list, folders: Optional[list] = None) -> dict:
+    def create(
+        self, mode: str, name: str, labels: list, colors: list, folders: Optional[list] = None, dated: bool = False
+    ) -> dict:
         p = coerce_preset(
-            {"id": new_preset_id(), "mode": norm_mode(mode), "name": name, "labels": labels, "colors": colors, "folders": folders or []}
+            {"id": new_preset_id(), "mode": norm_mode(mode), "name": name, "labels": labels, "colors": colors,
+             "folders": folders or [], "dated": bool(dated)}
         )
         if p is None:
             raise PresetError("Invalid preset")
@@ -543,7 +573,7 @@ class PresetStore:
         if old is None:
             raise PresetError("Unknown preset")
         merged = dict(old)
-        for k in ("name", "labels", "colors", "folders"):
+        for k in ("name", "labels", "colors", "folders", "dated"):
             if k in fields:
                 merged[k] = fields[k]
         p = coerce_preset(merged)

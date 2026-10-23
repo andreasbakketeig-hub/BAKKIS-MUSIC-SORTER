@@ -1,6 +1,6 @@
 """Spot tracks that are already sorted: same title + artist and about the same length.
 
-The index covers ``BAKKIS_SORTED`` of the loaded folder. It is built on a background thread and
+The index covers ``BAKKIS_SORTED`` and ``BAKKIS_SORTED_COPIES`` of the loaded folder. It is built on a background thread and
 updated as sorts complete. It only warns; it never blocks a decision.
 """
 
@@ -50,16 +50,16 @@ class DuplicateIndex:
         self._cancel.set()
 
     def _build(self) -> None:
-        root = library.sorted_root(self.music_root)
         try:
-            for dirpath, dirs, files in os.walk(root):
-                dirs[:] = [d for d in dirs if not d.startswith(".")]
-                for name in files:
-                    if self._cancel.is_set():
-                        return
-                    p = Path(dirpath, name)
-                    if not name.startswith(".") and library.is_audio_path(p):
-                        self.add(p)
+            for root in library.tree_roots(self.music_root):
+                for dirpath, dirs, files in os.walk(root):
+                    dirs[:] = [d for d in dirs if not d.startswith(".")]
+                    for name in files:
+                        if self._cancel.is_set():
+                            return
+                        p = Path(dirpath, name)
+                        if not name.startswith(".") and library.is_audio_path(p):
+                            self.add(p)
         finally:
             self.ready.set()
 
@@ -90,9 +90,12 @@ class DuplicateIndex:
                 continue
             if not p.exists():
                 continue
-            rel = Path(library.relative_posix(p, library.sorted_root(self.music_root)))
+            tree = library.tree_of(p.parent)
+            rel = Path(library.relative_posix(p, tree)) if tree else Path(p.name)
             parts = [x for x in rel.parent.parts if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", x)]
             # "<preset>/<folder>" -> "Keep · Quick Sort"
             folder = " · ".join(reversed(parts[:2])) if parts else rel.parent.as_posix()
+            if tree is not None and tree.name == library.COPIES_NAME:
+                folder += " (copies)"
             return {"path": str(p), "folder": folder}
         return None

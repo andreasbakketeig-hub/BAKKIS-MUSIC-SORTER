@@ -54,7 +54,7 @@
         <button type="button" class="primary-btn" id="btn-choose">Choose music folder</button>
       </div>
       <p class="muted">or drop a folder anywhere in this window</p>
-      <p class="muted small">Sorted files go to <code>BAKKIS_SORTED/…</code> inside the folder you choose. Nothing is deleted.</p>
+      <p class="muted small">Sorted tracks go to <code>BAKKIS_SORTED</code> inside the folder you choose (copies to <code>BAKKIS_SORTED_COPIES</code>). Every step can be undone.</p>
       <p class="warn small" id="empty-message" hidden></p>
     </div>
   </section>
@@ -204,7 +204,7 @@
 <aside class="drawer" id="drawer-hearts" hidden aria-label="Hearted">
   <div class="drawer-head"><h2>Hearted <span class="muted" id="hearts-count"></span></h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
   <div class="drawer-section">
-    <p class="muted small">Tracks you hearted in Discover. Copy them into a folder in BAKKIS_SORTED/Discover; the originals stay where they are.</p>
+    <p class="muted small">Tracks you hearted in Discover. Copy them into a folder in BAKKIS_SORTED_COPIES/Discover; the originals stay where they are.</p>
     <label class="set-label" for="hearts-name">Folder name</label>
     <input class="set-input" id="hearts-name" maxlength="80" autocomplete="off">
     <div class="set-btns hearts-actions">
@@ -231,6 +231,20 @@
     <div class="drawer-head"><h2>Shortcuts</h2><button type="button" class="icon-btn" id="guide-close" aria-label="Close">✕</button></div>
     <div class="guide-body" id="guide-body"></div>
     <label class="set-check guide-foot"><input type="checkbox" id="guide-startup"><span>Show this guide on startup</span></label>
+  </div>
+</div>
+
+<div class="guide-backdrop" id="welcome" hidden>
+  <div class="guide welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <div class="welcome-body">
+      <span class="logo logo-boxed welcome-logo" role="img" aria-label="BAKKIS"></span>
+      <h2 id="welcome-title">Hi, I'm BAKKIS.</h2>
+      <p>My music folders were huge and messy, and sorting them meant endless clicking and dragging. So I built the app I wanted: listen, swipe, next. No mouse needed.</p>
+      <p>It moves your tracks into tidy folders and removes the empty ones left behind. Every step can be undone.</p>
+      <p class="muted small">Press H any time for the shortcuts.</p>
+      <div class="row-btns"><button type="button" class="primary-btn" id="welcome-go">Let's sort</button></div>
+      <p class="muted small welcome-foot">Free and open source. <button type="button" class="link-btn" id="welcome-support">Buy me a coffee ☕</button></p>
+    </div>
   </div>
 </div>
 

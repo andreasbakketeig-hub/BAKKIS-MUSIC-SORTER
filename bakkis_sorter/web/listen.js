@@ -314,8 +314,7 @@ const HeartsDrawer = {
     try {
       const r = await api("hearts_create_folder", { name: name || null });
       if (!r.copied) { toast("None of the hearted files could be found", { level: "warning" }); return; }
-      const where = r.folder.split("/BAKKIS_SORTED/").pop();
-      toast(`Copied ${r.copied} track${r.copied === 1 ? "" : "s"} to BAKKIS_SORTED/${where}`, {
+      toast(`Copied ${r.copied} track${r.copied === 1 ? "" : "s"} to ${treePath(r.folder)}`, {
         ms: 8000, action: { label: "Show", fn: () => api("reveal", { target: "discover" }).catch(() => {}) },
       });
       if (r.missing.length) toast(`${r.missing.length} could not be found: ${r.missing.slice(0, 3).join(", ")}`, { level: "warning", ms: 8000 });

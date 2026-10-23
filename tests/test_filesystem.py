@@ -42,7 +42,7 @@ def contents(root: Path, skip_sorted: bool = False) -> list:
     """Sorted list of the content hashes of all audio files (where they are doesn't matter)."""
     out = []
     for p in root.rglob("*"):
-        if p.is_file() and not is_junk(p.name) and library.is_audio_path(p) and not (skip_sorted and "BAKKIS_SORTED" in p.parts):
+        if p.is_file() and not is_junk(p.name) and library.is_audio_path(p) and not (skip_sorted and {"BAKKIS_SORTED", "BAKKIS_SORTED_COPIES"} & set(p.parts)):
             out.append(hashlib.sha1(p.read_bytes()).hexdigest())
     return sorted(out)
 
@@ -77,7 +77,10 @@ def setup(tmp_path):
 
     def session(paths=None):
         paths = paths if paths is not None else library.order_tracks(library.scan(root), "in_order")
-        return Session(root, paths, presets=PresetStore(), settings=lambda: settings, journal=journal, today=lambda: date(2026, 10, 23))
+        presets = PresetStore()
+        for p in presets.presets:
+            presets.update(p["id"], dated=settings["create_dated_sorting_sessions"])
+        return Session(root, paths, presets=presets, settings=lambda: settings, journal=journal, today=lambda: date(2026, 10, 23))
 
     return root, settings, journal, session
 
@@ -129,7 +132,8 @@ def test_copy_session_then_undo_all_restores_the_exact_tree(setup):
     while s.current:
         s.sort(s.current.id, "swipe", random.randrange(3))
     s.flush()
-    assert contents(root, skip_sorted=True) == contents(root / "BAKKIS_SORTED") == sorted(
+    assert not (root / "BAKKIS_SORTED").exists()
+    assert contents(root, skip_sorted=True) == contents(root / "BAKKIS_SORTED_COPIES") == sorted(
         h for k, h in before.items() if h != "dir" and library.is_audio_path(Path(k))  # junk is not in snapshots
     )
     s.undo_all()

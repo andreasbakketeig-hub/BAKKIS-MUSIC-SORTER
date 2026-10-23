@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import __version__, library
-from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, save_settings
+from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, safe_segment, save_settings
 from . import feedback, history, keys, listen, playlists, updates, waveform
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
@@ -24,6 +24,8 @@ from .server import ApiError
 from .session import Journal, Session, SessionError, filter_already_copied
 
 PREFETCH_AHEAD = 8
+SUPPORT_NUDGE_AT = 250  # tracks sorted, across sessions: one quiet "buy me a coffee" note
+SAVE_TOTAL_EVERY = 10
 
 
 class AppBackend:
@@ -32,7 +34,8 @@ class AppBackend:
         self.settings = load_settings()
         if repair_default_folder(self.settings):
             self.settings = save_settings(self.settings)
-        self.presets = presets or PresetStore()
+        # Presets saved before they had their own date switch follow the old global setting.
+        self.presets = presets or PresetStore(dated_default=self.settings["create_dated_sorting_sessions"])
         self.meta = MetadataCache()
         self.journal = Journal()
         self.peaks = PeakStore(config_dir() / "peaks")
@@ -107,8 +110,14 @@ class AppBackend:
         with self.lock:
             if self._scan_job:
                 self._scan_job.cancel()
-            if self.session:
-                self.session.close()
+            session = self.session
+            try:
+                save_settings(self.settings)  # keeps sorted_total exact
+            except OSError:
+                pass
+        # Outside the lock: the session shares it, and its worker needs it to finish pending moves.
+        if session:
+            session.close()
         self.meta.shutdown()
 
     # ------------------------------------------------------------------ state
@@ -171,9 +180,14 @@ class AppBackend:
                 self._scan_job.cancel()
             s = self.settings
             self.scan = {"status": "scanning", "root": str(root), "count": 0, "error": None}
+            # A second pass inside a sorted tree writes <preset>/… folders next to the tracks: never rescan them.
+            root_skip = frozenset(p["name"].lower() for p in self.presets.presets) | frozenset(
+                safe_segment(p["name"]).lower() for p in self.presets.presets
+            ) if library.sorts_in_place(root) else frozenset()
             job = library.ScanJob(
                 root,
                 recursive=bool(s["include_subfolders"]),
+                root_skip=root_skip,
                 on_progress=lambda n: self._scan_progress(job, n),
                 on_done=lambda paths: self._scan_done(job, root, paths),
                 on_error=lambda e: self._scan_error(job, e),
@@ -201,7 +215,7 @@ class AppBackend:
             if job is not self._scan_job:
                 return
             s = self.settings
-            if s["file_operation"] == "copy" and s["hide_copied_on_rescan"]:
+            if library.effective_operation(root, s["file_operation"]) == "copy" and s["hide_copied_on_rescan"]:
                 paths = filter_already_copied(paths, root)
             ordered = library.order_tracks(paths, s["track_order"])
             old = self.session
@@ -240,7 +254,23 @@ class AppBackend:
 
     def api_sort(self, track_id: str, mode: str, slot: int) -> dict:
         self._session().sort(str(track_id), norm_mode(mode), int(slot))
-        return self._after_queue_change()
+        nudge = self._count_sorted()
+        out = self._after_queue_change()
+        if nudge:
+            out = dict(out, support_nudge=SUPPORT_NUDGE_AT)
+        return out
+
+    def _count_sorted(self) -> bool:
+        """Count a sort; True exactly once, when the total reaches SUPPORT_NUDGE_AT."""
+        with self.lock:
+            s = self.settings
+            s["sorted_total"] = s.get("sorted_total", 0) + 1
+            nudge = s["sorted_total"] >= SUPPORT_NUDGE_AT and not s.get("support_nudged")
+            if nudge:
+                s["support_nudged"] = True
+            if nudge or s["sorted_total"] % SAVE_TOTAL_EVERY == 0:
+                self.settings = save_settings(s)
+        return nudge
 
     def api_skip(self, track_id: str, mode: str = "swipe") -> dict:
         self._session().skip(str(track_id), norm_mode(mode))
@@ -288,15 +318,20 @@ class AppBackend:
         return str(p)
 
     def api_reveal(self, target: str = "sorted") -> str:
-        """Open the BAKKIS_SORTED folder (or the music folder) in Finder."""
+        """Open where this session sorts to (or its playlists / Discover folder) in Finder; else the music folder."""
         s = self._session()
-        path = library.sorted_root(s.music_root)
-        if target == "playlists":
-            path = path / playlists.PLAYLIST_DIR
+        root = s.music_root
+        if target == "sorted":
+            # A second pass sorts into the loaded folder itself; otherwise the tree of the current mode first.
+            first = library.output_base(root, s.operation())
+            cands = [first] + [t for t in library.tree_roots(root) if t != first]
+        elif target == "playlists":
+            cands = [t / playlists.PLAYLIST_DIR for t in library.tree_roots(root)]
         elif target == "discover":
-            path = path / listen.DISCOVER_DIR
-        if target not in ("sorted", "playlists", "discover") or not path.is_dir():
-            path = s.music_root
+            cands = [library.copies_root(root) / listen.DISCOVER_DIR]
+        else:
+            cands = []
+        path = next((c for c in cands if c.is_dir()), root)
         self._open_in_finder(path)
         return str(path)
 
@@ -516,11 +551,15 @@ class AppBackend:
         self._changed()
         return p
 
-    def api_preset_create(self, mode: str, name: str, labels: list, colors: list, folders: Optional[list] = None) -> dict:
+    def api_preset_create(
+        self, mode: str, name: str, labels: list, colors: list, folders: Optional[list] = None, dated: Optional[bool] = None
+    ) -> dict:
         if norm_mode(mode) not in MODES:
             raise ApiError("Bad mode")
         with self.lock:
-            p = self.presets.create(mode, name, labels, colors, folders)
+            if dated is None:
+                dated = self.settings["create_dated_sorting_sessions"]
+            p = self.presets.create(mode, name, labels, colors, folders, dated=bool(dated))
         self._changed()
         return p
 

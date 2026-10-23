@@ -23,30 +23,31 @@ from .session import Journal, Track, new_track
 
 HEARTS_JSON = "hearts.json"
 DISCOVER_DIR = "Discover"
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _tree_key(tree: Path) -> str:
+    return "copies" if tree.name == library.COPIES_NAME else "sorted"
 
 
 def sorted_sources(music_root: Path) -> list[dict]:
     """Every sorted destination folder as a listen source: {key, label, count}."""
-    root = library.sorted_root(music_root)
     out = []
-    for _name, folder in playlists.destination_folders(music_root):
+    for _name, folder, tree in playlists.destination_folders(music_root):
         count = len(playlists._audio_files(folder))  # noqa: SLF001 - shared helper
-        if not count:
-            continue
-        rel = folder.relative_to(root)
-        parts = list(rel.parts)  # <preset>[/<date>]/<folder>
-        label = " · ".join([parts[-1], parts[0]] + [p for p in parts[1:-1] if _DATE_RE.match(p)])
-        out.append({"key": f"sorted:{rel.as_posix()}", "label": label, "count": count})
+        rel = folder.relative_to(tree)
+        parts = list(rel.parts)  # <preset>[/<date>]/<folder>[/<preset>/<folder> on a second pass]
+        label = " · ".join([parts[-1]] + parts[:-1]) + (" (copies)" if _tree_key(tree) == "copies" else "")
+        out.append({"key": f"{_tree_key(tree)}:{rel.as_posix()}", "label": label, "count": count})
     return out
 
 
 def resolve_source(music_root: Path, key: str) -> Optional[Path]:
-    """Folder for a ``sorted:`` key, refusing anything outside BAKKIS_SORTED."""
-    if not key.startswith("sorted:"):
+    """Folder for a ``sorted:`` or ``copies:`` key, refusing anything outside that tree."""
+    kind, sep, rel = key.partition(":")
+    if not sep or kind not in ("sorted", "copies"):
         return None
-    root = library.sorted_root(music_root)
-    folder = (root / key[len("sorted:") :]).resolve()
+    root = library.sorted_root(music_root) if kind == "sorted" else library.copies_root(music_root)
+    folder = (root / rel).resolve()
     try:
         folder.relative_to(root)
     except ValueError:
@@ -164,8 +165,8 @@ def current_location(path: Path, journal: Journal) -> Optional[Path]:
 
 
 def create_folder(music_root: Path, hearts: Hearts, journal: Journal, name: Optional[str] = None) -> dict:
-    """Copy every hearted track into BAKKIS_SORTED/Discover/<name>. Never overwrites; originals stay."""
-    base = library.sorted_root(music_root) / DISCOVER_DIR
+    """Copy every hearted track into BAKKIS_SORTED_COPIES/Discover/<name>. Never overwrites; originals stay."""
+    base = library.copies_root(music_root) / DISCOVER_DIR
     leaf = safe_segment(name or f"{date.today().isoformat()} Hearted", "Hearted")
     target = base / leaf
     n = 2

@@ -47,7 +47,7 @@ def test_hearts_toggle_persist_and_create_folder(music, tmp_path):
     journal = Journal(tmp_path / "journal")
     r1 = listen.create_folder(music, again, journal, "Hearted")
     r2 = listen.create_folder(music, again, journal, "Hearted")
-    assert r1["copied"] == 1 and r1["folder"].endswith("BAKKIS_SORTED/Discover/Hearted")
+    assert r1["copied"] == 1 and r1["folder"].endswith("BAKKIS_SORTED_COPIES/Discover/Hearted")
     assert r2["folder"].endswith("Hearted (2)")  # never overwrites
     assert a.exists()  # copies only
 
