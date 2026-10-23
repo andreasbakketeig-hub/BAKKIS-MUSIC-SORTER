@@ -339,6 +339,7 @@ class Session:
                 "preset": a.preset_name,
                 "color": None if slot == SKIP_SLOT else preset["colors"][slot],
                 "slot": slot,
+                "mode": a.mode,
             },
         )
         self._worker.submit(lambda: self._run_action(a))

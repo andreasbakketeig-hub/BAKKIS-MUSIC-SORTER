@@ -118,44 +118,52 @@ Gestures (swipe mode): drag the track card in a direction (overlay shows target;
 ## Full parity checklist (from v1)
 
 Folder & scanning
-- [ ] Choose folder (native dialog) and drag-and-drop folder
-- [ ] Default folder: set / clear / load; auto-load on startup; message if missing
-- [ ] Include subfolders (setting); skip hidden files/dirs, `.DS_Store`, `._*`; skip `BAKKIS_SORTED`, legacy KEEP/ARCHIVE/FAVORITES/SKIPPED/GENRES, and preset folder names
-- [ ] Supported formats: mp3, wav, aiff, aif, flac, m4a, aac, alac, ogg (playback error → notice + auto-skip with undo, as v1)
-- [ ] Background scan with progress; cancel when a new folder is loaded
-- [ ] Track order: random / in order (U/O + setting); reorder preserves current track
+- [x] Choose folder (native dialog) and drag-and-drop folder
+- [x] Default folder: set / clear / load; auto-load on startup; message if missing
+- [x] Include subfolders (setting); skip hidden files/dirs, `.DS_Store`, `._*`; skip `BAKKIS_SORTED`, legacy KEEP/ARCHIVE/FAVORITES/SKIPPED/GENRES, and preset folder names
+- [x] Supported formats: mp3, wav, aiff, aif, flac, m4a, aac, alac, ogg (playback error → notice + auto-skip with undo, as v1)
+- [x] Background scan with progress; cancel when a new folder is loaded
+- [x] Track order: random / in order (U/O + setting); reorder preserves current track
 
 Sorting
-- [ ] Output tree `BAKKIS_SORTED/<preset>/[YYYY-MM-DD/]<target>/…` ("Create dated sessions" setting)
-- [ ] Swipe: Keep / Archive / Favorite (labels, colors, folder names from active swipe preset)
-- [ ] Grid: 9 slots (labels, colors, folders from active grid preset)
-- [ ] Skip → `…/Skipped/` preserving relative subfolders
-- [ ] Name collisions → `name (2).ext`
-- [ ] Clean up empty source folders after sort (setting; ignores `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`); undo recreates them
-- [ ] **New**: Copy mode; in copy mode remember sorted sources (`BAKKIS_SORTED/.bakkis_copied.json`) and hide them on rescan (setting)
-- [ ] Undo last / undo all; undo never overwrites (unique name + notice); undo of a copy deletes only the copy we made
-- [ ] **New**: persistent journal `~/Library/Application Support/BAKKIS MUSIC SORTER/journal/YYYY-MM-DD.jsonl`
-- [ ] Soft click sound on sort/skip (setting) — synthesize in WebAudio, no file
-- [ ] When a track plays to the end: auto-advance as Skip (v1 behavior); **new** setting: stop instead
+- [x] Output tree `BAKKIS_SORTED/<preset>/[YYYY-MM-DD/]<target>/…` ("Create dated sessions" setting)
+- [x] Swipe: Keep / Archive / Favorite (labels, colors, folder names from active swipe preset)
+- [x] Grid: 9 slots (labels, colors, folders from active grid preset)
+- [x] Skip → `…/Skipped/` preserving relative subfolders
+- [x] Name collisions → `name (2).ext`
+- [x] Clean up empty source folders after sort (setting; ignores `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`); undo recreates them
+- [x] **New**: Copy mode; in copy mode remember sorted sources (`BAKKIS_SORTED/.bakkis_copied.json`) and hide them on rescan (setting)
+- [x] Undo last / undo all; undo never overwrites (unique name + notice); undo of a copy deletes only the copy we made
+- [x] **New**: persistent journal `~/Library/Application Support/BAKKIS MUSIC SORTER/journal/YYYY-MM-DD.jsonl`
+- [x] Soft click sound on sort/skip (setting) — synthesize in WebAudio, no file
+- [x] When a track plays to the end: auto-advance as Skip (v1 behavior); **new** setting: stop instead
 
 Playback
-- [ ] Default start time (0:00, 0:30, 1:00, 1:30, 2:00, 3:00); if duration < start + 30 s start at 0:00
-- [ ] Jump keys/markers, outro, ±30 s, replay (R), play/pause, volume (persisted)
-- [ ] Now playing: title — artist (tags, else "Artist - Title" filename, else filename), BPM, key, duration, cover art
+- [x] Default start time (0:00, 0:30, 1:00, 1:30, 2:00, 3:00); if duration < start + 30 s start at 0:00
+- [x] Jump keys/markers, outro, ±30 s, replay (R), play/pause, volume (persisted)
+- [x] Now playing: title — artist (tags, else "Artist - Title" filename, else filename), BPM, key, duration, cover art
 
 Presets & settings
-- [ ] Mode presets store `mode_presets.json` (same format as v1): swipe presets (3 labels/colors/folders) and grid presets (9)
-- [ ] New / edit / delete / select preset per mode; startup preset; reset grid to default genres
-- [ ] Genre palette (Teal, Blue, Purple, Gray, Orange, Pink, Red, Yellow, Dark)
-- [ ] Settings: default folder, auto-load, default mode on startup, startup preset, default start time, default order,
+- [x] Mode presets store `mode_presets.json` (same format as v1): swipe presets (3 labels/colors/folders) and grid presets (9)
+- [x] New / edit / delete / select preset per mode; startup preset; reset grid to default genres
+- [x] Genre palette (Teal, Blue, Purple, Gray, Orange, Pink, Red, Yellow, Dark)
+- [x] Settings: default folder, auto-load, default mode on startup, startup preset, default start time, default order,
       include subfolders, click sound, ↑ target, dated sessions, cleanup empty folders, show guide on startup,
       show queue on startup, volume; **new**: move/copy, keep direction, end-of-track behavior
-- [ ] Read v1 `settings.json` / `bakkis_settings.json` / `mode_presets.json` / `genre_labels.json` (migrate; drop dead keys)
+- [x] Read v1 `settings.json` / `bakkis_settings.json` / `mode_presets.json` / `genre_labels.json` (migrate; drop dead keys)
 
 Panels & stats
-- [ ] Queue drawer: upcoming tracks (virtualized) + last 5 actions; click a track to play it next (new)
-- [ ] Session stats (per target, total, elapsed) and per-folder counts on tiles
-- [ ] Guide / shortcut overlay; focus mode (Tab); fullscreen (⌘F / Esc)
+- [x] Queue drawer: upcoming tracks (virtualized) + last 5 actions; click a track to play it next (new)
+- [x] Session stats (per target, total, elapsed) and per-folder counts on tiles
+- [x] Guide / shortcut overlay; focus mode (Tab); fullscreen (⌘F / Esc)
+
+
+Parity pass done 2026-10-23 (all items implemented and covered by tests or checks in the real window). Deliberate
+differences from v1: preset/genre folder names no longer hide source folders from the scan (only v1's flat output
+folders at the top level are skipped); start times go up to 6:00 and a too-short track starts about a third in
+instead of at 0:00; swipe default is → Keep (v1: ← Keep), switchable in Settings. v1's live session line is shown in
+the footer. Still to be checked by hand on Andreas' Mac: picking a folder in the native dialog, a real drag and drop
+from Finder, a real two-finger flick, and a first launch on a Mac/user account without his settings.
 
 ## Settings & data locations
 

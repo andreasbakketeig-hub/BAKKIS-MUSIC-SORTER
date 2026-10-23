@@ -595,6 +595,7 @@ function renderAll() {
   renderTopbar();
   renderTiles();
   renderHints();
+  renderFooterStats();
   if (Listen.active) { setScreen("player"); return; }
   const sess = S.session;
   if (S.scan && S.scan.status === "scanning") {
@@ -762,6 +763,32 @@ function pressTile(slot) {
   if (!t) return;
   t.classList.add("pressed");
   setTimeout(() => t.classList.remove("pressed"), 120);
+}
+
+/** Live session stats in the footer, like v1: "12 sorted · 5 Keep · 4 Archive · 2 skipped · 42% kept · 8m". */
+function renderFooterStats() {
+  const box = $("footer-stats");
+  const sess = S.session;
+  const show = !!(sess && sess.sorted && !Listen.active);
+  box.hidden = !show;
+  body.classList.toggle("has-stats", show);
+  if (!show) return;
+  const info = sess.count_info || {};
+  const groups = Object.entries(sess.counts)
+    .filter(([k, n]) => n && k !== "skip")
+    .map(([k, n]) => ({ n, label: (info[k] && info[k].label) || k, slot: info[k] ? info[k].slot : 99 }))
+    .sort((a, b) => b.n - a.n);
+  const skipped = sess.counts.skip || 0;
+  const parts = [`${sess.sorted} sorted`, ...groups.slice(0, 4).map((g) => `${g.n} ${g.label}`)];
+  if (skipped) parts.push(`${skipped} skipped`);
+  // "Kept" = everything that went to the Keep/Favorite slots (swipe) or any tile (grid), out of all decisions.
+  const kept = Object.entries(sess.counts)
+    .filter(([k]) => k !== "skip" && info[k] && (info[k].mode === "grid" || info[k].slot !== 1))
+    .reduce((sum, [, n]) => sum + n, 0);
+  if (sess.sorted) parts.push(`${Math.round((100 * kept) / sess.sorted)}% kept`);
+  const mins = Math.floor(sess.elapsed / 60);
+  parts.push(mins >= 1 ? `${mins}m` : `${Math.floor(sess.elapsed)}s`);
+  box.textContent = parts.join(" · ");
 }
 
 function renderHints() {
