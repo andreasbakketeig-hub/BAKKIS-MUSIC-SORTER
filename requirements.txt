@@ -3,3 +3,5 @@
 # Pillow: logo image (resize + transparency) for branding footer.
 mutagen>=1.47.0
 Pillow>=10.0.0
+# v2 (bakkis_sorter/, main.py): pywebview window, playback in WebKit.
+pywebview>=5.0

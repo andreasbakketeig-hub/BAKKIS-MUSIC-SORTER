@@ -1152,10 +1152,9 @@ function setupDrop() {
     e.preventDefault();
     depth = 0;
     overlay.hidden = true;
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    const path = f && (f.pywebviewFullPath || f.path);
-    if (path) loadFolder(path);
-    else toast("Drag and drop works in the app window. Use “Choose music folder” here.", { level: "warning" });
+    // In the app, pywebview delivers the full path to Python (app.py), which calls loadFolder().
+    if (window.pywebview) return;
+    toast("Drag and drop works in the app window. Use “Choose music folder” here.", { level: "warning" });
   });
 }
 
