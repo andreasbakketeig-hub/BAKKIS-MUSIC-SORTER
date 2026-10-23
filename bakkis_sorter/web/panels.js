@@ -871,32 +871,35 @@ const Guide = {
     const layout = swipeLayout();
     const upArchive = S.settings && S.settings.swipe_archive_hotkey === "up";
     const keyFor = (slot) => layout.find((t) => t.slot === slot).glyph;
+    // Three short columns; the rest is discoverable in the app itself (tooltips, Settings, README).
+    const discover = !!(S.settings && S.settings.discover_in_topbar);
     const groups = [
-      ["Swipe mode", [
+      ["Sort", [
         [keyFor(0), sw ? sw.labels[0] : "Keep"],
-        [keyFor(1) + (upArchive ? "  ↑" : ""), sw ? sw.labels[1] : "Archive"],
+        [keyFor(1) + (upArchive ? " ↑" : ""), sw ? sw.labels[1] : "Archive"],
         [upArchive ? "drag ↑" : "↑", sw ? sw.labels[2] : "Favorite"],
         ["↓", "Skip"],
-        ["1 – 8", "Jump to 0:00 0:30 1:00 1:30 2:00 3:00 4:00 5:00"],
-        ["9", "Outro (last 60 s)"],
-        ["Drag card", "Sort in that direction"],
-        ["Two-finger flick", "← / → on the trackpad"],
+        ["1–9", "Grid tile"],
+      ], "Or drag the card, or flick with two fingers."],
+      ["Listen", [
+        ["Space", "Play / pause"],
+        ["1–8", "Jump points"],
+        ["9", "Outro"],
+        ["A  D", "−30 s / +30 s"],
+        ["R", "Replay"],
       ]],
-      ["Grid mode", [["1 – 9", "Sort to that tile"], ["↓", "Skip"]]],
-      ["Playback", [["Space", "Play / pause"], ["A  /  D", "−30 s / +30 s"], ["R", "Replay from the jump point"], ["Click waveform", "Seek"]]],
-      ["Session", [["Z  or  ⌘Z", "Undo last"], ["⇧⌘Z  or  ⌃Z", "Undo all (asks first)"], ["U  /  O", "Random order / in order"], ["S  /  G", "Swipe / Grid mode"]]],
-      ["Window", [["Q", "Queue"], ["H  or  ?", "This guide"], ["Tab", "Focus mode"], ["⌘F", "Fullscreen"], ["Esc", "Close / exit fullscreen"]]],
+      ["General", [
+        ["Z", "Undo"],
+        ["⇧⌘Z", "Undo all"],
+        ["S  G", "Swipe / Grid"],
+        ...(discover ? [["L", "Discover"]] : []),
+        ["Q", "Queue"],
+        ["⌘F", "Fullscreen"],
+        ["H", "Shortcuts"],
+      ], discover ? "In Discover: ← → next / previous, ↑ heart." : ""],
     ];
-    groups.push(["Workflows", [
-      ["Genre → Quick Sort", "Genre Sort a big folder first. Then load one genre folder from BAKKIS_SORTED and Quick Sort it."],
-      ["Weekly promos", "The Promos preset gives every day its own folder."],
-      ["Set prep", "Set Builder sorts by moment, from warm-up to after hours."],
-    ], "guide-flows"]);
-    if (S.settings && S.settings.discover_in_topbar) {
-      groups.push(["Discover", [["L", "Start / stop Discover"], ["→  /  ←", "Next / previous"], ["↑  or  F", "Heart / un-heart"], ["Space", "Play / pause"]]]);
-    }
-    for (const [title, rows, cls] of groups) {
-      const g = el("div", cls ? `guide-group ${cls}` : "guide-group");
+    for (const [title, rows, foot] of groups) {
+      const g = el("div", "guide-group");
       g.appendChild(el("h3", null, title));
       for (const [k, v] of rows) {
         const r = el("div", "guide-row");
@@ -904,6 +907,7 @@ const Guide = {
         r.appendChild(el("span", null, v));
         g.appendChild(r);
       }
+      if (foot) g.appendChild(el("p", "guide-note", foot));
       box.appendChild(g);
     }
     const cb = document.getElementById("guide-startup");
