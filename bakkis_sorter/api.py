@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import __version__, library
-from .config import MODES, PresetError, PresetStore, load_settings, norm_mode, save_settings
-from .metadata import MetadataCache
+from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, save_settings
+from .metadata import MetadataCache, PeakStore
 from .server import ApiError
 from .session import Session, SessionError, filter_already_copied
 
@@ -26,6 +26,7 @@ class AppBackend:
         self.settings = load_settings()
         self.presets = presets or PresetStore()
         self.meta = MetadataCache()
+        self.peaks = PeakStore(config_dir() / "peaks")
         self.session: Optional[Session] = None
         self._scan_job: Optional[library.ScanJob] = None
         self.scan = {"status": "idle", "root": None, "count": 0, "error": None}
@@ -108,6 +109,14 @@ class AppBackend:
         if p is None:
             raise ApiError("Unknown track", 404)
         return {"track_id": track_id, **self.meta.get(p).to_dict()}
+
+    def api_peaks_get(self, track_id: str) -> Optional[str]:
+        p = self.audio_path(track_id)
+        return self.peaks.get(p) if p else None
+
+    def api_peaks_put(self, track_id: str, peaks: str) -> bool:
+        p = self.audio_path(track_id)
+        return self.peaks.put(p, peaks) if p else False
 
     # ------------------------------------------------------------------ folder / scan
 

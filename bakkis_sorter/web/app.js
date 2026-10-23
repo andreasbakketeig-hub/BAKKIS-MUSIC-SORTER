@@ -1,0 +1,1196 @@
+/* BAKKIS MUSIC SORTER v2 — frontend. Plain JS, no build step.
+ *
+ * Talks to the Python backend over POST /api/<method> (see api.py). Audio streams from /audio/<id>.
+ * Two <audio> elements: `cur` plays, `next` preloads the upcoming track at its start point so a
+ * sort decision swaps elements and is audible immediately.
+ */
+"use strict";
+
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const JUMPS = [0, 30, 60, 90, 120, 180, 240, 300]; // keys 1–8; key 9 = outro
+const OUTRO_SEC = 60;
+const SEEK_STEP = 30;
+const DRAG_THRESHOLD = 38;
+const WAVE_PEAKS = 800;
+const WAVE_MAX_BYTES = 200 * 1024 * 1024;
+const WAVE_MAX_SEC = 20 * 60;
+const POLL_MS = 1000;
+
+const $ = (id) => document.getElementById(id);
+const body = document.body;
+
+// ------------------------------------------------------------------ state
+
+const S = {
+  settings: null,
+  presets: null,
+  scan: null,
+  session: null,
+  mode: "swipe",
+  counts: [],
+  meta: new Map(), // track id -> meta
+  noticeSeq: 0,
+  busy: false, // a sort/skip/undo request is in flight
+  pendingDecisionAt: 0, // performance.now() of the last decision (latency measurement)
+  latencies: [],
+};
+window.__bakkis = S; // handy for debugging in Web Inspector
+
+// ------------------------------------------------------------------ api
+
+class ApiError extends Error {
+  constructor(message, status) { super(message); this.status = status; }
+}
+
+async function api(method, params = {}) {
+  const res = await fetch(`/api/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Bakkis-Token": TOKEN },
+    body: JSON.stringify(params),
+  });
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+  if (!res.ok) throw new ApiError((data && data.error) || res.statusText, res.status);
+  return data.result;
+}
+
+const audioUrl = (id) => `/audio/${encodeURIComponent(id)}?t=${encodeURIComponent(TOKEN)}`;
+const coverUrl = (id) => `/cover/${encodeURIComponent(id)}?t=${encodeURIComponent(TOKEN)}`;
+
+// ------------------------------------------------------------------ helpers
+
+function fmtTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const s = Math.floor(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+}
+const fgFor = (hex) => (luminance(hex) > 0.5 ? "#000000" : "#F2F2F2");
+
+function activePreset(mode = S.mode) {
+  if (!S.presets) return null;
+  const id = S.presets[`active_${mode}_preset_id`];
+  return S.presets.presets.find((p) => p.id === id) || null;
+}
+
+function trackDisplay(track, meta) {
+  if (meta && meta.title) return { title: meta.title, artist: meta.artist || "" };
+  if (meta && meta.display && meta.display !== track.name) {
+    const [t, a] = meta.display.split(" — ");
+    return { title: t, artist: a || meta.artist || "" };
+  }
+  return { title: track.name.replace(/\.[^.]+$/, ""), artist: (meta && meta.artist) || "" };
+}
+
+async function getMeta(id) {
+  if (S.meta.has(id)) return S.meta.get(id);
+  const m = await api("track_meta", { track_id: id });
+  S.meta.set(id, m);
+  if (S.meta.size > 300) S.meta.delete(S.meta.keys().next().value);
+  return m;
+}
+
+// ------------------------------------------------------------------ sound (WebAudio, no files)
+
+let audioCtx = null;
+function ctx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function clickSound() {
+  if (!S.settings || !S.settings.sort_confirmation_sound) return;
+  try {
+    const c = ctx();
+    const t = c.currentTime;
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(1400, t);
+    osc.frequency.exponentialRampToValueAtTime(700, t + 0.04);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.08, t + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    osc.connect(gain).connect(c.destination);
+    osc.start(t);
+    osc.stop(t + 0.07);
+  } catch (_) { /* sound is optional */ }
+}
+
+// ------------------------------------------------------------------ player
+
+const Player = {
+  cur: new Audio(),
+  next: new Audio(),
+  curId: null,
+  nextId: null,
+  activeStart: 0, // the active jump point (R replays from here)
+  userPaused: false,
+
+  init() {
+    for (const a of [this.cur, this.next]) {
+      a.preload = "auto";
+      a.addEventListener("ended", () => a === this.cur && onTrackEnded());
+      a.addEventListener("error", () => a === this.cur && a.src && onPlaybackError());
+      a.addEventListener("playing", () => a === this.cur && onPlaying());
+      a.addEventListener("pause", () => a === this.cur && body.classList.remove("playing"));
+      a.addEventListener("durationchange", () => a === this.cur && Wave.markersDirty());
+    }
+  },
+
+  setVolume(v) {
+    this.cur.volume = this.next.volume = Math.max(0, Math.min(1, v / 100));
+  },
+
+  startPointFor(duration) {
+    const start = (S.settings && S.settings.playback_start_seconds) || 0;
+    if (!isFinite(duration) || duration <= 0) return start;
+    return duration < start + 30 ? 0 : start;
+  },
+
+  /** Make `id` the playing track. Uses the preloaded element when it holds this track. */
+  load(id, autoplay = true) {
+    if (id === this.curId) return;
+    const old = this.cur;
+    if (id === this.nextId) {
+      this.cur = this.next;
+      this.next = old;
+    } else {
+      this.cur.src = audioUrl(id);
+      this.cur.dataset.start = "";
+      this.cur.dataset.ready = "";
+    }
+    this.curId = id;
+    this.nextId = null;
+    old.pause();
+    if (old !== this.cur) {
+      old.removeAttribute("src");
+      old.load();
+    }
+    this.cur.muted = false;
+    const a = this.cur;
+    const begin = () => {
+      if (a !== this.cur) return;
+      if (a.dataset.start === "") a.dataset.start = String(this.startPointFor(a.duration));
+      this.activeStart = Number(a.dataset.start);
+      if (Math.abs(a.currentTime - this.activeStart) > 0.25) a.currentTime = this.activeStart;
+      if (autoplay && !this.userPaused) this.play();
+      Wave.markersDirty();
+    };
+    if (a.readyState >= 1) begin();
+    else a.addEventListener("loadedmetadata", begin, { once: true });
+  },
+
+  /** Load `id` into the hidden element, seeked to its start point. */
+  preload(id) {
+    if (!id || id === this.nextId || id === this.curId) return;
+    const a = this.next;
+    this.nextId = id;
+    a.muted = true;
+    a.dataset.start = "";
+    a.src = audioUrl(id);
+    a.addEventListener("loadedmetadata", () => {
+      if (a !== this.next || this.nextId !== id) return;
+      a.dataset.start = String(this.startPointFor(a.duration));
+      a.currentTime = Number(a.dataset.start);
+    }, { once: true });
+  },
+
+  clear() {
+    for (const a of [this.cur, this.next]) { a.pause(); a.removeAttribute("src"); a.load(); }
+    this.curId = this.nextId = null;
+    body.classList.remove("playing");
+  },
+
+  play() {
+    const p = this.cur.play();
+    if (p && p.catch) p.catch(() => body.classList.remove("playing"));
+  },
+
+  toggle() {
+    if (!this.curId) return;
+    if (this.cur.paused) { this.userPaused = false; this.play(); }
+    else { this.userPaused = true; this.cur.pause(); }
+  },
+
+  get duration() {
+    const d = this.cur.duration;
+    if (isFinite(d) && d > 0) return d;
+    const m = S.meta.get(this.curId);
+    return m ? m.duration : 0;
+  },
+
+  seek(sec, { setActive = false } = {}) {
+    if (!this.curId) return;
+    const d = this.duration;
+    const t = Math.max(0, d ? Math.min(sec, d - 0.05) : sec);
+    this.cur.currentTime = t;
+    if (setActive) this.activeStart = t;
+    if (this.cur.paused && !this.userPaused) this.play();
+    Wave.markersDirty();
+  },
+
+  jump(sec) {
+    const d = this.duration;
+    if (d && sec >= d) { Wave.flash(sec); return; }
+    this.seek(sec, { setActive: true });
+  },
+
+  outro() {
+    const d = this.duration;
+    if (!d) return;
+    this.seek(Math.max(0, d - OUTRO_SEC), { setActive: true });
+  },
+
+  nudge(delta) { this.seek(this.cur.currentTime + delta); },
+  replay() { this.seek(this.activeStart); },
+};
+
+function onPlaying() {
+  body.classList.add("playing");
+  if (S.pendingDecisionAt) {
+    const ms = performance.now() - S.pendingDecisionAt;
+    S.latencies.push(Math.round(ms));
+    if (S.latencies.length > 50) S.latencies.shift();
+    S.pendingDecisionAt = 0;
+  }
+  Wave.loadPeaks(Player.curId);
+}
+
+function onTrackEnded() {
+  body.classList.remove("playing");
+  if (!S.settings || S.settings.end_of_track === "stop") return;
+  decide({ kind: "skip", auto: "ended" });
+}
+
+function onPlaybackError() {
+  const cur = S.session && S.session.current;
+  if (!cur || cur.id !== Player.curId) return;
+  decide({ kind: "skip", auto: "error" });
+}
+
+// ------------------------------------------------------------------ waveform
+
+const Wave = {
+  canvas: $("wave-canvas"),
+  peaks: null, // Uint8Array
+  peaksFor: null,
+  base: null, // offscreen canvases (unplayed / played)
+  played: null,
+  loadingFor: null,
+  dirtyMarkers: true,
+  flashTimer: 0,
+
+  reset(id) {
+    this.peaks = null;
+    this.peaksFor = id;
+    this.render();
+    this.markersDirty();
+  },
+
+  resize() {
+    const r = this.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.round(r.width * dpr));
+    this.canvas.height = Math.max(1, Math.round(r.height * dpr));
+    this.render();
+    this.markersDirty();
+  },
+
+  /** Pre-render bars in two colors; each frame only composites them. */
+  render() {
+    const w = this.canvas.width, h = this.canvas.height;
+    const mk = (color) => {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      const g = c.getContext("2d");
+      g.fillStyle = color;
+      if (this.peaks) {
+        const n = this.peaks.length;
+        const dpr = window.devicePixelRatio || 1;
+        const barW = Math.max(1, Math.floor(2 * dpr));
+        const gap = Math.max(1, Math.floor(dpr));
+        const step = barW + gap;
+        const bars = Math.floor(w / step);
+        for (let i = 0; i < bars; i++) {
+          const a = Math.floor((i / bars) * n), b = Math.max(a + 1, Math.floor(((i + 1) / bars) * n));
+          let v = 0;
+          for (let j = a; j < b; j++) v = Math.max(v, this.peaks[j]);
+          const bh = Math.max(2 * dpr, (v / 255) * (h - 8 * dpr));
+          g.fillRect(i * step, (h - bh) / 2, barW, bh);
+        }
+      } else {
+        const lh = Math.max(2, Math.round(2 * (window.devicePixelRatio || 1)));
+        g.fillRect(0, (h - lh) / 2, w, lh);
+      }
+      return c;
+    };
+    this.base = mk("#3a3f46");
+    this.played = mk("#00d6b4");
+  },
+
+  draw() {
+    const g = this.canvas.getContext("2d");
+    const w = this.canvas.width, h = this.canvas.height;
+    g.clearRect(0, 0, w, h);
+    if (!this.base) return;
+    g.drawImage(this.base, 0, 0);
+    const d = Player.duration;
+    if (d > 0 && Player.curId) {
+      const x = Math.round((Player.cur.currentTime / d) * w);
+      if (x > 0) g.drawImage(this.played, 0, 0, x, h, 0, 0, x, h);
+      // active start marker
+      const sx = Math.round((Player.activeStart / d) * w);
+      g.fillStyle = "rgba(0,214,180,0.5)";
+      g.fillRect(sx, 0, Math.max(1, window.devicePixelRatio || 1), h);
+      g.fillStyle = "#f2f3f5";
+      g.fillRect(x, 0, Math.max(1, window.devicePixelRatio || 1), h);
+    }
+  },
+
+  markersDirty() { this.dirtyMarkers = true; },
+
+  drawMarkers() {
+    if (!this.dirtyMarkers) return;
+    this.dirtyMarkers = false;
+    const box = $("markers");
+    box.textContent = "";
+    if (S.mode !== "swipe" && S.mode !== "grid") return;
+    const d = Player.duration;
+    // Only points inside the track are shown; pressing a key beyond the end flashes the waveform.
+    const points = JUMPS.map((sec, i) => ({ sec, key: String(i + 1), label: fmtTime(sec) })).filter((p) => !d || p.sec < d);
+    if (d > OUTRO_SEC) points.push({ sec: d - OUTRO_SEC, key: "9", label: "outro", outro: true });
+    points.sort((a, b) => a.sec - b.sec);
+    const showKeys = S.mode === "swipe";
+    for (const p of points) {
+      const b = el("button", "marker");
+      b.type = "button";
+      if (showKeys) b.appendChild(el("kbd", null, p.key));
+      b.appendChild(document.createTextNode(p.label));
+      const pos = d ? p.sec / d : JUMPS.indexOf(p.sec) / (JUMPS.length - 1);
+      b.style.left = `${(pos * 100).toFixed(3)}%`;
+      if (Math.abs(p.sec - Player.activeStart) < 0.5) b.classList.add("active");
+      b.dataset.sec = String(p.sec);
+      b.dataset.pos = String(pos);
+      b.addEventListener("click", () => (p.outro ? Player.outro() : Player.jump(p.sec)));
+      box.appendChild(b);
+    }
+    // keep the edge labels inside the box
+    const first = box.firstElementChild;
+    if (first) first.style.transform = "translateX(0)";
+    const last = box.lastElementChild;
+    if (last && last !== first && Number(last.dataset.pos) > 0.92) last.style.transform = "translateX(-100%)";
+  },
+
+  flash(sec) {
+    const wave = $("wave");
+    wave.classList.add("flash");
+    const m = [...document.querySelectorAll(".marker")].find((b) => Number(b.dataset.sec) === sec);
+    if (m) m.classList.add("flash");
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => {
+      wave.classList.remove("flash");
+      if (m) m.classList.remove("flash");
+    }, 350);
+  },
+
+  /** Peaks: disk cache via backend, else decode in the webview and store. */
+  async loadPeaks(id) {
+    if (!id || this.peaksFor === id && this.peaks) return;
+    if (this.loadingFor === id) return;
+    this.loadingFor = id;
+    try {
+      const cached = await api("peaks_get", { track_id: id });
+      if (Player.curId !== id) return;
+      if (cached) return this.setPeaks(id, Uint8Array.from(atob(cached), (c) => c.charCodeAt(0)));
+      const meta = await getMeta(id).catch(() => null);
+      if (!meta || meta.size > WAVE_MAX_BYTES || (meta.duration && meta.duration > WAVE_MAX_SEC)) return;
+      await new Promise((r) => setTimeout(r, 300)); // let playback settle first
+      if (Player.curId !== id) return;
+      const buf = await (await fetch(audioUrl(id))).arrayBuffer();
+      if (Player.curId !== id) return;
+      const audio = await ctx().decodeAudioData(buf);
+      if (Player.curId !== id) return;
+      const peaks = computePeaks(audio, WAVE_PEAKS);
+      this.setPeaks(id, peaks);
+      let bin = "";
+      for (let i = 0; i < peaks.length; i++) bin += String.fromCharCode(peaks[i]);
+      api("peaks_put", { track_id: id, peaks: btoa(bin) }).catch(() => {});
+    } catch (_) {
+      /* no waveform: the flat progress line stays */
+    } finally {
+      if (this.loadingFor === id) this.loadingFor = null;
+    }
+  },
+
+  setPeaks(id, peaks) {
+    if (Player.curId !== id) return;
+    this.peaks = peaks;
+    this.peaksFor = id;
+    this.render();
+  },
+};
+
+function computePeaks(audio, n) {
+  const chans = [];
+  for (let c = 0; c < Math.min(2, audio.numberOfChannels); c++) chans.push(audio.getChannelData(c));
+  const len = chans[0].length;
+  const per = Math.max(1, Math.floor(len / n));
+  const stride = Math.max(1, Math.floor(per / 256)); // sample sparsely; peaks don't need every sample
+  const out = new Float32Array(n);
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    const a = i * per, b = Math.min(len, a + per);
+    let v = 0;
+    for (const ch of chans) for (let j = a; j < b; j += stride) { const s = Math.abs(ch[j]); if (s > v) v = s; }
+    out[i] = v;
+    if (v > max) max = v;
+  }
+  const res = new Uint8Array(n);
+  for (let i = 0; i < n; i++) res[i] = max ? Math.round((out[i] / max) * 255) : 0;
+  return res;
+}
+
+function frame() {
+  if (body.classList.contains("is-player")) {
+    Wave.draw();
+    Wave.drawMarkers();
+    const t = Player.cur.currentTime || 0;
+    const txt = `${fmtTime(t)} / ${fmtTime(Player.duration)}`;
+    const timeEl = $("time");
+    if (timeEl.textContent !== txt) timeEl.textContent = txt;
+  }
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------------------ rendering
+
+function setScreen(name) {
+  for (const s of ["is-empty", "is-scanning", "is-player", "is-done"]) body.classList.toggle(s, s === `is-${name}`);
+}
+
+function renderAll() {
+  renderTopbar();
+  renderTiles();
+  renderHints();
+  const sess = S.session;
+  if (S.scan && S.scan.status === "scanning") {
+    setScreen("scanning");
+    $("scan-text").textContent = S.scan.count ? `Scanning… ${S.scan.count} tracks` : "Scanning…";
+    $("scan-root").textContent = S.scan.root || "";
+  } else if (!sess) {
+    setScreen("empty");
+  } else if (!sess.current) {
+    setScreen("done");
+    renderDone();
+    Player.clear();
+  } else {
+    setScreen("player");
+  }
+}
+
+function renderTopbar() {
+  const root = (S.session && S.session.root) || (S.scan && S.scan.root) || "";
+  const name = root.split("/").filter(Boolean).pop() || "";
+  $("folder-name").textContent = name;
+  $("folder-name").title = root;
+  for (const b of document.querySelectorAll(".mode-switch button")) b.classList.toggle("active", b.dataset.mode === S.mode);
+  body.classList.toggle("mode-swipe", S.mode === "swipe");
+  body.classList.toggle("mode-grid", S.mode === "grid");
+
+  const sel = $("preset-select");
+  sel.textContent = "";
+  if (S.presets) {
+    const act = activePreset();
+    for (const p of S.presets.presets.filter((q) => q.mode === S.mode)) {
+      const o = el("option", null, p.name);
+      o.value = p.id;
+      if (act && p.id === act.id) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+  const sess = S.session;
+  if (sess && sess.total) {
+    const done = sess.total - sess.remaining;
+    $("count").textContent = `${Math.min(done + 1, sess.total)} / ${sess.total}`;
+    $("top-progress-fill").style.width = `${(done / sess.total) * 100}%`;
+  } else {
+    $("count").textContent = "";
+    $("top-progress-fill").style.width = "0";
+  }
+}
+
+/** Swipe tile layout for the current settings: [{dir, glyph, slot|'skip', keyHint}]. */
+function swipeLayout() {
+  const keepRight = !S.settings || S.settings.swipe_keep_direction !== "left";
+  const upArchive = S.settings && S.settings.swipe_archive_hotkey === "up";
+  const keep = { slot: 0, dir: keepRight ? "right" : "left" };
+  const archive = { slot: 1, dir: keepRight ? "left" : "right" };
+  const glyph = { left: "←", right: "→" };
+  const tiles = [
+    { slot: archive.slot, glyph: glyph[archive.dir], key: glyph[archive.dir] + (upArchive ? " ↑" : ""), dir: archive.dir },
+    { slot: "skip", glyph: "↓", key: "↓", dir: "down" },
+    { slot: 2, glyph: "↑", key: upArchive ? "swipe ↑" : "↑", dir: "up" },
+    { slot: keep.slot, glyph: glyph[keep.dir], key: glyph[keep.dir], dir: keep.dir },
+  ];
+  // Left-most tile is always the "←" action, right-most the "→" action.
+  return tiles.sort((a, b) => ["left", "down", "up", "right"].indexOf(a.dir) - ["left", "down", "up", "right"].indexOf(b.dir));
+}
+
+function slotForDirection(dir) {
+  const t = swipeLayout().find((x) => x.dir === dir);
+  return t ? t.slot : null;
+}
+
+function renderTiles() {
+  const sw = activePreset("swipe");
+  const swBox = $("tiles-swipe");
+  swBox.textContent = "";
+  if (sw) {
+    for (const t of swipeLayout()) {
+      const skip = t.slot === "skip";
+      const color = skip ? "#8A8F98" : sw.colors[t.slot];
+      const tile = el("button", "tile");
+      tile.type = "button";
+      tile.style.setProperty("--tile-color", color);
+      tile.dataset.slot = String(t.slot);
+      tile.appendChild(el("div", "glyph", t.glyph));
+      tile.appendChild(el("div", "label", skip ? "Skip" : sw.labels[t.slot]));
+      tile.appendChild(el("div", "key", t.key));
+      const n = skip ? null : S.mode === "swipe" ? S.counts[t.slot] : null;
+      if (n != null) tile.appendChild(el("div", "badge", String(n)));
+      tile.addEventListener("click", () => decide(skip ? { kind: "skip" } : { kind: "sort", slot: t.slot }));
+      swBox.appendChild(tile);
+    }
+  }
+  const gr = activePreset("grid");
+  const grBox = $("tiles-grid");
+  grBox.textContent = "";
+  if (gr) {
+    gr.labels.forEach((label, i) => {
+      const color = gr.colors[i];
+      const tile = el("button", "tile");
+      tile.type = "button";
+      tile.style.setProperty("--tile-color", color);
+      tile.style.setProperty("--tile-fg", fgFor(color));
+      tile.dataset.slot = String(i);
+      tile.appendChild(el("div", "label", label));
+      tile.appendChild(el("div", "key", String(i + 1)));
+      const n = S.mode === "grid" ? S.counts[i] : null;
+      if (n != null) tile.appendChild(el("div", "badge", String(n)));
+      tile.addEventListener("click", () => decide({ kind: "sort", slot: i }));
+      grBox.appendChild(tile);
+    });
+  }
+}
+
+function pressTile(slot) {
+  const box = S.mode === "grid" ? $("tiles-grid") : $("tiles-swipe");
+  const t = box.querySelector(`.tile[data-slot="${slot}"]`);
+  if (!t) return;
+  t.classList.add("pressed");
+  setTimeout(() => t.classList.remove("pressed"), 120);
+}
+
+function renderHints() {
+  const h = $("hints");
+  h.textContent = "";
+  const add = (k, label) => { const s = el("span"); s.appendChild(el("kbd", null, k)); s.appendChild(document.createTextNode(label)); h.appendChild(s); };
+  if (!S.session) { add("H", "shortcuts"); return; }
+  if (S.mode === "swipe") { add("← → ↑", "sort"); add("↓", "skip"); add("1–9", "jump"); }
+  else { add("1–9", "sort"); add("↓", "skip"); }
+  add("Space", "play"); add("A D", "±30s"); add("Z", "undo"); add("H", "all shortcuts");
+}
+
+async function renderCard() {
+  const cur = S.session && S.session.current;
+  if (!cur) return;
+  const id = cur.id;
+  const cached = S.meta.get(id);
+  fillCard(cur, cached);
+  if (!cached) {
+    try { const m = await getMeta(id); if (S.session && S.session.current && S.session.current.id === id) fillCard(cur, m); }
+    catch (_) { /* keep the file-name view */ }
+  }
+}
+
+function fillCard(track, meta) {
+  const { title, artist } = trackDisplay(track, meta);
+  const t = $("title");
+  t.textContent = title;
+  t.dataset.text = title;
+  t.classList.remove("marquee");
+  $("artist").textContent = artist;
+  const cover = $("cover");
+  $("cover-fallback").textContent = (artist || title || "?").trim().charAt(0).toUpperCase();
+  const img = $("cover-img");
+  if (meta && meta.has_cover) {
+    if (img.dataset.id !== track.id) {
+      cover.classList.remove("has-img");
+      img.onload = () => img.dataset.id === track.id && cover.classList.add("has-img");
+      img.dataset.id = track.id;
+      img.src = coverUrl(track.id);
+    }
+  } else {
+    img.dataset.id = "";
+    img.removeAttribute("src");
+    cover.classList.remove("has-img");
+  }
+  const chips = $("chips");
+  chips.textContent = "";
+  const chip = (label, value) => {
+    const c = el("span", "chip");
+    if (label) c.appendChild(document.createTextNode(label + " "));
+    c.appendChild(el("b", null, value));
+    chips.appendChild(c);
+  };
+  if (meta && meta.bpm) chip("BPM", meta.bpm);
+  if (meta && meta.key) chip("Key", meta.key);
+  if (meta && meta.duration) chip("", fmtTime(meta.duration));
+  if (track.folder) chip("", track.folder);
+  chip("", track.name.split(".").pop().toUpperCase());
+  requestAnimationFrame(() => {
+    const wrap = t.parentElement;
+    if (t.scrollWidth > wrap.clientWidth + 2) {
+      const shift = t.scrollWidth + 96; // text + padding-right + ::after padding-left
+      t.classList.add("marquee");
+      t.style.setProperty("--marquee-shift", `-${shift}px`);
+      t.style.setProperty("--marquee-dur", `${Math.max(8, shift / 60)}s`);
+    }
+  });
+}
+
+function renderDone() {
+  const box = $("done-stats");
+  box.textContent = "";
+  const sess = S.session;
+  if (!sess) return;
+  const labelFor = (key) => {
+    if (key === "skip") return "Skipped";
+    const [pid, slot] = key.split(":");
+    const p = S.presets.presets.find((q) => q.id === pid);
+    return p ? `${p.labels[Number(slot)]} · ${p.name}` : key;
+  };
+  for (const [k, v] of Object.entries(sess.counts)) {
+    if (!v) continue;
+    box.appendChild(el("div", null, labelFor(k)));
+    box.appendChild(el("div", "n", String(v)));
+  }
+  box.appendChild(el("div", "muted", "Time"));
+  box.appendChild(el("div", "n muted", fmtTime(sess.elapsed)));
+}
+
+// ------------------------------------------------------------------ session updates
+
+/** Apply a session snapshot; starts the new current track and preloads the next one. */
+function applySession(snap) {
+  const prevId = S.session && S.session.current && S.session.current.id;
+  S.session = snap;
+  if (snap && snap.last_notice > S.noticeSeq) pollNotices();
+  renderAll();
+  const cur = snap && snap.current;
+  if (!cur) return;
+  if (cur.id !== prevId || cur.id !== Player.curId) {
+    Wave.reset(cur.id);
+    Player.load(cur.id);
+    renderCard();
+  }
+  const nxt = snap.upcoming && snap.upcoming[0];
+  if (nxt) {
+    Player.preload(nxt.id);
+    getMeta(nxt.id).catch(() => {});
+  }
+}
+
+async function refreshState() {
+  const st = await api("state");
+  S.settings = st.settings;
+  S.presets = st.presets;
+  S.scan = st.scan;
+  applySession(st.session);
+  return st;
+}
+
+let countsTimer = 0;
+function refreshCountsSoon(delay = 500) {
+  clearTimeout(countsTimer);
+  countsTimer = setTimeout(async () => {
+    if (!S.session) return;
+    try { S.counts = await api("folder_counts", { mode: S.mode }); renderTiles(); } catch (_) { /* ignore */ }
+  }, delay);
+}
+
+// ------------------------------------------------------------------ decisions
+
+async function ensureMoveAcknowledged() {
+  const s = S.settings;
+  if (!s || s.file_operation !== "move" || s.move_warning_acknowledged) return true;
+  const choice = await modal({
+    title: "Files will be moved",
+    body: "Sorting moves files into BAKKIS_SORTED inside this folder. If these tracks are in a Rekordbox or Serato library, their links will break. Copy mode keeps the originals where they are.",
+    buttons: [
+      { label: "Cancel", value: null },
+      { label: "Use copy", value: "copy" },
+      { label: "Move files", value: "move", primary: true },
+    ],
+  });
+  if (!choice) return false;
+  S.settings = await api("set_settings", { move_warning_acknowledged: true, file_operation: choice });
+  return true;
+}
+
+/** kind: 'sort' | 'skip'. `auto` marks automatic skips (track ended / playback error). */
+async function decide({ kind, slot, auto }) {
+  const sess = S.session;
+  if (S.busy || !sess || !sess.current) return;
+  const cur = sess.current;
+  const s = S.settings;
+  if (auto && s && s.file_operation === "move" && !s.move_warning_acknowledged) {
+    // Never move files automatically before the user has accepted moving.
+    const name = trackDisplay(cur, S.meta.get(cur.id)).title;
+    toast(auto === "error" ? `Can't play “${name}”. Press ↓ to skip it.` : "Track ended. Press ↓ to skip it.", { level: "warning", ms: 6000 });
+    return;
+  }
+  if (!auto && !(await ensureMoveAcknowledged())) return;
+  const preset = activePreset();
+  const label = kind === "skip" ? "Skipped" : preset.labels[slot];
+  S.busy = true;
+  S.pendingDecisionAt = performance.now();
+  try {
+    const snap = kind === "skip"
+      ? await api("skip", { track_id: cur.id, mode: S.mode })
+      : await api("sort", { track_id: cur.id, mode: S.mode, slot });
+    if (!auto) clickSound();
+    if (kind === "sort") { S.counts[slot] = (S.counts[slot] || 0) + 1; pressTile(slot); }
+    else pressTile("skip");
+    applySession(snap);
+    const verb = S.settings.file_operation === "copy" ? "Copied to" : "Moved to";
+    const name = trackDisplay(cur, S.meta.get(cur.id)).title;
+    if (auto === "error") toast(`Can't play “${name}” — skipped`, { level: "warning", undo: true });
+    else if (auto === "ended") toast(`Track ended — skipped “${name}”`, { undo: true });
+    else toast(kind === "skip" ? `Skipped “${name}”` : `${verb} ${label}`, { undo: true });
+    refreshCountsSoon();
+  } catch (e) {
+    S.pendingDecisionAt = 0;
+    toast(e.message, { level: "error" });
+    await refreshState().catch(() => {});
+  } finally {
+    S.busy = false;
+  }
+}
+
+async function undo() {
+  if (S.busy || !S.session) return;
+  if (!S.session.history || !S.session.history.length) { toast("Nothing to undo"); return; }
+  S.busy = true;
+  try {
+    const snap = await api("undo");
+    applySession(snap);
+    toast("Undone");
+    refreshCountsSoon(400);
+  } catch (e) {
+    toast(e.message, { level: "error" });
+  } finally {
+    S.busy = false;
+  }
+}
+
+async function undoAll() {
+  if (S.busy || !S.session) return;
+  const n = S.session.history ? S.session.sorted : 0;
+  if (!n) { toast("Nothing to undo"); return; }
+  const ok = await modal({
+    title: "Undo the whole session?",
+    body: `All ${n} sorted tracks go back to where they were.`,
+    buttons: [{ label: "Cancel", value: false }, { label: "Undo all", value: true, danger: true }],
+  });
+  if (!ok) return;
+  S.busy = true;
+  try {
+    applySession(await api("undo_all"));
+    toast(`Undid ${n} actions`);
+    refreshCountsSoon(600);
+  } catch (e) {
+    toast(e.message, { level: "error" });
+  } finally {
+    S.busy = false;
+  }
+}
+
+async function setMode(mode) {
+  if (mode === S.mode) return;
+  S.mode = mode;
+  S.counts = [];
+  Wave.markersDirty();
+  renderAll();
+  refreshCountsSoon(0);
+}
+
+async function setOrder(order) {
+  if (!S.session) return;
+  try {
+    const snap = await api("set_order", { order });
+    S.settings.track_order = order;
+    applySession(snap);
+    toast(order === "random" ? "Random order" : "In order");
+  } catch (e) { toast(e.message, { level: "error" }); }
+}
+
+// ------------------------------------------------------------------ folder loading
+
+async function chooseFolder() {
+  let path = null;
+  try {
+    path = await api("choose_folder");
+  } catch (e) {
+    if (e.status !== 404) { toast(e.message, { level: "error" }); return; }
+    // Browser dev mode: no native dialog.
+    path = window.prompt("Music folder path (use a TEST folder):", (S.settings && S.settings.default_folder_path) || "");
+  }
+  if (path) loadFolder(path);
+}
+
+async function loadFolder(path) {
+  $("empty-message").hidden = true;
+  try {
+    Player.clear();
+    S.meta.clear();
+    S.counts = [];
+    S.scan = await api("load_folder", { path });
+    S.session = null;
+    renderAll();
+  } catch (e) {
+    const msg = $("empty-message");
+    msg.textContent = e.message;
+    msg.hidden = false;
+    setScreen("empty");
+  }
+}
+
+// ------------------------------------------------------------------ toasts & modal
+
+function toast(message, { level = "info", undo: withUndo = false, ms } = {}) {
+  const box = $("toasts");
+  const t = el("div", `toast ${level}`);
+  t.appendChild(el("span", "msg", message));
+  if (withUndo) {
+    const b = el("button", null, "Undo");
+    b.type = "button";
+    b.addEventListener("click", () => { t.remove(); undo(); });
+    t.appendChild(b);
+  }
+  box.appendChild(t);
+  while (box.children.length > 3) box.firstElementChild.remove();
+  const life = ms || (level === "error" ? 6000 : 3000);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, life);
+}
+
+let modalResolve = null;
+function modal({ title, body: text, buttons }) {
+  if (modalResolve) modalResolve(null);
+  $("modal-title").textContent = title;
+  $("modal-body").textContent = text;
+  const row = $("modal-buttons");
+  row.textContent = "";
+  return new Promise((resolve) => {
+    modalResolve = resolve;
+    const close = (v) => { $("modal").hidden = true; modalResolve = null; resolve(v); };
+    buttons.forEach((b) => {
+      const btn = el("button", b.danger ? "danger-btn" : b.primary ? "primary-btn" : "ghost-btn", b.label);
+      btn.type = "button";
+      btn.addEventListener("click", () => close(b.value));
+      row.appendChild(btn);
+    });
+    $("modal").hidden = false;
+    const def = row.querySelector(".primary-btn, .danger-btn");
+    if (def) def.focus();
+    modal.cancel = () => close(buttons[0].value);
+    modal.confirm = () => { const d = buttons.find((b) => b.primary || b.danger) || buttons[buttons.length - 1]; close(d.value); };
+  });
+}
+const modalOpen = () => !$("modal").hidden;
+
+// ------------------------------------------------------------------ keyboard
+
+function toggleFullscreen() {
+  api("toggle_fullscreen").catch(() => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+  });
+}
+
+function onKey(e) {
+  if (modalOpen()) {
+    if (e.key === "Escape") { e.preventDefault(); modal.cancel(); }
+    else if (e.key === "Enter") { e.preventDefault(); modal.confirm(); }
+    return;
+  }
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" && e.target.type !== "range" || tag === "TEXTAREA") return;
+  if (tag === "SELECT") return;
+
+  const meta = e.metaKey, ctrl = e.ctrlKey, shift = e.shiftKey;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code);
+
+  // Undo
+  if (key === "z" && (meta && shift || ctrl && !meta)) { e.preventDefault(); if (!e.repeat) undoAll(); return; }
+  if (key === "z" && !ctrl) { e.preventDefault(); if (!e.repeat) undo(); return; }
+  if (meta && key === "f") { e.preventDefault(); toggleFullscreen(); return; }
+  if (meta || ctrl || e.altKey) return; // leave other system shortcuts alone
+
+  if (key === "Escape") { if (document.fullscreenElement) document.exitFullscreen(); else api("exit_fullscreen").catch(() => {}); return; }
+  if (key === "Tab") { e.preventDefault(); body.classList.toggle("focus"); return; }
+  if (key === "h" || key === "?") { e.preventDefault(); toast("Shortcut guide arrives in the next milestone"); return; }
+  if (key === "q") { e.preventDefault(); toast("Queue drawer arrives in the next milestone"); return; }
+
+  const hasTrack = !!(S.session && S.session.current);
+  if (!hasTrack) return;
+
+  if (key === "s" || key === "t") { setMode("swipe"); return; }
+  if (key === "g") { setMode("grid"); return; }
+  if (key === "u") { setOrder("random"); return; }
+  if (key === "o") { setOrder("in_order"); return; }
+  if (key === " ") { e.preventDefault(); if (!e.repeat) Player.toggle(); return; }
+  if (key === "a") { Player.nudge(-SEEK_STEP); return; }
+  if (key === "d") { Player.nudge(SEEK_STEP); return; }
+  if (key === "r") { if (!e.repeat) Player.replay(); return; }
+
+  if (digit) {
+    e.preventDefault();
+    const n = Number(digit[2]);
+    if (S.mode === "grid") { if (!e.repeat) decide({ kind: "sort", slot: n - 1 }); }
+    else if (n === 9) Player.outro();
+    else Player.jump(JUMPS[n - 1]);
+    return;
+  }
+
+  const arrows = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+  if (arrows[key]) {
+    e.preventDefault();
+    if (e.repeat) return; // never sort on key repeat
+    const dir = arrows[key];
+    if (dir === "down") { decide({ kind: "skip" }); return; }
+    if (S.mode !== "swipe") return;
+    if (dir === "up") { decide({ kind: "sort", slot: S.settings.swipe_archive_hotkey === "up" ? 1 : 2 }); return; }
+    decide({ kind: "sort", slot: slotForDirection(dir) });
+  }
+}
+
+// ------------------------------------------------------------------ gestures
+
+function gestureTarget(dir) {
+  const sw = activePreset("swipe");
+  if (dir === "down") return { label: "Skip", color: "#8A8F98", action: { kind: "skip" } };
+  const slot = dir === "up" ? 2 : slotForDirection(dir);
+  return { label: sw.labels[slot], color: sw.colors[slot], action: { kind: "sort", slot } };
+}
+
+function setupDrag() {
+  const card = $("card");
+  const hint = $("drag-hint");
+  let start = null;
+
+  const dirOf = (dx, dy) => {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_THRESHOLD) return null;
+    return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
+  };
+
+  card.addEventListener("pointerdown", (e) => {
+    if (S.mode !== "swipe" || e.button !== 0) return;
+    start = { x: e.clientX, y: e.clientY };
+    card.setPointerCapture(e.pointerId);
+    card.classList.add("dragging");
+    card.classList.remove("springing");
+  });
+  card.addEventListener("pointermove", (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 40}deg)`;
+    const dir = dirOf(dx, dy);
+    if (dir) {
+      const t = gestureTarget(dir);
+      hint.textContent = t.label;
+      hint.style.background = t.color + "33";
+      hint.style.color = t.color;
+      hint.classList.add("show");
+    } else hint.classList.remove("show");
+  });
+  const end = (e) => {
+    if (!start) return;
+    const dir = dirOf(e.clientX - start.x, e.clientY - start.y);
+    start = null;
+    card.classList.remove("dragging");
+    card.classList.add("springing");
+    card.style.transform = "";
+    hint.classList.remove("show");
+    if (dir && e.type === "pointerup") decide(gestureTarget(dir).action);
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
+}
+
+function setupTrackpadFlick() {
+  let acc = 0, lastT = 0, lockedUntil = 0;
+  $("main").addEventListener("wheel", (e) => {
+    if (S.mode !== "swipe" || !S.session || !S.session.current || modalOpen()) return;
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now < lockedUntil) return;
+    if (now - lastT > 250) acc = 0;
+    lastT = now;
+    acc += e.deltaX;
+    if (Math.abs(acc) > 140) {
+      // macOS natural scrolling: fingers moving right produce negative deltaX.
+      const dir = acc < 0 ? "right" : "left";
+      acc = 0;
+      lockedUntil = now + 700;
+      decide(gestureTarget(dir).action);
+    }
+  }, { passive: false });
+}
+
+function setupWaveSeek() {
+  const wave = $("wave");
+  const hover = $("wave-hover");
+  const secAt = (e) => {
+    const r = wave.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * Player.duration;
+  };
+  wave.addEventListener("click", (e) => Player.duration && Player.seek(secAt(e)));
+  wave.addEventListener("mousemove", (e) => {
+    if (!Player.duration) return;
+    const r = wave.getBoundingClientRect();
+    hover.hidden = false;
+    hover.style.left = `${e.clientX - r.left}px`;
+    hover.textContent = fmtTime(secAt(e));
+  });
+  wave.addEventListener("mouseleave", () => { hover.hidden = true; });
+}
+
+function setupDrop() {
+  const overlay = $("drop-overlay");
+  let depth = 0;
+  window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; overlay.hidden = false; });
+  window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; overlay.hidden = true; } });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    depth = 0;
+    overlay.hidden = true;
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    const path = f && (f.pywebviewFullPath || f.path);
+    if (path) loadFolder(path);
+    else toast("Drag and drop works in the app window. Use “Choose music folder” here.", { level: "warning" });
+  });
+}
+
+// ------------------------------------------------------------------ polling
+
+async function pollNotices() {
+  if (!S.session) return;
+  try {
+    const list = await api("notices", { since: S.noticeSeq });
+    let needRefresh = false;
+    for (const n of list) {
+      S.noticeSeq = Math.max(S.noticeSeq, n.seq);
+      toast(n.message, { level: n.level === "error" ? "error" : n.level === "warning" ? "warning" : "info" });
+      if (n.level === "error") needRefresh = true;
+    }
+    if (needRefresh) { await refreshState(); refreshCountsSoon(0); }
+  } catch (_) { /* backend busy or gone */ }
+}
+
+async function poll() {
+  try {
+    if (S.scan && S.scan.status === "scanning") {
+      const st = await refreshState();
+      if (st.scan.status === "ready") refreshCountsSoon(0);
+      if (st.scan.status === "error") toast(`Scan failed: ${st.scan.error}`, { level: "error" });
+    } else {
+      await pollNotices();
+    }
+  } finally {
+    setTimeout(poll, S.scan && S.scan.status === "scanning" ? 200 : POLL_MS);
+  }
+}
+
+// ------------------------------------------------------------------ boot
+
+async function boot() {
+  Player.init();
+  setupDrag();
+  setupTrackpadFlick();
+  setupWaveSeek();
+  setupDrop();
+  window.addEventListener("keydown", onKey);
+  // Re-measure whenever the canvas changes size, including when the player screen first appears.
+  new ResizeObserver(() => Wave.resize()).observe(Wave.canvas);
+  for (const b of document.querySelectorAll(".mode-switch button")) b.addEventListener("click", () => setMode(b.dataset.mode));
+  $("btn-play").addEventListener("click", () => Player.toggle());
+  $("btn-choose").addEventListener("click", chooseFolder);
+  $("btn-done-load").addEventListener("click", chooseFolder);
+  $("btn-done-undo").addEventListener("click", undo);
+  $("btn-queue").addEventListener("click", () => toast("Queue drawer arrives in the next milestone"));
+  $("btn-settings").addEventListener("click", () => toast("Settings arrive in the next milestone"));
+  $("btn-help").addEventListener("click", () => toast("Shortcut guide arrives in the next milestone"));
+  $("preset-select").addEventListener("change", async (e) => {
+    try {
+      await api("preset_select", { preset_id: e.target.value });
+      await refreshState();
+      refreshCountsSoon(0);
+    } catch (err) { toast(err.message, { level: "error" }); }
+    e.target.blur();
+  });
+  let volTimer = 0;
+  $("volume").addEventListener("input", (e) => {
+    const v = Number(e.target.value);
+    Player.setVolume(v);
+    clearTimeout(volTimer);
+    volTimer = setTimeout(() => api("set_settings", { volume: v }).then((s) => (S.settings = s)).catch(() => {}), 400);
+  });
+
+  const st = await refreshState();
+  S.mode = st.settings.default_mode_on_startup === "grid" ? "grid" : "swipe";
+  if (st.settings.startup_preset_id) {
+    const p = st.presets.presets.find((q) => q.id === st.settings.startup_preset_id);
+    if (p) { S.mode = p.mode; await api("preset_select", { preset_id: p.id }).catch(() => {}); await refreshState(); }
+  }
+  $("volume").value = String(st.settings.volume);
+  Player.setVolume(st.settings.volume);
+  renderAll();
+  requestAnimationFrame(frame);
+
+  if (!st.session && st.scan.status === "idle" && st.settings.auto_load_default_folder && st.settings.default_folder_path) {
+    await loadFolder(st.settings.default_folder_path);
+    if (!S.scan || S.scan.status !== "scanning") {
+      const msg = $("empty-message");
+      msg.textContent = `Default folder not found: ${st.settings.default_folder_path}`;
+      msg.hidden = false;
+    }
+  } else if (st.session) {
+    refreshCountsSoon(0);
+  }
+  poll();
+}
+
+boot().catch((e) => {
+  document.body.innerHTML = `<pre style="padding:24px;color:#ff2d55">Failed to start: ${String(e.message || e)}</pre>`;
+});

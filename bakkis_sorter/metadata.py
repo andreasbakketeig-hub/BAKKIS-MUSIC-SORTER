@@ -7,6 +7,8 @@ Results are cached in memory keyed by (path, size, mtime) so a moved or replaced
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
 import threading
 from collections import OrderedDict
@@ -42,6 +44,7 @@ class TrackMeta:
     bpm: Optional[str]
     key: Optional[str]
     has_cover: bool
+    size: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,7 +150,15 @@ def read_meta(path: Path) -> TrackMeta:
         bpm=bpm,
         key=key,
         has_cover=_cover_from_audio(audio) is not None if audio is not None else False,
+        size=_size(path),
     )
+
+
+def _size(path: Path) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
 
 
 # --------------------------------------------------------------------------- cover art
@@ -306,3 +317,53 @@ class MetadataCache:
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False)
+
+
+# --------------------------------------------------------------------------- waveform peaks (computed by the UI)
+
+MAX_PEAKS_LEN = 8192
+
+
+class PeakStore:
+    """Disk cache of waveform peaks (base64 of 0–255 bytes) keyed by path + size + mtime."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = Path(directory)
+
+    def _file(self, path: Path) -> Optional[Path]:
+        key = _cache_key(path)
+        if key is None:
+            return None
+        digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
+        return self.directory / digest[:2] / f"{digest}.json"
+
+    def get(self, path: Path) -> Optional[str]:
+        f = self._file(path)
+        if f is None:
+            return None
+        try:
+            with open(f, encoding="utf-8") as fh:
+                data = json.load(fh)
+            peaks = data.get("peaks") if isinstance(data, dict) else None
+            return peaks if isinstance(peaks, str) else None
+        except (OSError, ValueError):
+            return None
+
+    def put(self, path: Path, peaks: str) -> bool:
+        if not isinstance(peaks, str) or len(peaks) > MAX_PEAKS_LEN:
+            return False
+        try:
+            base64.b64decode(peaks, validate=True)
+        except ValueError:
+            return False
+        f = self._file(path)
+        if f is None:
+            return False
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"file": str(path), "peaks": peaks}), encoding="utf-8")
+            os.replace(tmp, f)
+        except OSError:
+            return False
+        return True

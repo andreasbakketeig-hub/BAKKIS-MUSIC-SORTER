@@ -132,3 +132,19 @@ def test_prefetch_fills_cache(tmp_path, monkeypatch):
         assert calls == []
     finally:
         cache.shutdown()
+
+
+def test_peak_store(tmp_path):
+    import base64
+
+    p = make_wav(tmp_path / "a.wav")
+    store = metadata.PeakStore(tmp_path / "peaks")
+    assert store.get(p) is None
+    peaks = base64.b64encode(bytes(range(256))).decode()
+    assert store.put(p, peaks)
+    assert store.get(p) == peaks
+    assert not store.put(p, "not base64!!")
+    assert not store.put(p, "A" * (metadata.MAX_PEAKS_LEN + 4))
+    make_wav(p, seconds=2)  # file changed -> new key
+    assert store.get(p) is None
+    assert store.get(tmp_path / "missing.wav") is None
