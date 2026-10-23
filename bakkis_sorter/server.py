@@ -14,13 +14,16 @@ prints a URL to open in a browser.
 
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import mimetypes
 import os
 import re
 import secrets
+import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +33,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .metadata import image_mime
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
-CHUNK = 256 * 1024
+CHUNK = 64 * 1024  # small writes: macOS loopback runs out of buffers (ENOBUFS) with big ones
+WRITE_RETRIES = 50
 MAX_BODY = 1024 * 1024
 
 AUDIO_MIME = {
@@ -250,16 +254,35 @@ class _Handler(BaseHTTPRequestHandler):
                     buf = f.read(min(CHUNK, remaining))
                     if not buf:
                         break
-                    self.wfile.write(buf)
+                    self._write_retrying(buf)
                     remaining -= len(buf)
-            except (BrokenPipeError, ConnectionResetError):
-                # WebKit aborts range requests all the time when seeking or preloading.
+            except OSError:
+                # WebKit aborts range requests all the time when seeking or preloading
+                # (EPIPE / ECONNRESET), or the socket stays out of buffers. Drop the connection quietly.
                 self.close_connection = True
+
+    def _write_retrying(self, buf: bytes) -> None:
+        """Write, waiting briefly while macOS reports ENOBUFS ("No buffer space available")."""
+        for attempt in range(WRITE_RETRIES):
+            try:
+                self.wfile.write(buf)
+                return
+            except OSError as e:
+                if e.errno != errno.ENOBUFS or attempt == WRITE_RETRIES - 1:
+                    raise
+                time.sleep(0.01)
 
 
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request, client_address) -> None:  # noqa: ANN001
+        """Client disconnects are normal for a media server; only print real errors."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, OSError) and exc.errno in (errno.EPIPE, errno.ECONNRESET, errno.ENOBUFS, errno.ETIMEDOUT, errno.ENOTCONN):
+            return
+        super().handle_error(request, client_address)
 
     def __init__(self, backend: Backend, *, port: int = 0, token: Optional[str] = None, web_dir: Path = WEB_DIR) -> None:
         super().__init__(("127.0.0.1", port), _Handler)

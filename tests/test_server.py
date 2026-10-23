@@ -277,3 +277,28 @@ def test_rejected_post_does_not_poison_keep_alive_connection(app):
     r = conn.getresponse()
     assert r.status == 200 and b"BAKKIS" in r.read()
     conn.close()
+
+
+def test_audio_write_retries_on_enobufs(monkeypatch):
+    import errno
+
+    from bakkis_sorter import server as srv
+
+    class FakeWfile:
+        def __init__(self, fails):
+            self.fails, self.data = fails, b""
+
+        def write(self, b):
+            if self.fails:
+                self.fails -= 1
+                raise OSError(errno.ENOBUFS, "No buffer space available")
+            self.data += b
+
+    monkeypatch.setattr(srv.time, "sleep", lambda s: None)
+    h = srv._Handler.__new__(srv._Handler)
+    h.wfile = FakeWfile(3)
+    h._write_retrying(b"abc")
+    assert h.wfile.data == b"abc"
+    h.wfile = FakeWfile(srv.WRITE_RETRIES)
+    with pytest.raises(OSError):
+        h._write_retrying(b"x")
