@@ -484,6 +484,7 @@ body.drawer-open.drawer-wide-open .toasts { left: calc((100vw - 480px) / 2); }
 /* settings */
 .set-section { margin-top: 24px; }
 .set-row { padding: 8px 0; }
+.set-sub-option { padding-top: 0; }  /* belongs to the setting above it */
 .set-sub { font-size: var(--fs-s); font-weight: 600; color: var(--soft); margin: 16px 0 0; }
 .set-advanced { margin-top: 24px; border-top: 1px solid var(--line); }
 .set-advanced > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; margin-top: 16px; }

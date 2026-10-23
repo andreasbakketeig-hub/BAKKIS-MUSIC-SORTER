@@ -84,7 +84,7 @@ Your Folder/
 ```
 
 - **No track is ever deleted or overwritten.** If a file with the same name already exists, the new one is saved as `name (2).mp3`.
-- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Advanced → Files). Undo recreates them.
+- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Sorting). Undo recreates them.
 - Undo puts the file back where it came from, and never overwrites anything there.
 - **Date folders:** a preset can put each day's sorting in its own folder (`Promos/2026-10-23/Keep/`). Promos and Demos do this out of the box; switch it per preset in *Edit presets*.
 

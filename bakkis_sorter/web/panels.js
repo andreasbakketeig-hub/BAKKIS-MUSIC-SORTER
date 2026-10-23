@@ -364,6 +364,7 @@ const SETTINGS_SCHEMA = [
       ? "Copies go to BAKKIS_SORTED_COPIES; your originals stay where they are."
       : "Tracks move into BAKKIS_SORTED. Rekordbox and Serato lose track of moved files; choose Copy if that matters.",
   },
+  { key: "cleanup_empty_source_folders_after_sort", type: "bool", label: "Remove folders that become empty", note: "Undo recreates them.", show: () => !isCopy(), cls: "set-sub-option" },
   {
     key: "swipe_keep_direction", type: "select", label: "Swipe direction",
     options: [["right", "Keep → right, Archive ← left"], ["left", "Keep ← left, Archive → right"]],
@@ -375,7 +376,6 @@ const SETTINGS_SCHEMA = [
   { type: "presets" },
   { advanced: true },
   { sub: "Files" },
-  { key: "cleanup_empty_source_folders_after_sort", type: "bool", label: "Remove folders that become empty", note: "Undo recreates them.", show: () => !isCopy() },
   { key: "hide_copied_on_rescan", type: "bool", label: "Hide tracks I already copied", note: "When the folder is loaded again.", show: isCopy },
   { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "A folder per day: <preset>/YYYY-MM-DD/. Each preset has its own switch." },
   { sub: "Controls" },
@@ -476,7 +476,7 @@ const SettingsDrawer = {
 
   renderItem(item) {
     const s = S.settings;
-    const row = el("div", "set-row");
+    const row = el("div", item.cls ? `set-row ${item.cls}` : "set-row");
     const id = `set-${item.key}`;
     if (item.type === "bool") {
       const lab = el("label", "set-check");
