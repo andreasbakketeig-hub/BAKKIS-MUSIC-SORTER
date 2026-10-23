@@ -17,6 +17,7 @@
   </div>
   <div class="top-progress" aria-hidden="true"><div id="top-progress-fill"></div></div>
   <div class="count" id="count"></div>
+  <button type="button" class="op-badge" id="op-badge" hidden title="Files are copied; originals stay where they are. Change in Settings.">COPY</button>
   <div class="top-icons">
     <button type="button" class="icon-btn" id="btn-queue" title="Queue (Q)" aria-label="Queue">
       <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -88,6 +89,10 @@
       </div>
     </div>
 
+    <div class="coach" id="coach" hidden>
+      <span id="coach-text"></span>
+      <button type="button" class="link-btn" id="coach-close">Got it</button>
+    </div>
     <div class="tiles tiles-swipe" id="tiles-swipe"></div>
     <div class="tiles tiles-grid" id="tiles-grid"></div>
   </section>

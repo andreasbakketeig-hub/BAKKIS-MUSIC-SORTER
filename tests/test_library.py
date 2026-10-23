@@ -3,7 +3,6 @@ import threading
 from datetime import date
 
 from bakkis_sorter import library
-from bakkis_sorter.config import PresetStore
 
 from .conftest import touch
 
@@ -26,17 +25,18 @@ def test_scan_formats_and_junk(music):
     assert found == ["a.mp3", "b.WAV", "c.aiff", "d.aif", "e.flac", "f.m4a", "g.aac", "h.alac", "i.ogg"]
 
 
-def test_scan_skips_sorted_hidden_legacy_and_preset_dirs(music):
+def test_scan_skip_rules(music):
     touch(music / "top.mp3")
     touch(music / "Promos" / "Label" / "deep.mp3")
     touch(music / "BAKKIS_SORTED" / "DJ Sorting" / "Keep" / "sorted.mp3")
+    touch(music / "Old Crate" / "BAKKIS_SORTED" / "Keep" / "nested-sorted.mp3")
     touch(music / ".Trash" / "t.mp3")
-    touch(music / "ARCHIVE" / "old.mp3")
-    touch(music / "2025-01-01 - Techno" / "dated.mp3")
-    touch(music / "Techno" / "genre.mp3")
-    skip = library.build_skip_dir_names(PresetStore().skip_folder_names())
-    found = names(library.scan(music, skip_dir_names=skip), music)
-    assert found == ["Promos/Label/deep.mp3", "top.mp3"]
+    touch(music / "ARCHIVE" / "old.mp3")  # v1 flat output at the root
+    touch(music / "2025-01-01 - KEEP" / "dated.mp3")
+    touch(music / "Techno" / "genre.mp3")  # shares a preset/genre name: still a source folder
+    touch(music / "Promos" / "Keep" / "nested-keep.mp3")  # legacy name below the root: scanned
+    found = names(library.scan(music), music)
+    assert found == ["Promos/Keep/nested-keep.mp3", "Promos/Label/deep.mp3", "Techno/genre.mp3", "top.mp3"]
 
 
 def test_scan_non_recursive(music):

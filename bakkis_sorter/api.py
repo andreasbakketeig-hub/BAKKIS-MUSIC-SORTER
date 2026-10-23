@@ -135,12 +135,10 @@ class AppBackend:
             if self._scan_job is not None:
                 self._scan_job.cancel()
             s = self.settings
-            skip = library.build_skip_dir_names(self.presets.skip_folder_names())
             self.scan = {"status": "scanning", "root": str(root), "count": 0, "error": None}
             job = library.ScanJob(
                 root,
                 recursive=bool(s["include_subfolders"]),
-                skip_dir_names=skip,
                 on_progress=lambda n: self._scan_progress(job, n),
                 on_done=lambda paths: self._scan_done(job, root, paths),
                 on_error=lambda e: self._scan_error(job, e),

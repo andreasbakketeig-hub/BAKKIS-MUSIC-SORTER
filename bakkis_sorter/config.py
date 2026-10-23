@@ -204,7 +204,7 @@ def default_settings() -> dict:
         "swipe_archive_hotkey": "down",
         "create_dated_sorting_sessions": True,
         "cleanup_empty_source_folders_after_sort": False,
-        "show_help_guide_on_startup": True,
+        "show_help_guide_on_startup": False,
         "show_queue_panel_on_startup": False,
         "volume": 80,
         # New in v2
@@ -213,6 +213,8 @@ def default_settings() -> dict:
         "swipe_keep_direction": "right",
         "end_of_track": "skip",
         "move_warning_acknowledged": False,
+        "guide_seen": False,  # the guide opens once on first launch
+        "coach_done": False,  # first-session hint above the tiles
     }
 
 
@@ -234,6 +236,8 @@ def normalize_settings(raw: object) -> dict:
         "show_queue_panel_on_startup",
         "hide_copied_on_rescan",
         "move_warning_acknowledged",
+        "guide_seen",
+        "coach_done",
     ):
         if k in src:
             out[k] = coerce_bool(src[k])
@@ -437,17 +441,6 @@ class PresetStore:
         p = self.get(self.data[f"active_{norm_mode(mode)}_preset_id"])
         assert p is not None  # guaranteed by normalize_preset_store
         return p
-
-    def skip_folder_names(self) -> frozenset[str]:
-        """Lowercase folder/label names of every preset (scan skips dirs with these names)."""
-        out: set[str] = set()
-        for p in self.presets:
-            for name in list(p["folders"]) + list(p["labels"]):
-                s = str(name).strip()
-                if s:
-                    out.add(s.lower())
-                    out.add(safe_segment(s).lower())
-        return frozenset(out)
 
     # -- mutations (each saves)
 

@@ -55,7 +55,7 @@ def test_garbage_file_does_not_raise(tmp_path):
     p = tmp_path / "broken.mp3"
     p.write_bytes(b"not audio at all")
     m = metadata.read_meta(p)
-    assert m.display == "broken.mp3" and m.duration == 0.0
+    assert m.display == "broken" and m.duration == 0.0
     assert metadata.read_cover(p) is None
 
 
@@ -187,3 +187,9 @@ def test_site_stamp_artist_falls_back_to_title_split(tmp_path):
 def test_filename_fallback_is_cleaned(tmp_path):
     p = make_wav(tmp_path / "Mihai Popoviciu - Flux my-free-mp3s.com .wav")
     assert metadata.read_meta(p).display == "Flux — Mihai Popoviciu"
+
+
+def test_dash_variants_and_stem_fallback(tmp_path):
+    assert metadata.read_meta(make_wav(tmp_path / "Ælg Øyvind – Søt Ünicode.wav")).display == "Søt Ünicode — Ælg Øyvind"
+    assert metadata.read_meta(make_wav(tmp_path / "Artist — Title.wav")).display == "Title — Artist"
+    assert metadata.read_meta(make_wav(tmp_path / "No Separator Here.WAV")).display == "No Separator Here"

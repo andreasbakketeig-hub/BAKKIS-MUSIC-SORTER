@@ -132,12 +132,16 @@ def clean_text(value: Optional[str]) -> Optional[str]:
     return s or None
 
 
+_ARTIST_TITLE_SEPS = (" - ", " – ", " — ")
+
+
 def split_artist_title(text: str) -> tuple[Optional[str], Optional[str]]:
-    """``Artist - Title`` → (title, artist)."""
-    left, sep, right = text.partition(" - ")
-    if not sep or not left.strip() or not right.strip():
-        return None, None
-    return right.strip(), left.strip()
+    """``Artist - Title`` (also with – or —) → (title, artist)."""
+    for sep in _ARTIST_TITLE_SEPS:
+        left, found, right = text.partition(sep)
+        if found and left.strip() and right.strip():
+            return right.strip(), left.strip()
+    return None, None
 
 
 def display_line(path: Path, title: Optional[str], artist: Optional[str]) -> str:
@@ -148,7 +152,7 @@ def display_line(path: Path, title: Optional[str], artist: Optional[str]) -> str
     ft, fa = parse_filename(path)
     if ft and fa:
         return f"{ft} — {fa}"
-    return Path(path).name
+    return clean_text(Path(path).stem) or Path(path).stem
 
 
 def format_bpm(raw: Optional[str]) -> Optional[str]:

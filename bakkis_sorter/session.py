@@ -220,6 +220,8 @@ class Session:
         self.total = len(self.queue)
         self.history: list[Action] = []
         self.counts: dict[str, int] = {}
+        # Label/preset/color per count key, so the summary survives a preset being edited or deleted.
+        self.count_info: dict[str, dict] = {}
         self.notices: deque = deque(maxlen=MAX_NOTICES)
         self._notice_seq = itertools.count(1)
         self.started_at = time.time()
@@ -314,6 +316,15 @@ class Session:
         self.queue.pop(0)
         self.history.append(a)
         self.counts[a.count_key] = self.counts.get(a.count_key, 0) + 1
+        self.count_info.setdefault(
+            a.count_key,
+            {
+                "label": a.label,
+                "preset": a.preset_name,
+                "color": None if slot == SKIP_SLOT else preset["colors"][slot],
+                "slot": slot,
+            },
+        )
         self._worker.submit(lambda: self._run_action(a))
         return a
 
@@ -523,6 +534,7 @@ class Session:
                 "upcoming": [self._track_public(t) for t in self.queue[1 : 1 + upcoming]],
                 "history": [a.public() for a in self.history[-HISTORY_PREVIEW:]][::-1],
                 "counts": dict(self.counts),
+                "count_info": dict(self.count_info),
                 "sorted": sum(self.counts.values()),
                 "pending": sum(1 for a in self.history if a.status == "pending"),
                 "elapsed": time.time() - self.started_at,

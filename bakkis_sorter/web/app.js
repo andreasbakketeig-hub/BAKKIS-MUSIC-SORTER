@@ -15,6 +15,8 @@ const WAVE_PEAKS = 800;
 const WAVE_MAX_BYTES = 200 * 1024 * 1024;
 const WAVE_MAX_SEC = 20 * 60;
 const POLL_MS = 1000;
+const MAX_AUTO_SKIPS = 3; // tracks that may end and auto-skip in a row without any user input
+const WAVE_DECODE_RATE = 4000; // Hz; plenty for 800 peaks, ~10x less memory than full-rate decoding
 
 const $ = (id) => document.getElementById(id);
 const body = document.body;
@@ -32,6 +34,9 @@ const S = {
   noticeSeq: 0,
   busy: false, // a sort/skip/undo request is in flight
   pendingDecisionAt: 0, // performance.now() of the last decision (latency measurement)
+  autoSkips: 0, // consecutive automatic skips since the last user action
+  coachSorts: 0, // user decisions while the first-session hint is showing
+  restoredIds: new Set(), // tracks brought back by undo: never auto-skip these again
   latencies: [],
 };
 window.__bakkis = S; // handy for debugging in Web Inspector
@@ -147,6 +152,7 @@ const Player = {
     for (const a of [this.cur, this.next]) {
       a.preload = "auto";
       a.addEventListener("ended", () => a === this.cur && onTrackEnded());
+      a.addEventListener("timeupdate", () => a === this.cur && EndWatch.tick());
       a.addEventListener("error", () => a === this.cur && a.src && onPlaybackError());
       a.addEventListener("playing", () => a === this.cur && onPlaying());
       a.addEventListener("pause", () => a === this.cur && body.classList.remove("playing"));
@@ -178,6 +184,7 @@ const Player = {
     }
     this.curId = id;
     this.nextId = null;
+    EndWatch.reset(id);
     old.pause();
     if (old !== this.cur) {
       old.removeAttribute("src");
@@ -241,6 +248,7 @@ const Player = {
     const d = this.duration;
     const t = Math.max(0, d ? Math.min(sec, d - 0.05) : sec);
     this.cur.currentTime = t;
+    if (d && t < d - 1) EndWatch.reset(this.curId); // seeking back re-arms end-of-track handling
     if (setActive) this.activeStart = t;
     if (this.cur.paused && !this.userPaused) this.play();
     Wave.markersDirty();
@@ -273,9 +281,36 @@ function onPlaying() {
   Wave.loadPeaks(Player.curId);
 }
 
+/** WebKit sometimes stops at the very end of an MP3 without firing "ended" (seen with real files).
+ * Treat "playing, at the end, and not moving for a moment" as ended. Fires at most once per track. */
+const EndWatch = {
+  STALL_MS: 800,
+  id: null,
+  fired: false,
+  since: 0,
+  lastT: -1,
+
+  reset(id) { this.id = id; this.fired = false; this.since = 0; this.lastT = -1; },
+
+  tick() {
+    const a = Player.cur, d = Player.duration;
+    if (this.fired || this.id !== Player.curId || a.paused || !d) return;
+    const t = a.currentTime;
+    if (t >= d - 0.3 && Math.abs(t - this.lastT) < 0.01) {
+      if (!this.since) this.since = performance.now();
+      else if (performance.now() - this.since > this.STALL_MS) onTrackEnded();
+    } else {
+      this.since = 0;
+    }
+    this.lastT = t;
+  },
+};
+
 function onTrackEnded() {
+  if (EndWatch.fired && EndWatch.id === Player.curId) return;
+  EndWatch.fired = true;
   body.classList.remove("playing");
-  if (!S.settings || S.settings.end_of_track === "stop") return;
+  if (!S.settings || S.settings.end_of_track === "stop") { Player.cur.pause(); return; }
   decide({ kind: "skip", auto: "ended" });
 }
 
@@ -435,7 +470,8 @@ const Wave = {
       if (Player.curId !== id) return;
       const buf = await (await fetch(audioUrl(id))).arrayBuffer();
       if (Player.curId !== id) return;
-      const audio = await ctx().decodeAudioData(buf);
+      // Decoding through a low-rate offline context resamples on the fly and keeps memory small.
+      const audio = await new OfflineAudioContext(1, 1, WAVE_DECODE_RATE).decodeAudioData(buf);
       if (Player.curId !== id) return;
       const peaks = computePeaks(audio, WAVE_PEAKS);
       this.setPeaks(id, peaks);
@@ -481,6 +517,7 @@ function frame() {
   if (body.classList.contains("is-player")) {
     Wave.draw();
     Wave.drawMarkers();
+    EndWatch.tick();
     const t = Player.cur.currentTime || 0;
     const txt = `${fmtTime(t)} / ${fmtTime(Player.duration)}`;
     const timeEl = $("time");
@@ -507,13 +544,51 @@ function renderAll() {
   } else if (!sess) {
     setScreen("empty");
     renderEmpty();
+  } else if (!sess.total) {
+    setScreen("empty");
+    renderEmpty();
+    const msg = $("empty-message");
+    msg.textContent = `No audio files found in ${sess.root.split("/").filter(Boolean).pop()}. Supported: mp3, wav, aiff, flac, m4a, aac, alac, ogg.`;
+    msg.hidden = false;
   } else if (!sess.current) {
     setScreen("done");
     renderDone();
     Player.clear();
   } else {
     setScreen("player");
+    renderCoach();
   }
+}
+
+const COACH_SORTS = 3;
+
+/** Contextual first-session hint; gone after a few decisions or "Got it". */
+function renderCoach() {
+  const box = $("coach");
+  const show = S.settings && !S.settings.coach_done;
+  box.hidden = !show;
+  if (!show) return;
+  const t = $("coach-text");
+  if (S.mode === "grid") {
+    t.innerHTML = "Listen, then press <kbd>1</kbd>–<kbd>9</kbd> to file the track under that genre. <kbd>↓</kbd> skips, <kbd>Z</kbd> undoes. Nothing is deleted.";
+    return;
+  }
+  const L = swipeLayout();
+  const sw = activePreset("swipe");
+  const k = (slot) => `<kbd>${L.find((x) => x.slot === slot).glyph}</kbd> ${escapeHtml(sw.labels[slot])}`;
+  const fav = S.settings.swipe_archive_hotkey === "up" ? "" : ` · <kbd>↑</kbd> ${escapeHtml(sw.labels[2])}`;
+  t.innerHTML = `Listen, then decide: ${k(0)} · ${k(1)}${fav} · <kbd>↓</kbd> Skip. <kbd>1</kbd>–<kbd>9</kbd> jump through the track, <kbd>Z</kbd> undoes. Nothing is deleted.`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function finishCoach() {
+  if (!S.settings || S.settings.coach_done) return;
+  S.settings.coach_done = true;
+  $("coach").hidden = true;
+  api("set_settings", { coach_done: true }).then((x) => (S.settings = x)).catch(() => {});
 }
 
 function renderTopbar() {
@@ -539,6 +614,7 @@ function renderTopbar() {
     edit.value = "__edit__";
     sel.appendChild(edit);
   }
+  $("op-badge").hidden = !(S.settings && S.settings.file_operation === "copy");
   const sess = S.session;
   if (sess && sess.total) {
     const done = sess.total - sess.remaining;
@@ -587,7 +663,7 @@ function renderTiles() {
       tile.appendChild(el("div", "glyph", t.glyph));
       tile.appendChild(el("div", "label", skip ? "Skip" : sw.labels[t.slot]));
       tile.appendChild(el("div", "key", t.key));
-      const n = skip ? null : S.mode === "swipe" ? S.counts[t.slot] : null;
+      const n = S.mode !== "swipe" ? null : skip ? (S.session && S.session.counts.skip) || 0 : S.counts[t.slot];
       if (n != null) tile.appendChild(el("div", "badge", String(n)));
       tile.addEventListener("click", () => decide(skip ? { kind: "skip" } : { kind: "sort", slot: t.slot }));
       swBox.appendChild(tile);
@@ -652,7 +728,8 @@ function fillCard(track, meta) {
   t.classList.remove("marquee");
   $("artist").textContent = artist;
   const cover = $("cover");
-  $("cover-fallback").textContent = (artist || title || "?").trim().charAt(0).toUpperCase();
+  const letter = ((artist || title || "").match(/\p{L}/u) || ["♪"])[0];
+  $("cover-fallback").textContent = letter.toUpperCase();
   const img = $("cover-img");
   if (meta && meta.has_cover) {
     if (img.dataset.id !== track.id) {
@@ -713,12 +790,14 @@ function renderDone() {
     if (!v) continue;
     if (k === "skip") { rows.push({ label: "Skipped", sub: "", n: v, color: "#8A8F98", order: 99 }); continue; }
     const [pid, slot] = k.split(":");
+    // What the track was sorted as (kept even if the preset was edited or deleted since).
+    const info = (sess.count_info || {})[k] || {};
     const p = S.presets.presets.find((q) => q.id === pid);
     rows.push({
-      label: p ? p.labels[Number(slot)] : k,
-      sub: p ? p.name : "",
+      label: info.label || (p ? p.labels[Number(slot)] : k),
+      sub: info.preset || (p ? p.name : ""),
       n: v,
-      color: p ? p.colors[Number(slot)] : "#8A8F98",
+      color: info.color || (p ? p.colors[Number(slot)] : "#8A8F98"),
       order: Number(slot),
     });
   }
@@ -818,7 +897,19 @@ async function decide({ kind, slot, auto }) {
     toast(auto === "error" ? `Can't play “${name}”. Press ↓ to skip it.` : "Track ended. Press ↓ to skip it.", { level: "warning", ms: 6000 });
     return;
   }
+  if (auto && S.restoredIds.has(cur.id)) {
+    // The user undid this one on purpose; don't move it away again on its own.
+    const name = trackDisplay(cur, S.meta.get(cur.id)).title;
+    toast(auto === "error" ? `Can't play “${name}”. Press ↓ to skip it.` : "Track ended.", { level: "warning", ms: 6000 });
+    return;
+  }
+  if (auto === "ended" && S.autoSkips >= MAX_AUTO_SKIPS) {
+    Player.userPaused = true;
+    toast(`Paused: ${MAX_AUTO_SKIPS} tracks ended without input. Press Space to continue.`, { level: "warning", ms: 10000 });
+    return;
+  }
   if (!auto && !(await ensureMoveAcknowledged())) return;
+  S.autoSkips = auto === "ended" ? S.autoSkips + 1 : 0;
   const preset = activePreset();
   const label = kind === "skip" ? "Skipped" : preset.labels[slot];
   S.busy = true;
@@ -827,7 +918,10 @@ async function decide({ kind, slot, auto }) {
     const snap = kind === "skip"
       ? await api("skip", { track_id: cur.id, mode: S.mode })
       : await api("sort", { track_id: cur.id, mode: S.mode, slot });
-    if (!auto) clickSound();
+    if (!auto) {
+      clickSound();
+      if (S.settings && !S.settings.coach_done && ++S.coachSorts >= COACH_SORTS) finishCoach();
+    }
     if (kind === "sort") { S.counts[slot] = (S.counts[slot] || 0) + 1; pressTile(slot); }
     else pressTile("skip");
     applySession(snap);
@@ -852,6 +946,7 @@ async function undo() {
   S.busy = true;
   try {
     const snap = await api("undo");
+    if (snap.current) S.restoredIds.add(snap.current.id);
     applySession(snap);
     toast("Undone");
     refreshCountsSoon(400);
@@ -990,6 +1085,7 @@ function toggleFullscreen() {
 }
 
 function onKey(e) {
+  S.autoSkips = 0;
   if (modalOpen()) {
     if (e.key === "Escape") { e.preventDefault(); modal.cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); modal.confirm(); }
@@ -1220,6 +1316,8 @@ async function boot() {
   $("btn-queue").addEventListener("click", () => Drawers.toggle("queue"));
   $("btn-settings").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.toggle("settings"); });
   $("btn-help").addEventListener("click", () => Guide.toggle());
+  $("coach-close").addEventListener("click", finishCoach);
+  $("op-badge").addEventListener("click", () => { SettingsDrawer.view = "main"; Drawers.show("settings"); });
   $("btn-done-reveal").addEventListener("click", () => api("reveal").catch((e) => toast(e.message, { level: "error" })));
   $("btn-load-default").addEventListener("click", () => S.settings.default_folder_path && loadFolder(S.settings.default_folder_path));
   $("preset-select").addEventListener("change", async (e) => {
@@ -1268,7 +1366,10 @@ async function boot() {
     refreshCountsSoon(0);
   }
   if (S.settings.show_queue_panel_on_startup && S.session) Drawers.show("queue");
-  if (S.settings.show_help_guide_on_startup) Guide.show();
+  if (S.settings.show_help_guide_on_startup || !S.settings.guide_seen) {
+    Guide.show();
+    if (!S.settings.guide_seen) api("set_settings", { guide_seen: true }).then((x) => (S.settings = x)).catch(() => {});
+  }
   poll();
 }
 

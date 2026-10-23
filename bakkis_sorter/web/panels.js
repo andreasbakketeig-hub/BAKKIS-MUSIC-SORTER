@@ -435,6 +435,23 @@ const PresetEditor = {
     name.focus();
   },
 
+  /** Every slot needs a label, and two slots may not write to the same folder. */
+  validate(d) {
+    const n = d.mode === "swipe" ? 3 : 9;
+    for (let i = 0; i < n; i++) {
+      if (!String(d.labels[i] || "").trim()) return `Tile ${d.mode === "swipe" ? ["Keep", "Archive", "Favorite"][i] : i + 1} needs a label`;
+    }
+    // Swipe folders are named after labels; grid uses the folder field (falls back to the label).
+    const folders = [];
+    for (let i = 0; i < n; i++) {
+      const raw = d.mode === "swipe" ? d.labels[i] : (d.folders[i] || d.labels[i]);
+      folders.push(String(raw).trim().replace(/[/\\:]/g, "-").toLowerCase());
+    }
+    const dup = folders.find((f, i) => folders.indexOf(f) !== i);
+    if (dup) return `Two tiles would sort into the same folder (“${dup}”). Give them different ${d.mode === "swipe" ? "labels" : "folders"}.`;
+    return null;
+  },
+
   palettePicker(i) {
     const d = this.draft;
     const wrap = el("div", "palette");
@@ -463,6 +480,8 @@ const PresetEditor = {
   async save() {
     const d = this.draft;
     if (!d.name.trim()) { toast("Give the preset a name", { level: "warning" }); return; }
+    const problem = this.validate(d);
+    if (problem) { toast(problem, { level: "warning", ms: 6000 }); return; }
     const fields = { name: d.name.trim(), labels: d.labels, colors: d.colors, folders: d.folders };
     try {
       if (d.id) await api("preset_update", { preset_id: d.id, ...fields });

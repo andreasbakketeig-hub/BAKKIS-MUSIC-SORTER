@@ -205,12 +205,6 @@ def test_reset_grid(isolated_config):
     assert store.active("grid")["folders"] == config.DEFAULT_GENRE_LABELS
 
 
-def test_skip_folder_names_include_labels_and_folders():
-    store = config.PresetStore()
-    names = store.skip_folder_names()
-    assert "keep" in names and "favorites" in names and "techno" in names
-
-
 def test_safe_segment():
     assert config.safe_segment("a/b:c\\d") == "a-b-c-d"
     assert config.safe_segment("   ") == "Preset"

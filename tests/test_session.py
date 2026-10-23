@@ -327,3 +327,15 @@ def test_on_change_called(music, make_session):
     s.sort(s.current.id, "swipe", 0)
     s.flush()
     assert calls
+
+
+def test_count_info_survives_preset_delete(music, make_session):
+    a, b = tracks(music, "a.mp3", "b.mp3")
+    s = make_session([a, b])
+    extra = s.presets.create("swipe", "Temp", ["Yes", "No", "Wow"], [])
+    s.presets.set_active(extra["id"])
+    s.sort(s.current.id, "swipe", 1)
+    s.flush()
+    s.presets.delete(extra["id"])
+    info = s.snapshot()["count_info"][f"{extra['id']}:1"]
+    assert (info["label"], info["preset"], info["slot"]) == ("No", "Temp", 1)

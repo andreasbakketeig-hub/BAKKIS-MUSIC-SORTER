@@ -39,35 +39,31 @@ def should_ignore_file(name: str) -> bool:
     return name.startswith(".")
 
 
-def build_skip_dir_names(preset_names: Iterable[str] = ()) -> frozenset[str]:
-    out = set(LEGACY_SKIP_DIR_NAMES)
-    out.add(BAKKIS_SORTED_NAME.lower())
-    out.update(n.lower() for n in preset_names if n)
-    return frozenset(out)
+def should_skip_dir(name: str, *, at_root: bool) -> bool:
+    """Directories the scan never enters.
 
-
-def should_skip_dir(name: str, skip: frozenset[str]) -> bool:
+    Hidden folders and ``BAKKIS_SORTED`` are skipped at any depth. v1's old flat output folders
+    (KEEP, ARCHIVE, …, also ``YYYY-MM-DD - KEEP``) only exist at the top of a music folder, so they are
+    skipped there only; a source folder that happens to share a preset or genre name is still scanned.
+    """
     if name.startswith("."):
         return True
     low = name.lower()
-    if low in skip:
+    if low == BAKKIS_SORTED_NAME.lower():
         return True
-    m = _DATE_PREFIXED_DIR_RE.match(name)
-    return bool(m and m.group(1).lower() in skip)
+    if at_root:
+        m = _DATE_PREFIXED_DIR_RE.match(name)
+        return low in LEGACY_SKIP_DIR_NAMES or bool(m and m.group(1).lower() in LEGACY_SKIP_DIR_NAMES)
+    return False
 
 
-def iter_audio_files(
-    root: Path,
-    *,
-    recursive: bool = True,
-    skip_dir_names: Optional[frozenset[str]] = None,
-) -> Iterator[Path]:
+def iter_audio_files(root: Path, *, recursive: bool = True) -> Iterator[Path]:
     """Yield audio files under ``root`` (root is resolved once; files are not individually resolved)."""
     base = Path(root).resolve()
-    skip = build_skip_dir_names() if skip_dir_names is None else skip_dir_names
     if recursive:
         for dirpath, dirs, files in os.walk(base, topdown=True):
-            dirs[:] = [d for d in dirs if not should_skip_dir(d, skip)]
+            at_root = dirpath == str(base)
+            dirs[:] = [d for d in dirs if not should_skip_dir(d, at_root=at_root)]
             for name in files:
                 if should_ignore_file(name):
                     continue
@@ -95,13 +91,12 @@ def scan(
     root: Path,
     *,
     recursive: bool = True,
-    skip_dir_names: Optional[frozenset[str]] = None,
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> Optional[list[Path]]:
     """Collect audio files. Returns None if ``cancel`` was set during the scan."""
     out: list[Path] = []
-    for p in iter_audio_files(root, recursive=recursive, skip_dir_names=skip_dir_names):
+    for p in iter_audio_files(root, recursive=recursive):
         if cancel is not None and cancel.is_set():
             return None
         out.append(p)
@@ -120,7 +115,6 @@ class ScanJob:
         root: Path,
         *,
         recursive: bool = True,
-        skip_dir_names: Optional[frozenset[str]] = None,
         on_progress: Optional[Callable[[int], None]] = None,
         on_done: Optional[Callable[[list[Path]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
@@ -128,7 +122,6 @@ class ScanJob:
         self.root = Path(root)
         self._cancel = threading.Event()
         self._recursive = recursive
-        self._skip = skip_dir_names
         self._on_progress = on_progress
         self._on_done = on_done
         self._on_error = on_error
@@ -158,7 +151,6 @@ class ScanJob:
             res = scan(
                 self.root,
                 recursive=self._recursive,
-                skip_dir_names=self._skip,
                 cancel=self._cancel,
                 on_progress=self._progress,
             )
