@@ -35,6 +35,9 @@ MAX_NOTICES = 200
 
 SKIP_SLOT = -1
 
+# Track ids are unique per process so a stale audio URL from a previous folder never hits a new track.
+_TRACK_IDS = itertools.count(1)
+
 
 class SessionError(Exception):
     """Invalid request from the UI (stale track id, empty queue, bad slot)."""
@@ -201,6 +204,7 @@ class Session:
         journal: Optional[Journal] = None,
         on_change: Optional[Callable[[], None]] = None,
         today: Callable[[], date] = date.today,
+        lock: Optional[threading.RLock] = None,
     ) -> None:
         self.music_root = Path(music_root).resolve()
         self.presets = presets
@@ -208,8 +212,8 @@ class Session:
         self._journal = journal or Journal()
         self._on_change = on_change
         self._today = today
-        self.lock = threading.RLock()
-        self._ids = itertools.count(1)
+        # Share the owner's lock when given, so preset edits and sorts never interleave.
+        self.lock = lock or threading.RLock()
         self._action_ids = itertools.count(1)
         self.tracks: dict[str, Track] = {}
         self.queue: list[Track] = [self._new_track(p) for p in paths]
@@ -225,7 +229,7 @@ class Session:
     # ------------------------------------------------------------------ helpers
 
     def _new_track(self, path: Path) -> Track:
-        t = Track(id=str(next(self._ids)), path=Path(path))
+        t = Track(id=str(next(_TRACK_IDS)), path=Path(path))
         self.tracks[t.id] = t
         return t
 
