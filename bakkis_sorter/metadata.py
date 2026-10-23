@@ -381,7 +381,7 @@ class MetadataCache:
         self._pool.shutdown(wait=False)
 
 
-# --------------------------------------------------------------------------- waveform peaks (computed by the UI)
+# --------------------------------------------------------------------------- waveform peaks (waveform.py or the UI)
 
 MAX_PEAKS_LEN = 8192
 

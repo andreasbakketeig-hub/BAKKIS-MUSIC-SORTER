@@ -513,7 +513,7 @@ const Wave = {
     }, 350);
   },
 
-  /** Peaks: disk cache via backend, else decode in the webview and store. */
+  /** Peaks: from the backend (disk cache; WAV/AIFF computed there), else decode compressed files here. */
   async loadPeaks(id) {
     if (!id || this.peaksFor === id && this.peaks) return;
     if (this.loadingFor === id) return;
@@ -523,7 +523,8 @@ const Wave = {
       if (Player.curId !== id) return;
       if (cached) return this.setPeaks(id, Uint8Array.from(atob(cached), (c) => c.charCodeAt(0)));
       const meta = await getMeta(id).catch(() => null);
-      if (!meta || meta.size > WAVE_MAX_BYTES || (meta.duration && meta.duration > WAVE_MAX_SEC)) return;
+      // WAV/AIFF: the backend already tried; decoding them here would cost WebKit hundreds of MB.
+      if (!meta || meta.pcm || meta.size > WAVE_MAX_BYTES || (meta.duration && meta.duration > WAVE_MAX_SEC)) return;
       await new Promise((r) => setTimeout(r, 300)); // let playback settle first
       if (Player.curId !== id) return;
       const buf = await (await fetch(audioUrl(id))).arrayBuffer();

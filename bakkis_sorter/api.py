@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from . import __version__, library
 from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, save_settings
-from . import feedback, history, keys, listen, playlists, updates
+from . import feedback, history, keys, listen, playlists, updates, waveform
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
 from .server import ApiError
@@ -141,11 +141,19 @@ class AppBackend:
         meta = self.meta.get(p)
         dupes = self.dupes
         dup = dupes.find(p, meta) if dupes is not None else None
-        return {"track_id": track_id, **meta.to_dict(), "duplicate": dup}
+        return {"track_id": track_id, **meta.to_dict(), "duplicate": dup, "pcm": waveform.is_pcm_path(p)}
 
     def api_peaks_get(self, track_id: str) -> Optional[str]:
+        """Cached peaks; WAV/AIFF are computed here so the web view never has to decode them."""
         p = self.audio_path(track_id)
-        return self.peaks.get(p) if p else None
+        if not p:
+            return None
+        cached = self.peaks.get(p)
+        if cached is None:
+            cached = waveform.compute_b64(p)
+            if cached is not None:
+                self.peaks.put(p, cached)
+        return cached
 
     def api_peaks_put(self, track_id: str, peaks: str) -> bool:
         p = self.audio_path(track_id)
