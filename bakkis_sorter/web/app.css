@@ -613,3 +613,4 @@ body.playing .listen-btn .i-play { display: none; }
 .q-head { display: flex; align-items: center; justify-content: space-between; }
 .q-head .link-btn { text-transform: none; letter-spacing: 0; }
 .hist-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.set-path-name { color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: var(--fs-m); }

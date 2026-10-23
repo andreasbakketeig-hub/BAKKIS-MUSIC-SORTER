@@ -600,7 +600,9 @@ function renderAll() {
   if (S.scan && S.scan.status === "scanning") {
     setScreen("scanning");
     $("scan-text").textContent = S.scan.count ? `Scanning… ${S.scan.count} tracks` : "Scanning…";
-    $("scan-root").textContent = S.scan.root || "";
+    const f = describeFolder(S.scan.root);
+    $("scan-root").textContent = S.scan.root ? `${f.name} · ${f.where}` : "";
+    $("scan-root").title = S.scan.root || "";
   } else if (!sess) {
     setScreen("empty");
     renderEmpty();
@@ -837,6 +839,29 @@ function fillCard(track, meta) {
   });
 }
 
+/** "/Users/me/Music/Promos" -> {name: "Promos", where: "~/Music"}; "/Volumes/USB/Promos" -> where "on USB". */
+function describeFolder(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  const name = parts.pop() || path || "";
+  let where = "/" + parts.join("/");
+  let disk = null;
+  if (parts[0] === "Volumes" && parts[1]) {
+    disk = parts[1];
+    where = parts.length > 2 ? `on ${disk} · ${parts.slice(2).join("/")}` : `on ${disk}`;
+  } else if (S.home && where === S.home) {
+    where = "~";
+  } else if (S.home && where.startsWith(S.home + "/")) {
+    where = "~" + where.slice(S.home.length);
+  }
+  return { name, where, disk };
+}
+
+function missingFolderMessage(path) {
+  const f = describeFolder(path);
+  if (f.disk) return `Your default folder “${f.name}” is on the disk “${f.disk}”. Is it connected? Or choose another folder.`;
+  return `Your default folder “${f.name}” (${f.where}) was not found. Choose a folder, or change it in Settings.`;
+}
+
 function renderEmpty() {
   const path = S.settings && S.settings.default_folder_path;
   const btn = $("btn-load-default");
@@ -844,7 +869,8 @@ function renderEmpty() {
   if (path) btn.textContent = `Load ${path.split("/").filter(Boolean).pop()}`;
   const msg = $("empty-message");
   if (path && !S.defaultFolderExists) {
-    msg.textContent = `Default folder not found: ${path}. Choose a folder, or change it in Settings.`;
+    msg.textContent = missingFolderMessage(path);
+    msg.title = path;
     msg.hidden = false;
   }
 }
@@ -982,6 +1008,7 @@ async function refreshState() {
   S.scan = st.scan;
   S.version = st.version;
   S.defaultFolderExists = st.default_folder_exists;
+  S.home = st.home;
   applySession(st.session);
   return st;
 }
@@ -1568,7 +1595,8 @@ async function boot() {
     await loadFolder(st.settings.default_folder_path);
     if (!S.scan || S.scan.status !== "scanning") {
       const msg = $("empty-message");
-      msg.textContent = `Default folder not found: ${st.settings.default_folder_path}`;
+      msg.textContent = missingFolderMessage(st.settings.default_folder_path);
+      msg.title = st.settings.default_folder_path;
       msg.hidden = false;
     }
   } else if (st.session) {

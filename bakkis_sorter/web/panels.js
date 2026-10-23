@@ -461,7 +461,14 @@ const SettingsDrawer = {
     } else if (item.type === "folder") {
       row.appendChild(el("div", "set-label", item.label));
       const path = s.default_folder_path;
-      const val = el("div", "set-path", path || "None");
+      const val = el("div", "set-path");
+      if (path) {
+        const f = describeFolder(path);
+        val.appendChild(el("span", "set-path-name", f.name));
+        val.appendChild(el("span", null, ` · ${f.where}`));
+      } else {
+        val.textContent = "None";
+      }
       val.title = path || "";
       if (path && !S.defaultFolderExists) val.classList.add("warn");
       row.appendChild(val);

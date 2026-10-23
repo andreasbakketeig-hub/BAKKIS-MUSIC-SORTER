@@ -121,6 +121,7 @@ class AppBackend:
                 "scan": dict(self.scan),
                 "session": snap,
                 "default_folder_exists": self._default_folder_exists(),
+                "home": str(Path.home()),
             }
 
     def _default_folder_exists(self) -> bool:
