@@ -289,6 +289,30 @@ def save_settings(data: dict) -> dict:
     return clean
 
 
+def repair_default_folder(settings: dict, home: Optional[Path] = None) -> bool:
+    """Fix a default folder that points into another (old) user account, e.g. after a new Mac or a
+    renamed account: try the same path under the current home, else forget it. Returns True if changed.
+
+    A missing folder on an external disk (/Volumes/...) or in the current home is left alone; the
+    app tells the user about it, which is useful there.
+    """
+    raw = settings.get("default_folder_path")
+    if not raw:
+        return False
+    path = Path(str(raw)).expanduser()
+    home = Path(home) if home is not None else Path.home()
+    parts = path.parts
+    if path.exists() or len(parts) < 3 or parts[1] != "Users" or Path(*parts[:3]) == home:
+        return False
+    moved = home.joinpath(*parts[3:])
+    if moved.is_dir():
+        settings["default_folder_path"] = str(moved)
+    else:
+        settings["default_folder_path"] = None
+        settings["auto_load_default_folder"] = False
+    return True
+
+
 def patch_settings(**changes: object) -> dict:
     data = load_settings()
     data.update(changes)

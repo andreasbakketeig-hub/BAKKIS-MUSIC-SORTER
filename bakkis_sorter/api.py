@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import __version__, library
-from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, save_settings
+from .config import MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, save_settings
 from . import feedback, history, keys, listen, playlists, updates
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
@@ -30,6 +30,8 @@ class AppBackend:
     def __init__(self, *, presets: Optional[PresetStore] = None, on_change: Optional[Callable[[], None]] = None) -> None:
         self.lock = threading.RLock()
         self.settings = load_settings()
+        if repair_default_folder(self.settings):
+            self.settings = save_settings(self.settings)
         self.presets = presets or PresetStore()
         self.meta = MetadataCache()
         self.journal = Journal()

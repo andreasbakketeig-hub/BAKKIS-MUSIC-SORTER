@@ -238,3 +238,25 @@ def test_builtin_skips_existing_name(isolated_config):
     (isolated_config / "mode_presets.json").write_text(json.dumps(raw))
     store = config.PresetStore()
     assert [p["name"] for p in store.presets].count("Promos") == 1
+
+
+def test_repair_default_folder_from_an_old_account(tmp_path):
+    home = tmp_path / "Users" / "bakkis"
+    (home / "Music" / "Promos").mkdir(parents=True)
+    old_user = "/Users/andreasbakketeig"
+    # same folder exists under the new account -> remapped
+    s = {"default_folder_path": f"{old_user}/Music/Promos", "auto_load_default_folder": True}
+    assert config.repair_default_folder(s, home) and s["default_folder_path"] == str(home / "Music" / "Promos")
+    # nowhere to be found -> forgotten, no auto-load, no warning on start
+    s = {"default_folder_path": f"{old_user}/Desktop/MUSIC SORTER TEST", "auto_load_default_folder": True}
+    assert config.repair_default_folder(s, home)
+    assert s["default_folder_path"] is None and s["auto_load_default_folder"] is False
+
+
+def test_repair_leaves_external_disks_and_own_home_alone(tmp_path):
+    home = tmp_path / "Users" / "bakkis"
+    for path in ("/Volumes/USB-STICK/Promos", f"{home}/Gone"):
+        s = {"default_folder_path": path, "auto_load_default_folder": True}
+        assert not config.repair_default_folder(s, home)
+        assert s["default_folder_path"] == path
+    assert not config.repair_default_folder({"default_folder_path": None}, home)
