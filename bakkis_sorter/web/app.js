@@ -480,6 +480,7 @@ const Wave = {
       if (Math.abs(p.sec - Player.activeStart) < 0.5) b.classList.add("active");
       b.dataset.sec = String(p.sec);
       b.dataset.pos = String(pos);
+      if (p.outro) b.dataset.outro = "1";
       b.addEventListener("click", () => (p.outro ? Player.outro() : Player.jump(p.sec)));
       box.appendChild(b);
     }
@@ -488,15 +489,15 @@ const Wave = {
     if (first) first.style.transform = "translateX(0)";
     const last = box.lastElementChild;
     if (last && last !== first && Number(last.dataset.pos) > 0.92) last.style.transform = "translateX(-100%)";
-    // Markers that would overlap the previous one show only their key number.
-    let prevRight = -Infinity;
+    // A marker that would overlap the previous one is hidden (its key still works). The outro marker wins.
+    const GAP = 8;
+    let prev = null;
     for (const m of box.children) {
-      const r = m.getBoundingClientRect();
-      if (r.left < prevRight + 4) {
-        if (!showKeys) { m.hidden = true; continue; } // grid mode has no key numbers to fall back to
-        m.classList.add("compact");
+      if (prev && m.getBoundingClientRect().left < prev.getBoundingClientRect().right + GAP) {
+        if (m.dataset.outro && !prev.dataset.outro) { prev.hidden = true; prev = m; } else m.hidden = true;
+        continue;
       }
-      prevRight = m.getBoundingClientRect().right;
+      prev = m;
     }
   },
 

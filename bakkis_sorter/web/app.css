@@ -290,8 +290,6 @@ body.is-player .screen-player { display: flex; }
 .marker.active { color: var(--accent); border-color: var(--accent); }
 .marker.flash { color: var(--danger); border-color: var(--danger); opacity: 1; }
 .marker kbd { font: inherit; opacity: 0.6; margin-right: 4px; }
-.marker.compact .t { display: none; }
-.marker.compact kbd { margin-right: 0; }
 
 .transport { display: flex; align-items: center; gap: 8px; }
 .transport .spacer { flex: 1; }
