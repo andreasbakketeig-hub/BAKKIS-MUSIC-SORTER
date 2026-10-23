@@ -95,6 +95,9 @@ def parse_range(header: Optional[str], size: int) -> Optional[tuple[int, int]]:
 class _Handler(BaseHTTPRequestHandler):
     server: "AppServer"
     protocol_version = "HTTP/1.1"
+    # A paused <audio> element stops reading but keeps its connection; without a timeout that thread
+    # would block forever and idle keep-alive connections would pile up (WebKit allows 6 per host).
+    timeout = 30
 
     # Silence default stderr logging; WebKit makes many range requests.
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
