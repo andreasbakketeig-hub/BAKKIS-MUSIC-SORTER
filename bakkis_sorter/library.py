@@ -129,9 +129,11 @@ class ScanJob:
         on_done: Optional[Callable[[list[Path]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
         root_skip: frozenset = frozenset(),
+        before: Optional[Callable[[], None]] = None,
     ) -> None:
         self.root = Path(root)
         self._root_skip = root_skip
+        self._before = before  # runs on the scan thread first (e.g. finish pending moves)
         self._cancel = threading.Event()
         self._recursive = recursive
         self._on_progress = on_progress
@@ -160,6 +162,8 @@ class ScanJob:
 
     def _run(self) -> None:
         try:
+            if self._before is not None:
+                self._before()
             res = scan(
                 self.root,
                 recursive=self._recursive,
@@ -174,7 +178,7 @@ class ScanJob:
         if res is None or self._cancel.is_set():
             return
         self.result = res
-        if self._on_done is not None:
+        if self._on_done is not None and not self._cancel.is_set():
             self._on_done(res)
 
 
@@ -313,6 +317,22 @@ def skipped_destination_dir(
     return base if rel_parent == Path(".") else base / rel_parent
 
 
+def reserve_destination(dest_dir: Path, name: str) -> Path:
+    """Like ``unique_destination``, but creates the file exclusively (O_EXCL), so nothing else can take the
+    name between the check and the move. The empty placeholder is then replaced by the real file."""
+    stem, suf = Path(name).stem, Path(name).suffix
+    n = 1
+    while True:
+        cand = Path(dest_dir) / (name if n == 1 else f"{stem} ({n}){suf}")
+        try:
+            fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            n += 1
+            continue
+        os.close(fd)
+        return cand
+
+
 def unique_destination(dest_dir: Path, name: str) -> Path:
     """``dest_dir/name``, or ``name (2).ext``, ``name (3).ext``… if taken."""
     cand = Path(dest_dir) / name
@@ -328,6 +348,11 @@ def unique_destination(dest_dir: Path, name: str) -> Path:
 
 
 # --------------------------------------------------------------------------- empty source folder cleanup
+
+
+def is_within(child: Path, ancestor: Path) -> bool:
+    """True if ``child`` (resolved) lies inside ``ancestor`` (resolved)."""
+    return _is_within(Path(child).resolve(), Path(ancestor).resolve())
 
 
 def _is_within(child: Path, ancestor: Path) -> bool:

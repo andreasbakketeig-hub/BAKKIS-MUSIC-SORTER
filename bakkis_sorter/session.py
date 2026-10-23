@@ -30,6 +30,7 @@ from . import library
 from .config import config_dir, write_json_atomic
 
 COPIED_INDEX_NAME = ".bakkis_copied.json"
+CLOSE_TIMEOUT = 30.0  # seconds to wait for pending file ops when closing
 HISTORY_PREVIEW = 5
 UPCOMING_PREVIEW = 8
 MAX_NOTICES = 200
@@ -175,7 +176,8 @@ class Journal:
 class Worker:
     """Single daemon thread executing jobs in FIFO order."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_error: Optional[Callable[[Exception], None]] = None) -> None:
+        self._on_error = on_error
         self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
         self._thread = threading.Thread(target=self._run, name="bakkis-fileops", daemon=True)
         self._thread.start()
@@ -183,9 +185,21 @@ class Worker:
     def submit(self, job: Callable[[], None]) -> None:
         self._q.put(job)
 
-    def flush(self) -> None:
-        """Block until every submitted job has finished."""
-        self._q.join()
+    def flush(self, timeout: Optional[float] = None) -> bool:
+        """Block until every submitted job has finished. False if ``timeout`` ran out first."""
+        q = self._q
+        with q.all_tasks_done:
+            if timeout is None:
+                while q.unfinished_tasks:
+                    q.all_tasks_done.wait()
+                return True
+            end = time.monotonic() + timeout
+            while q.unfinished_tasks:
+                left = end - time.monotonic()
+                if left <= 0:
+                    return False
+                q.all_tasks_done.wait(left)
+            return True
 
     def stop(self) -> None:
         self._q.put(None)
@@ -198,6 +212,12 @@ class Worker:
                 if job is None:
                     return
                 job()
+            except Exception as e:  # noqa: BLE001 - one bad job must never stop all later file ops
+                if self._on_error is not None:
+                    try:
+                        self._on_error(e)
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
                 self._q.task_done()
 
@@ -242,7 +262,7 @@ class Session:
         self.started_at = time.time()
         self.session_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         self._copied_index: Optional[dict] = None
-        self._worker = Worker()
+        self._worker = Worker(on_error=lambda e: self.notify("error", f"File operation failed: {e}"))
 
     # ------------------------------------------------------------------ helpers
 
@@ -285,9 +305,11 @@ class Session:
     def flush(self) -> None:
         self._worker.flush()
 
-    def close(self) -> None:
-        self._worker.flush()
+    def close(self, timeout: Optional[float] = CLOSE_TIMEOUT) -> bool:
+        """Finish pending file ops (up to ``timeout`` s, so a dead network disk can't block quitting)."""
+        done = self._worker.flush(timeout)
         self._worker.stop()
+        return done
 
     # ------------------------------------------------------------------ sort / skip
 
@@ -311,6 +333,8 @@ class Session:
         head = self.queue[0]
         if head.id != str(track_id):
             raise SessionError("Track is no longer current")
+        if not library.is_within(head.path, self.music_root):
+            raise SessionError(f"{head.path.name} is not inside the loaded folder")
         s = self._settings()
         dated = bool(preset.get("dated"))
         op = self.operation()
@@ -359,7 +383,7 @@ class Session:
         dest: Optional[Path] = None
         try:
             a.dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = library.unique_destination(a.dest_dir, a.src.name)
+            dest = library.reserve_destination(a.dest_dir, a.src.name)
             if a.op == "copy":
                 _copy(a.src, dest)
             else:
@@ -433,17 +457,24 @@ class Session:
         try:
             if a.op == "copy":
                 if a.dest.exists():
+                    if a.src.exists() and a.dest.stat().st_size != a.src.stat().st_size:
+                        # Not our copy any more (replaced in Finder): leave it alone.
+                        raise OSError(f"{a.dest.name} was changed since it was copied; it is left in place")
                     a.dest.unlink()
                 self._forget_copy(a.src)
                 restored = a.src
             else:
                 # Recreates any source folders the cleanup removed (they are all ancestors of src).
                 a.src.parent.mkdir(parents=True, exist_ok=True)
-                restored = a.src
-                if os.path.lexists(a.src):
-                    restored = library.unique_destination(a.src.parent, a.src.name)
+                restored = library.reserve_destination(a.src.parent, a.src.name)
                 _move(a.dest, restored)
         except OSError as e:
+            # A failed cross-device move back can leave a partial file; remove it while the sorted file survives.
+            if a.op == "move" and restored is not None and restored.exists() and a.dest.exists():
+                try:
+                    restored.unlink()
+                except OSError:
+                    pass
             with self.lock:
                 if a.track in self.queue:
                     self.queue.remove(a.track)

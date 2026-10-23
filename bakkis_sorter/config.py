@@ -289,7 +289,7 @@ def normalize_settings(raw: object) -> dict:
 
 
 # Kept by "Reset all settings": where the music is, what was already shown once, and the sort counter.
-RESET_KEEPS = ("default_folder_path", "welcome_seen", "guide_seen", "coach_done", "move_warning_acknowledged",
+RESET_KEEPS = ("default_folder_path", "auto_load_default_folder", "welcome_seen", "guide_seen", "coach_done", "move_warning_acknowledged",
                "sorted_total", "support_nudged")
 
 

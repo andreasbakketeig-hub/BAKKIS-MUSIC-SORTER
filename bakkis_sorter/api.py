@@ -27,6 +27,12 @@ from .server import ApiError
 from .session import Journal, Session, SessionError, filter_already_copied
 
 PREFETCH_AHEAD = 8
+# Links the UI may open (Follow BAKKIS, support, releases) and the contact address.
+OPEN_URL_HOSTS = frozenset({
+    "bakkis.com", "www.bakkis.com", "ko-fi.com", "github.com", "open.spotify.com", "soundcloud.com",
+    "www.instagram.com", "instagram.com", "www.beatport.com", "www.traxsource.com", "songshare.com",
+})
+OPEN_URL_MAIL = "bakkis@bakkis.com"
 SUPPORT_NUDGE_AT = 250  # tracks sorted, across sessions: one quiet "buy me a coffee" note
 SAVE_TOTAL_EVERY = 10
 
@@ -49,6 +55,7 @@ class AppBackend:
         self.scan = {"status": "idle", "root": None, "count": 0, "error": None}
         self._on_change = on_change
         self._native: dict[str, Callable[..., object]] = {}
+        self._closed = False
 
     # ------------------------------------------------------------------ plumbing
 
@@ -57,6 +64,8 @@ class AppBackend:
         self._native[name] = fn
 
     def dispatch(self, method: str, params: dict) -> object:
+        if self._closed:
+            raise ApiError("The app is closing", 503)
         fn = self._native.get(method) or getattr(self, f"api_{method}", None)
         if fn is None or not callable(fn):
             raise ApiError(f"Unknown method: {method}", 404)
@@ -80,10 +89,10 @@ class AppBackend:
         p = self.audio_path(track_id)
         return self.meta.cover(p) if p else None
 
-    def _on_session_change(self) -> None:
-        """Called by the session after file ops: index newly sorted files for the duplicate check."""
-        s, d = self.session, self.dupes
-        if s is not None and d is not None:
+    def _on_session_change(self, s: Optional[Session] = None) -> None:
+        """Called by a session after file ops: index newly sorted files for the duplicate check."""
+        d = self.dupes
+        if s is not None and s is self.session and d is not None:  # never index a previous folder's ops
             with s.lock:
                 fresh = [a.dest for a in s.history[-3:] if a.status == "done" and a.dest]
             for path in fresh:
@@ -111,8 +120,10 @@ class AppBackend:
 
     def close(self) -> None:
         with self.lock:
+            self._closed = True  # no new API calls, and a scan that finishes now is ignored
             if self._scan_job:
                 self._scan_job.cancel()
+                self._scan_job = None
             session = self.session
             try:
                 save_settings(self.settings)  # keeps sorted_total exact
@@ -187,10 +198,13 @@ class AppBackend:
             root_skip = frozenset(p["name"].lower() for p in self.presets.presets) | frozenset(
                 safe_segment(p["name"]).lower() for p in self.presets.presets
             ) if library.sorts_in_place(root) else frozenset()
+            old = self.session
             job = library.ScanJob(
                 root,
                 recursive=bool(s["include_subfolders"]),
                 root_skip=root_skip,
+                # Pending moves of the current folder finish before scanning, so the scan sees where files are now.
+                before=old.flush if old is not None else None,
                 on_progress=lambda n: self._scan_progress(job, n),
                 on_done=lambda paths: self._scan_done(job, root, paths),
                 on_error=lambda e: self._scan_error(job, e),
@@ -215,7 +229,7 @@ class AppBackend:
 
     def _scan_done(self, job: library.ScanJob, root: Path, paths: list) -> None:
         with self.lock:
-            if job is not self._scan_job:
+            if job is not self._scan_job or self._closed:
                 return
             s = self.settings
             if library.effective_operation(root, s["file_operation"]) == "copy" and s["hide_copied_on_rescan"]:
@@ -225,20 +239,21 @@ class AppBackend:
             if self.dupes is not None:
                 self.dupes.cancel()
             self.dupes = DuplicateIndex(root, self.meta.get).start()
+            box: list = []
             self.session = Session(
                 root,
                 ordered,
                 presets=self.presets,
                 settings=self._get_settings,
                 journal=self.journal,
-                on_change=self._on_session_change,
+                on_change=lambda: self._on_session_change(box[0] if box else None),
                 lock=self.lock,
             )
+            box.append(self.session)
             self.scan.update(status="ready", count=len(ordered))
             self._scan_job = None
         if old is not None:
-            # Let pending file ops of the previous folder finish without blocking the scan thread's caller.
-            threading.Thread(target=old.close, daemon=True).start()
+            old.close()  # already drained before the scan (sorting is refused while scanning), so this is quick
         self._prefetch()
         self._changed()
 
@@ -250,15 +265,23 @@ class AppBackend:
             raise ApiError("No folder loaded", 409)
         return s
 
-    def _after_queue_change(self) -> dict:
+    def _changing(self) -> Session:
+        """The session for a call that moves files or changes the queue; refused while a folder loads."""
+        if self.scan.get("status") == "scanning":
+            raise ApiError("Still loading the folder", 409)
+        return self._session()
+
+    def _after_queue_change(self, s: Session) -> dict:
+        """Snapshot of the session the call changed (not one a rescan swapped in meanwhile)."""
         self._prefetch()
         self._changed()
-        return self._session().snapshot()
+        return s.snapshot()
 
     def api_sort(self, track_id: str, mode: str, slot: int) -> dict:
-        self._session().sort(str(track_id), norm_mode(mode), int(slot))
+        s = self._changing()
+        s.sort(str(track_id), norm_mode(mode), int(slot))
         nudge = self._count_sorted()
-        out = self._after_queue_change()
+        out = self._after_queue_change(s)
         if nudge:
             out = dict(out, support_nudge=SUPPORT_NUDGE_AT)
         return out
@@ -276,29 +299,34 @@ class AppBackend:
         return nudge
 
     def api_skip(self, track_id: str, mode: str = "swipe") -> dict:
-        self._session().skip(str(track_id), norm_mode(mode))
-        return self._after_queue_change()
+        s = self._changing()
+        s.skip(str(track_id), norm_mode(mode))
+        return self._after_queue_change(s)
 
     def api_undo(self) -> dict:
-        self._session().undo_last()
-        return self._after_queue_change()
+        s = self._changing()
+        s.undo_last()
+        return self._after_queue_change(s)
 
     def api_undo_all(self) -> dict:
-        self._session().undo_all()
-        return self._after_queue_change()
+        s = self._changing()
+        s.undo_all()
+        return self._after_queue_change(s)
 
     def api_set_order(self, order: str) -> dict:
         if order not in ("random", "in_order"):
             raise ApiError("order must be 'random' or 'in_order'")
         self.api_set_settings(track_order=order)
-        if self.session:
-            self.session.set_order(order)
-            return self._after_queue_change()
+        s = self.session
+        if s:
+            s.set_order(order)
+            return self._after_queue_change(s)
         return {}
 
     def api_play_next(self, track_id: str) -> dict:
-        self._session().play_next(str(track_id))
-        return self._after_queue_change()
+        s = self._changing()
+        s.play_next(str(track_id))
+        return self._after_queue_change(s)
 
     def api_queue(self, offset: int = 0, limit: int = 100, q: str = "") -> dict:
         s = self.session
@@ -384,8 +412,11 @@ class AppBackend:
     def api_open_url(self, url: str) -> bool:
         """Open a link in the user's browser / mail app. Only https: and mailto: links are allowed."""
         parts = urlsplit(str(url))
-        if parts.scheme not in ("https", "mailto") or (parts.scheme == "https" and not parts.netloc):
-            raise ApiError("Only https and mailto links can be opened")
+        ok = (parts.scheme == "https" and (parts.hostname or "") in OPEN_URL_HOSTS) or (
+            parts.scheme == "mailto" and parts.path.lower() == OPEN_URL_MAIL
+        )
+        if not ok:
+            raise ApiError("This link can't be opened from the app")
         self._open_external(str(url))
         return True
 
@@ -430,11 +461,12 @@ class AppBackend:
             ranked.sort(key=lambda r: (keys.sort_key(r[2]), r[1] or 0))
         info = {"bpm_min": bpm_min, "bpm_max": bpm_max, "key": code, "compatible": bool(compatible and code), "order": order}
         s.apply_filter(keep, [r[0] for r in ranked] if order in ("bpm", "key") else None, info)
-        return self._after_queue_change()
+        return self._after_queue_change(s)
 
     def api_clear_filter(self) -> dict:
-        self._session().clear_filter()
-        return self._after_queue_change()
+        s = self._changing()
+        s.clear_filter()
+        return self._after_queue_change(s)
 
     # ------------------------------------------------------------------ listen mode (Discover; never moves files)
 

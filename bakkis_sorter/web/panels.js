@@ -175,7 +175,7 @@ const QueueDrawer = {
 
   async playNext(t) {
     try {
-      applySession(await api("play_next", { track_id: t.id }));
+      applySession(await queueChange("play_next", { track_id: t.id }));
       toast(`“${t.name.replace(/\.[^.]+$/, "")}” plays next`);
     } catch (e) { toast(e.message, { level: "error" }); }
   },
@@ -242,14 +242,14 @@ const FilterPanel = {
       [params.bpm_min, params.bpm_max] = [params.bpm_max, params.bpm_min];
     }
     try {
-      applySession(await api("set_filter", params));
+      applySession(await queueChange("set_filter", params));
       QueueDrawer.refresh();
     } catch (e) { toast(e.message, { level: "error" }); }
   },
 
   async clear() {
     try {
-      applySession(await api("clear_filter"));
+      applySession(await queueChange("clear_filter"));
       QueueDrawer.refresh();
     } catch (e) { toast(e.message, { level: "error" }); }
   },

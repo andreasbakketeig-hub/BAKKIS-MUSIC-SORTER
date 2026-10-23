@@ -14,7 +14,7 @@ Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
 - Grid mode: sort into up to nine genres with the number keys
 - Plays MP3, WAV, AIFF, FLAC, ALAC, AAC/M4A (and Ogg where macOS supports it)
 - Undo anything, including whole past sessions
-- Nothing is ever deleted
+- No track is ever deleted or overwritten
 
 ---
 

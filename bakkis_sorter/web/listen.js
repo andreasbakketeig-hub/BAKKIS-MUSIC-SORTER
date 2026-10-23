@@ -131,7 +131,8 @@ const Listen = {
     const t = this.current;
     this.fadingFrom = null;
     Wave.reset(t.id);
-    if (fade) Player.crossfadeTo(t.id, LISTEN_FADE_MS);
+    if (t.id === Player.curId) Player.seek(this.startFor(t.id, Player.duration)); // a one-track list starts over
+    else if (fade) Player.crossfadeTo(t.id, LISTEN_FADE_MS);
     else Player.load(t.id);
     this.renderCard();
     this.renderStatus();
@@ -155,8 +156,9 @@ const Listen = {
   /** Toggle the heart on the playing track. */
   async like() {
     const t = this.current;
-    if (!t) return;
+    if (!t || this.heartBusy) return; // a second press before the first answer would send the same toggle
     const on = !this.liked.has(t.id);
+    this.heartBusy = true;
     try {
       const r = await api("listen_heart", { track_id: t.id, on });
       if (r.hearted) this.liked.add(t.id); else this.liked.delete(t.id);
@@ -170,6 +172,7 @@ const Listen = {
         action: { label: "View list", fn: () => Drawers.show("hearts") },
       });
     } catch (e) { toast(e.message, { level: "error" }); }
+    finally { this.heartBusy = false; }
   },
 
   /** Called every frame: start the crossfade before a snippet (or a full track) runs out. */

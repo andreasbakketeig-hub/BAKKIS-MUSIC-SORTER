@@ -285,7 +285,7 @@ const Player = {
 
   toggle() {
     if (!this.curId) return;
-    if (this.cur.paused) { this.userPaused = false; this.play(); }
+    if (this.cur.paused) { this.userPaused = false; EndWatch.fired = false; this.play(); }
     else { this.userPaused = true; this.cur.pause(); }
   },
 
@@ -633,14 +633,14 @@ function renderCoach() {
   if (!show) return;
   const t = $("coach-text");
   if (S.mode === "grid") {
-    t.innerHTML = "Listen, then press <kbd>1</kbd>–<kbd>9</kbd> to file the track under that genre. <kbd>↓</kbd> skips, <kbd>Z</kbd> undoes. Nothing is deleted.";
+    t.innerHTML = "Listen, then press <kbd>1</kbd>–<kbd>9</kbd> to file the track under that genre. <kbd>↓</kbd> skips, <kbd>Z</kbd> undoes. No track is ever deleted.";
     return;
   }
   const L = swipeLayout();
   const sw = activePreset("swipe");
   const k = (slot) => `<kbd>${L.find((x) => x.slot === slot).glyph}</kbd> ${escapeHtml(sw.labels[slot])}`;
   const fav = S.settings.swipe_archive_hotkey === "up" ? "" : ` · <kbd>↑</kbd> ${escapeHtml(sw.labels[2])}`;
-  t.innerHTML = `Listen, then decide: ${k(0)} · ${k(1)}${fav} · <kbd>↓</kbd> Skip. <kbd>1</kbd>–<kbd>9</kbd> jump through the track, <kbd>Z</kbd> undoes. Nothing is deleted.`;
+  t.innerHTML = `Listen, then decide: ${k(0)} · ${k(1)}${fav} · <kbd>↓</kbd> Skip. <kbd>1</kbd>–<kbd>9</kbd> jump through the track, <kbd>Z</kbd> undoes. No track is ever deleted.`;
 }
 
 function escapeHtml(s) {
@@ -1104,7 +1104,7 @@ async function ensureMoveAcknowledged() {
 
 /** kind: 'sort' | 'skip'. `auto` marks automatic skips (track ended / playback error). */
 async function decide({ kind, slot, auto }) {
-  if (Listen.active) return; // listening never moves files
+  if (Listen.active || modalOpen()) return; // listening never moves files; nothing sorts behind a dialog
   const sess = S.session;
   if (S.busy || !sess || !sess.current) return;
   const cur = sess.current;
@@ -1123,14 +1123,21 @@ async function decide({ kind, slot, auto }) {
   }
   if (auto === "ended" && S.autoSkips >= MAX_AUTO_SKIPS) {
     Player.userPaused = true;
-    toast(`Paused: ${MAX_AUTO_SKIPS} tracks ended without input. Press Space to continue.`, { level: "warning", ms: 10000 });
+    toast(`Paused: ${MAX_AUTO_SKIPS} tracks ended without input. Press ↓ to skip this one.`, { level: "warning", ms: 10000 });
     return;
   }
-  if (!auto && !(await ensureMoveAcknowledged())) return;
+  // Busy from here on, before the first await, so a quick double press can never sort twice.
+  S.busy = true;
+  try {
+    if (!auto && !(await ensureMoveAcknowledged())) return;
+  } catch (e) {
+    S.busy = false;
+    throw e;
+  }
+  if (!S.session || !S.session.current || S.session.current.id !== cur.id) { S.busy = false; return; }
   S.autoSkips = auto === "ended" ? S.autoSkips + 1 : 0;
   const preset = activePreset();
   const label = kind === "skip" ? "Skipped" : preset.labels[slot];
-  S.busy = true;
   S.pendingDecisionAt = performance.now();
   try {
     const snap = kind === "skip"
@@ -1164,7 +1171,7 @@ async function decide({ kind, slot, auto }) {
 }
 
 async function undo() {
-  if (S.busy || !S.session) return;
+  if (S.busy || !S.session || modalOpen()) return;
   if (!S.session.history || !S.session.history.length) { toast("Nothing to undo"); return; }
   S.busy = true;
   try {
@@ -1182,7 +1189,7 @@ async function undo() {
 
 async function undoAll() {
   if (S.busy || !S.session) return;
-  const n = S.session.history ? S.session.sorted : 0;
+  const n = S.session.sorted; // every action still undoable this session (sorts and skips)
   if (!n) { toast("Nothing to undo"); return; }
   const ok = await modal({
     title: "Undo the whole session?",
@@ -1192,7 +1199,9 @@ async function undoAll() {
   if (!ok) return;
   S.busy = true;
   try {
-    applySession(await api("undo_all"));
+    const snap = await api("undo_all");
+    for (const t of [snap.current, ...(snap.upcoming || [])].filter(Boolean)) S.restoredIds.add(t.id);
+    applySession(snap);
     toast(`Undid ${n} actions`);
     refreshCountsSoon(600);
   } catch (e) {
@@ -1213,10 +1222,17 @@ async function setMode(mode) {
   refreshCountsSoon(0);
 }
 
+/** Run a queue change after any sort in flight, so their snapshots can't arrive out of order. */
+async function queueChange(method, params = {}) {
+  for (let i = 0; S.busy && i < 150; i++) await new Promise((r) => setTimeout(r, 20));
+  S.busy = true;
+  try { return await api(method, params); } finally { S.busy = false; }
+}
+
 async function setOrder(order) {
   if (!S.session) return;
   try {
-    const snap = await api("set_order", { order });
+    const snap = await queueChange("set_order", { order });
     S.settings.track_order = order;
     applySession(snap);
     toast(order === "random" ? "Random order" : "In order");
@@ -1264,9 +1280,13 @@ function toast(message, { level = "info", undo: withUndo = false, ms, action } =
   const box = $("toasts");
   const t = el("div", `toast ${level}`);
   t.appendChild(el("span", "msg", message));
-  if (withUndo) action = { label: "Undo", fn: undo };
+  if (withUndo) {
+    action = { label: "Undo", fn: undo };
+    // Undo always undoes the most recent action, so only the newest toast may offer it.
+    for (const old of box.querySelectorAll(".toast .undo-btn")) old.remove();
+  }
   if (action) {
-    const b = el("button", null, action.label);
+    const b = el("button", withUndo ? "undo-btn" : null, action.label);
     b.type = "button";
     b.addEventListener("click", () => { t.remove(); action.fn(); });
     t.appendChild(b);
@@ -1277,16 +1297,20 @@ function toast(message, { level = "info", undo: withUndo = false, ms, action } =
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, life);
 }
 
-let modalResolve = null;
-function modal({ title, body: text, buttons }) {
-  if (modalResolve) modalResolve(null);
+let modalQueue = Promise.resolve();
+/** One dialog at a time: a second one waits until the first is answered. */
+function modal(opts) {
+  const run = modalQueue.then(() => showModal(opts));
+  modalQueue = run.catch(() => {});
+  return run;
+}
+function showModal({ title, body: text, buttons }) {
   $("modal-title").textContent = title;
   $("modal-body").textContent = text;
   const row = $("modal-buttons");
   row.textContent = "";
   return new Promise((resolve) => {
-    modalResolve = resolve;
-    const close = (v) => { $("modal").hidden = true; modalResolve = null; resolve(v); };
+    const close = (v) => { $("modal").hidden = true; resolve(v); };
     buttons.forEach((b) => {
       const btn = el("button", b.danger ? "danger-btn" : b.primary ? "primary-btn" : "ghost-btn", b.label);
       btn.type = "button";
@@ -1297,7 +1321,12 @@ function modal({ title, body: text, buttons }) {
     const def = row.querySelector(".primary-btn, .danger-btn");
     if (def) def.focus();
     modal.cancel = () => close(buttons[0].value);
-    modal.confirm = () => { const d = buttons.find((b) => b.primary || b.danger) || buttons[buttons.length - 1]; close(d.value); };
+    modal.confirm = () => {
+      // Enter presses the focused button (Tab can move to Cancel); otherwise the default one.
+      const focused = row.contains(document.activeElement) ? [...row.children].indexOf(document.activeElement) : -1;
+      const d = focused >= 0 ? buttons[focused] : buttons.find((b) => b.primary || b.danger) || buttons[buttons.length - 1];
+      close(d.value);
+    };
   });
 }
 const modalOpen = () => !$("modal").hidden;
