@@ -1023,9 +1023,15 @@ async function checkForUpdate() {
 }
 
 /** One-click update: confirm, download + verify in the background, then restart into the new version. */
+let updating = false;
 async function installUpdate() {
   const u = S.update;
-  if (!u || !u.newer) return;
+  if (!u || !u.newer || updating) return;
+  updating = true;
+  try { await runUpdate(u); } finally { updating = false; }
+}
+
+async function runUpdate(u) {
   if (!u.can_install) { toast(u.install_problem || "Download the new version from the website.", { level: "warning", ms: 8000, action: { label: "Download", fn: () => openExternal(u.url) } }); return; }
   const ok = await modal({
     title: `Update to ${u.latest}?`,
@@ -1035,11 +1041,13 @@ async function installUpdate() {
   if (!ok) return;
   try {
     await api("update_install");
-    let last = -1;
+    let last = -1, misses = 0;
     for (;;) {
       await new Promise((r) => setTimeout(r, 400));
-      const st = await api("update_status");
+      let st;
+      try { st = await api("update_status"); misses = 0; } catch (err) { if (++misses > 5) throw err; continue; }
       if (st.status === "error") throw new Error(st.error || "Update failed");
+      if (st.status === "restarting") return;
       if (st.status === "ready") break;
       if (st.status === "unpacking") { if (last < 100) { last = 100; toast(`Checking ${u.latest}…`, { ms: 3000 }); } continue; }
       const pct = Math.round((st.progress || 0) * 100);
@@ -1170,12 +1178,13 @@ async function decide({ kind, slot, auto }) {
   }
   // Busy from here on, before the first await, so a quick double press can never sort twice.
   S.busy = true;
+  let go = false;
   try {
-    if (!auto && !(await ensureMoveAcknowledged())) return;
-  } catch (e) {
-    S.busy = false;
-    throw e;
+    go = auto || (await ensureMoveAcknowledged());
+  } finally {
+    if (!go) S.busy = false; // cancelled (or failed): nothing was sorted, keep the app usable
   }
+  if (!go) return;
   if (!S.session || !S.session.current || S.session.current.id !== cur.id) { S.busy = false; return; }
   S.autoSkips = auto === "ended" ? S.autoSkips + 1 : 0;
   const preset = activePreset();
@@ -1223,6 +1232,7 @@ async function undo() {
     if (snap.current) S.restoredIds.add(snap.current.id);
     applySession(snap);
     Pad.feedback("undo");
+    clearUndoToasts();
     toast("Undone");
     refreshCountsSoon(400);
   } catch (e) {
@@ -1247,6 +1257,7 @@ async function undoAll() {
     const snap = await api("undo_all");
     for (const t of [snap.current, ...(snap.upcoming || [])].filter(Boolean)) S.restoredIds.add(t.id);
     applySession(snap);
+    clearUndoToasts();
     toast(`Undid ${n} actions`);
     refreshCountsSoon(600);
   } catch (e) {
@@ -1342,6 +1353,11 @@ function toast(message, { level = "info", undo: withUndo = false, ms, action } =
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, life);
 }
 
+/** Undo always means "the most recent action", so after an undo no older toast may still offer it. */
+function clearUndoToasts() {
+  for (const b of document.querySelectorAll("#toasts .undo-btn")) b.remove();
+}
+
 let modalQueue = Promise.resolve();
 /** One dialog at a time: a second one waits until the first is answered. */
 function modal(opts) {
@@ -1400,6 +1416,11 @@ function onKey(e) {
     if (["Escape", "h", "H", "?"].includes(e.key)) { e.preventDefault(); Guide.close(); }
     return;
   }
+  if (Listen.pickerOpen) { // above drawers and form fields: the picker is the dialog on top
+    if (e.key === "Escape") { e.preventDefault(); Listen.closePicker(); }
+    else if (e.key === "Enter") { e.preventDefault(); Listen.startFromPicker(); }
+    return;
+  }
   if (Drawers.open === "settings" || Drawers.open === "history" || Drawers.open === "hearts") {
     if (e.key === "Escape") { e.preventDefault(); Drawers.close(); }
     return; // the settings form owns the keyboard
@@ -1412,11 +1433,6 @@ function onKey(e) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code);
 
-  if (Listen.pickerOpen) {
-    if (key === "Escape") { e.preventDefault(); Listen.closePicker(); }
-    else if (key === "Enter") { e.preventDefault(); Listen.startFromPicker(); }
-    return;
-  }
   if (Listen.active && !meta && !ctrl && Listen.onKey(e, key)) return;
   if (key === "l" && !meta && !ctrl && S.session && S.settings.discover_in_topbar) { e.preventDefault(); Listen.openPicker(); return; }
 
@@ -1587,11 +1603,14 @@ function setupTrackpadFlick() {
   main.addEventListener("wheel", (e) => {
     if (S.mode !== "swipe" || !S.session || !S.session.current || modalOpen()) return;
     const vertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+    // A mouse wheel moves in whole notches (multiples of 120); only a trackpad may flick up or down.
+    if (vertical && e.wheelDeltaY && e.wheelDeltaY % 120 === 0) return;
     // A window too small for the page still needs vertical scrolling.
     if (vertical && main.scrollHeight > main.clientHeight + 4) return;
     e.preventDefault();
     const now = performance.now();
-    if (now < lockedUntil) return;
+    // After a flick, keep ignoring until the momentum stream goes quiet, so one flick never sorts twice.
+    if (now < lockedUntil) { lockedUntil = now + 200; return; }
     if (now - lastT > 250) accX = accY = 0;
     lastT = now;
     // With macOS "natural scrolling" (the default) fingers moving right/down give negative deltas; without it

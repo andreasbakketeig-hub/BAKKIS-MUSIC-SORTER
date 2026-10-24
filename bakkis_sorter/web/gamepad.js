@@ -55,10 +55,11 @@ const Pad = {
       // Left stick acts like the D-pad, with a little hysteresis so one push is one press.
       const [x = 0, y = 0] = p.axes;
       const dirs = {};
-      for (const [name, v, key] of [["left", -x, "ArrowLeft"], ["right", x, "ArrowRight"], ["up", -y, "ArrowUp"], ["down", y, "ArrowDown"]]) {
+      const horizontal = Math.abs(x) >= Math.abs(y); // a diagonal counts as its stronger direction only
+      for (const [name, v, key, axisH] of [["left", -x, "ArrowLeft", true], ["right", x, "ArrowRight", true], ["up", -y, "ArrowUp", false], ["down", y, "ArrowDown", false]]) {
         const was = last ? last.dirs[name] : v > this.STICK_OFF;
         dirs[name] = was ? v > this.STICK_OFF : v > this.STICK_ON;
-        if (last && dirs[name] && !was) this.press(key, p.index);
+        if (last && dirs[name] && !was && axisH === horizontal) this.press(key, p.index);
       }
       this.prev.set(p.index, { buttons, dirs });
     }
