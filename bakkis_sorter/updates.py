@@ -1,15 +1,16 @@
-"""Check GitHub Releases for a newer version. Read-only, one request, never downloads anything."""
+"""Check GitHub Releases for a newer version. Read-only, one request; installing is ``updater.py``."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from typing import Optional
 
 from . import __version__
 
-RELEASES_URL = "https://api.github.com/repos/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/releases/latest"
+RELEASES_URL = os.environ.get("BAKKIS_UPDATE_API") or "https://api.github.com/repos/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/releases/latest"
 TIMEOUT = 4.0
 
 
@@ -24,7 +25,8 @@ def parse_version(text: str) -> tuple:
 
 
 def check(current: str = __version__, url: str = RELEASES_URL, opener=urllib.request.urlopen) -> dict:
-    """{"current", "latest", "newer", "url"} or {"current", "error"}."""
+    """{"current", "latest", "newer", "url", "release"} or {"current", "error"}. ``release`` keeps the assets
+    (name, download URL, SHA-256 digest) for the installer."""
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "BAKKIS-MUSIC-SORTER"})
     try:
         with opener(req, timeout=TIMEOUT) as res:
@@ -39,4 +41,7 @@ def check(current: str = __version__, url: str = RELEASES_URL, opener=urllib.req
         "latest": tag.lstrip("v"),
         "newer": parse_version(tag) > parse_version(current),
         "url": data.get("html_url") or "",
+        "release": {"assets": [
+            {k: a.get(k) for k in ("name", "browser_download_url", "digest", "size")} for a in data.get("assets") or [] if isinstance(a, dict)
+        ]},
     }

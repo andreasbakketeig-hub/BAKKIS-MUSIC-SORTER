@@ -1,7 +1,7 @@
 """Desktop app: a pywebview (WKWebView) window around the local server.
 
 Native actions the web UI cannot do itself are registered on the backend as API methods:
-``choose_folder``, ``toggle_fullscreen`` and ``exit_fullscreen``. Folder drag-and-drop is received
+``choose_folder``, ``toggle_fullscreen``, ``exit_fullscreen`` and ``quit_app`` (used by the updater). Folder drag-and-drop is received
 here (pywebview only exposes full paths to Python) and handed to the UI's ``loadFolder``.
 """
 
@@ -53,8 +53,13 @@ class NativeBridge:
         self.backend.register_native("choose_folder", self.choose_folder)
         self.backend.register_native("toggle_fullscreen", self.toggle_fullscreen)
         self.backend.register_native("exit_fullscreen", self.exit_fullscreen)
+        self.backend.register_native("quit_app", self.quit_app)
 
     # ------------------------------------------------------------------ API methods
+
+    def quit_app(self) -> None:
+        """Close the window; main() then lets pending file operations finish before the process exits."""
+        self.window.destroy()
 
     def choose_folder(self) -> Optional[str]:
         start = self.backend.settings.get("default_folder_path") or str(Path.home() / "Music")

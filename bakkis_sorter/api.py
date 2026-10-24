@@ -20,7 +20,7 @@ from .config import (
     MODES, PresetError, PresetStore, config_dir, load_settings, norm_mode, repair_default_folder, reset_settings, safe_segment,
     save_settings,
 )
-from . import feedback, history, keys, listen, playlists, updates, waveform
+from . import feedback, history, keys, listen, playlists, updater, updates, waveform
 from .duplicates import DuplicateIndex
 from .metadata import MetadataCache, PeakStore
 from .server import ApiError
@@ -56,6 +56,7 @@ class AppBackend:
         self._on_change = on_change
         self._native: dict[str, Callable[..., object]] = {}
         self._closed = False
+        self.updater = updater.Installer(updater.app_bundle())
 
     # ------------------------------------------------------------------ plumbing
 
@@ -556,7 +557,35 @@ class AppBackend:
             return {"current": __version__, "error": "disabled"}
         if getattr(self, "_update_result", None) is None:
             self._update_result = updates.check()
-        return self._update_result
+        r = {k: v for k, v in self._update_result.items() if k != "release"}
+        if r.get("newer"):
+            problem = updater.install_problem(self.updater.bundle)
+            r.update(can_install=problem is None, install_problem=problem)
+        return r
+
+    def api_update_install(self) -> dict:
+        """Download and verify the newer version in the background (the UI polls update_status)."""
+        r = getattr(self, "_update_result", None) or {}
+        if not r.get("newer"):
+            raise ApiError("No newer version to install")
+        try:
+            return self.updater.start(r.get("release") or {}, r["latest"])
+        except updater.UpdateError as e:
+            raise ApiError(str(e), 409) from e
+
+    def api_update_status(self) -> dict:
+        return self.updater.snapshot()
+
+    def api_update_restart(self) -> dict:
+        """Swap in the downloaded version and quit; the helper reopens the app once this process has exited."""
+        try:
+            self.updater.restart()
+        except updater.UpdateError as e:
+            raise ApiError(str(e), 409) from e
+        quit_app = self._native.get("quit_app")
+        if quit_app is not None:
+            threading.Timer(0.3, quit_app).start()  # let this response reach the UI first
+        return self.updater.snapshot()
 
     def api_about(self) -> dict:
         return {"version": __version__, "macos": platform.mac_ver()[0] or platform.platform(), "python": platform.python_version()}

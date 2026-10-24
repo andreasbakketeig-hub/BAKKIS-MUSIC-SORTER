@@ -52,6 +52,10 @@ xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"
 
 Then open the app again.
 
+### Updating
+
+When a new version is out, the app tells you at startup. Click **Update now**: it downloads the new version, checks it against the checksum GitHub publishes, swaps it in and restarts. Your settings, presets and history stay, and you don't need to approve the app again in System Settings. (The app has to be in your Applications folder, or another folder you can write to; otherwise it offers the download link instead.)
+
 ---
 
 ## Getting started
@@ -229,7 +233,7 @@ These are on by default. Switch them off under **Settings → Advanced → Featu
 ## Privacy
 
 - The app works entirely on your Mac. It never uploads your music, file names or listening data.
-- The only network request is an optional check for a new version on GitHub at startup (Settings → Advanced → Startup → *Check for new versions*). Nothing is downloaded automatically.
+- The only network request is an optional check for a new version on GitHub at startup (Settings → Advanced → Startup → *Check for new versions*). Nothing is downloaded unless you click **Update now**.
 - Links (Follow BAKKIS, Support, Report a problem) open in your browser or mail app.
 
 ## Settings and uninstalling
@@ -323,6 +327,7 @@ bakkis_sorter/
   playlists.py   M3U8 export
   keys.py        Camelot key parsing
   updates.py     GitHub release check
+  updater.py     one-click update: download, verify, swap, relaunch
   api.py         backend methods exposed to the UI
   server.py      local HTTP server (UI, audio with Range requests, JSON API)
   app.py         pywebview window, folder dialog, drag and drop, full screen

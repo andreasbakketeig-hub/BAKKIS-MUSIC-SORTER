@@ -1015,8 +1015,42 @@ async function checkForUpdate() {
   try {
     const r = await api("check_update");
     S.update = r;
-    if (r.newer && r.url) toast(`BAKKIS MUSIC SORTER ${r.latest} is available`, { ms: 15000, action: { label: "Download", fn: () => openExternal(r.url) } });
+    if (r.newer && r.url) {
+      const action = r.can_install ? { label: "Update now", fn: installUpdate } : { label: "Download", fn: () => openExternal(r.url) };
+      toast(`BAKKIS MUSIC SORTER ${r.latest} is available`, { ms: 15000, action });
+    }
   } catch (_) { /* never bother the user about this */ }
+}
+
+/** One-click update: confirm, download + verify in the background, then restart into the new version. */
+async function installUpdate() {
+  const u = S.update;
+  if (!u || !u.newer) return;
+  if (!u.can_install) { toast(u.install_problem || "Download the new version from the website.", { level: "warning", ms: 8000, action: { label: "Download", fn: () => openExternal(u.url) } }); return; }
+  const ok = await modal({
+    title: `Update to ${u.latest}?`,
+    body: "The new version downloads in the background and is checked before anything changes. Then the app restarts. Your settings, presets and history stay.",
+    buttons: [{ label: "Not now", value: false }, { label: "Update", value: true, primary: true }],
+  });
+  if (!ok) return;
+  try {
+    await api("update_install");
+    let last = -1;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 400));
+      const st = await api("update_status");
+      if (st.status === "error") throw new Error(st.error || "Update failed");
+      if (st.status === "ready") break;
+      if (st.status === "unpacking") { if (last < 100) { last = 100; toast(`Checking ${u.latest}…`, { ms: 3000 }); } continue; }
+      const pct = Math.round((st.progress || 0) * 100);
+      if (pct >= last + 25) { last = pct; toast(`Downloading ${u.latest}… ${pct}%`, { ms: 2500 }); }
+    }
+    toast(`Restarting into ${u.latest}…`, { ms: 5000 });
+    await new Promise((r) => setTimeout(r, 600));
+    await api("update_restart");
+  } catch (e) {
+    toast(`${e.message}. You can also download it from the website.`, { level: "error", ms: 10000, action: { label: "Download", fn: () => openExternal(u.url) } });
+  }
 }
 
 /** One quiet promo line on the end screen. */

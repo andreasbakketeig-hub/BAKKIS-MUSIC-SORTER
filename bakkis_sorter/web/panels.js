@@ -566,9 +566,9 @@ const SettingsDrawer = {
     box.appendChild(logo);
     box.appendChild(el("div", "muted small", `BAKKIS MUSIC SORTER ${S.version || ""} · Free and open source (MIT)`));
     if (S.update && S.update.newer) {
-      const up = el("button", "link-btn", `Version ${S.update.latest} is available: download`);
+      const up = el("button", "link-btn", `Version ${S.update.latest} is available: ${S.update.can_install ? "update now" : "download"}`);
       up.type = "button";
-      up.addEventListener("click", () => openExternal(S.update.url));
+      up.addEventListener("click", () => (S.update.can_install ? installUpdate() : openExternal(S.update.url)));
       box.appendChild(up);
     }
     const follow = el("div", "about-links");
