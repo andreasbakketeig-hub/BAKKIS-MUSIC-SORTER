@@ -380,6 +380,7 @@ const SETTINGS_SCHEMA = [
   { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "A folder per day: <preset>/YYYY-MM-DD/. Each preset has its own switch." },
   { sub: "Controls" },
   { key: "swipe_archive_hotkey", type: "select", label: "Up arrow key", options: [["down", "Favorite"], ["up", "Archive (drag the card up for Favorite)"]] },
+  { key: "game_controller", type: "bool", label: "Game controller", note: "PlayStation 4/5, Xbox One/Series, Switch Pro and most 8BitDo controllers. Connect it (USB or Bluetooth), press any button, and it sorts like the arrow keys and rumbles on every sort. Buttons: press H." },
   { sub: "Look and sound" },
   { key: "colored_tiles", type: "bool", label: "Colored tiles", note: "Off: plain dark tiles with a thin colour stripe." },
   { key: "sort_confirmation_sound", type: "bool", label: "Click sound on sort" },
@@ -898,8 +899,11 @@ const Guide = {
         ["H", "Shortcuts"],
       ], discover ? "In Discover: ← → next / previous, ↑ heart." : ""],
     ];
-    if (typeof Pad !== "undefined" && Pad.prev.size) {
-      groups.push(["Controller", [["D-pad", "Sort (like the arrows)"], ["A", "Play / pause"], ["B", "Undo / close"], ["LB  RB", "−30 s / +30 s"], ["Start", "Shortcuts"]]]);
+    if (typeof Pad !== "undefined" && Pad.enabled) {
+      groups.push(["Game controller", [
+        ["D-pad", "Sort (or left stick)"], ["✕ / A", "Play / pause"], ["○ / B", "Undo / close"],
+        ["L1 R1 / LB RB", "−30 s / +30 s"], ["Options / ☰", "Shortcuts"],
+      ], "PlayStation / Xbox names. Works with PS4, PS5, Xbox, Switch Pro and most 8BitDo."]);
     }
     for (const [title, rows, foot] of groups) {
       const g = el("div", "guide-group");

@@ -202,7 +202,19 @@ Use headphones: with speakers the microphone also hears the music, and vocals ca
 
 ## Game controller
 
-Plug in or pair an Xbox, PlayStation or 8BitDo controller and press any button: the D-pad (or left stick) sorts like the arrow keys, **A / ✕** plays and pauses, **B / ○** undoes (or closes a dialog), **LB / RB** jump −30 / +30 s and **Start** shows the shortcuts.
+Sort from the sofa: connect a game controller with USB or Bluetooth, press any button, and it works like the keyboard. It rumbles on every sort, so you can feel each decision.
+
+| Button (PlayStation / Xbox) | Does |
+|---|---|
+| D-pad or left stick | Sort, like the arrow keys (→ Keep, ← Archive, ↑ Favorite, ↓ Skip) |
+| ✕ / A | Play / pause (or confirm in a dialog) |
+| ○ / B | Undo (or close a dialog or panel) |
+| L1 R1 / LB RB | −30 s / +30 s |
+| Options / ☰ | Shortcuts |
+
+Works with controllers macOS supports: PlayStation 4 and 5, Xbox One and Series, Nintendo Switch Pro and most 8BitDo models. It only reacts while the app's window is active, so a controller used for a game never sorts anything. Turn it off in **Settings → Advanced → Controls**.
+
+To pair a PS5 controller: hold **Create** and the **PS** button until the light bar flashes, then pick it in **System Settings → Bluetooth**.
 
 ## More features
 

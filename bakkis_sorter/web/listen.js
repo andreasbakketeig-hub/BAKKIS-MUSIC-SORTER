@@ -168,6 +168,7 @@ const Listen = {
       btn.classList.remove("pulse");
       void btn.offsetWidth;
       if (r.hearted) btn.classList.add("pulse");
+      Pad.feedback(r.hearted ? "favorite" : "skip");
       toast(r.hearted ? `Hearted (${r.count} in your list)` : `Heart removed (${r.count} in your list)`, {
         action: { label: "View list", fn: () => Drawers.show("hearts") },
       });

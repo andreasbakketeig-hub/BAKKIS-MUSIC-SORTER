@@ -1148,6 +1148,7 @@ async function decide({ kind, slot, auto }) {
     if (!auto && S.settings && !S.settings.coach_done && ++S.coachSorts >= COACH_SORTS) finishCoach();
     if (kind === "sort") { S.counts[slot] = (S.counts[slot] || 0) + 1; pressTile(slot); }
     else pressTile("skip");
+    if (!auto) Pad.feedback(kind === "skip" ? "skip" : preset.mode === "swipe" ? ["keep", "archive", "favorite"][slot] : "keep");
     flyOutCard(flyDirection(kind, slot));
     applySession(snap);
     cardEnter();
@@ -1165,6 +1166,7 @@ async function decide({ kind, slot, auto }) {
     refreshCountsSoon();
   } catch (e) {
     S.pendingDecisionAt = 0;
+    Pad.feedback("error");
     toast(e.message, { level: "error" });
     await refreshState().catch(() => {});
   } finally {
@@ -1180,6 +1182,7 @@ async function undo() {
     const snap = await api("undo");
     if (snap.current) S.restoredIds.add(snap.current.id);
     applySession(snap);
+    Pad.feedback("undo");
     toast("Undone");
     refreshCountsSoon(400);
   } catch (e) {

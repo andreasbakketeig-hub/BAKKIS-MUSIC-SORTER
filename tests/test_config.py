@@ -281,6 +281,7 @@ def test_repair_leaves_external_disks_and_own_home_alone(tmp_path):
 def test_colored_tiles_setting():
     assert config.default_settings()["colored_tiles"] is True
     assert config.normalize_settings({"colored_tiles": "false"})["colored_tiles"] is False
+    assert config.default_settings()["game_controller"] is True
 
 
 def test_feature_switches_and_reset():
