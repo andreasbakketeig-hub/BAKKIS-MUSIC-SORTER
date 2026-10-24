@@ -120,3 +120,14 @@ def test_running_from_source_cannot_install():
     inst = updater.Installer(None)
     with pytest.raises(updater.UpdateError):
         inst.start(release_for(b"x"), "9.9.9")
+
+
+def test_where_the_app_runs_from(tmp_path):
+    from pathlib import Path
+
+    assert updater.runs_from_outside_applications(Path("/private/var/folders/x/AppTranslocation/abc/d/BAKKIS MUSIC SORTER.app"))
+    assert updater.runs_from_outside_applications(Path("/Volumes/BAKKIS MUSIC SORTER/BAKKIS MUSIC SORTER.app"))
+    assert not updater.runs_from_outside_applications(Path("/Applications/BAKKIS MUSIC SORTER.app"))
+    assert not updater.runs_from_outside_applications(None)
+    assert updater.in_applications(Path("/Applications/BAKKIS MUSIC SORTER.app"))
+    assert updater.install_problem(Path("/Volumes/BAKKIS MUSIC SORTER/BAKKIS MUSIC SORTER.app")) == updater.MOVE_HINT

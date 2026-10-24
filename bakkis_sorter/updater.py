@@ -49,14 +49,29 @@ def app_bundle() -> Optional[Path]:
     return bundle if bundle is not None and bundle.suffix == ".app" else None
 
 
+MOVE_HINT = "Drag BAKKIS MUSIC SORTER to your Applications folder to update with one click."
+
+
+def runs_from_outside_applications(bundle: Optional[Path]) -> bool:
+    """Opened straight from the download (macOS runs a hidden read-only copy) or from the mounted DMG."""
+    if bundle is None:
+        return False
+    s = str(bundle)
+    return "/AppTranslocation/" in s or s.startswith("/Volumes/")
+
+
+def in_applications(bundle: Optional[Path]) -> bool:
+    return bundle is not None and bundle.parent in (Path("/Applications"), Path.home() / "Applications")
+
+
 def install_problem(bundle: Optional[Path]) -> Optional[str]:
     """Why an in-place update can't happen (None if it can)."""
     if bundle is None:
         return "Updates install from the app itself; when running from source, use git pull."
-    if "/AppTranslocation/" in str(bundle):
-        return "Move BAKKIS MUSIC SORTER to your Applications folder first, then update."
+    if runs_from_outside_applications(bundle):
+        return MOVE_HINT
     if not bundle.is_dir() or not os.access(bundle.parent, os.W_OK):
-        return f"No permission to replace the app in {bundle.parent}."
+        return f"No permission to replace the app in {bundle.parent}. {MOVE_HINT}"
     return None
 
 

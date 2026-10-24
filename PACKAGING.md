@@ -5,7 +5,8 @@ This builds the v2 app (`bakkis_sorter/`). v1 (`bakkis_music_sorter.py`) is no l
 ## What you get
 
 - `dist/BAKKIS MUSIC SORTER.app`: a **universal** app (Apple Silicon and Intel), macOS 13 Ventura or later.
-- `dist/BAKKIS-MUSIC-SORTER-<version>.zip`: the file to upload to GitHub Releases (about 10 MB).
+- `dist/BAKKIS-MUSIC-SORTER-<version>.dmg`: the installer window people download (drag the app to Applications), about 10 MB.
+- `dist/BAKKIS-MUSIC-SORTER-<version>.zip`: used by the app's one-click updater. Upload **both** to the GitHub Release.
 
 Everything is inside the app: Python, pywebview and mutagen. Audio plays in the system WebKit, so there is **no mpv, ffmpeg or Homebrew dependency**. The build script stops with an error if anything links to Homebrew.
 
@@ -24,7 +25,7 @@ The script:
 1. installs `requirements.txt` and PyInstaller into `.venv`,
 2. builds with `packaging/bakkis_music_sorter.spec` (version from `bakkis_sorter/__init__.py`, icon from `assets/icon/AppIcon.icns`, bundle id `com.bakkis.music-sorter`),
 3. checks that both architectures are present and nothing links to Homebrew,
-4. zips the app with `ditto` (keeps the bundle intact for Gatekeeper).
+4. zips the app with `ditto` (keeps the bundle intact for Gatekeeper) and builds the DMG with `dmgbuild` (layout in `packaging/dmg_settings.py`, background from `tools/make_dmg_background.py`).
 
 To change the icon: edit and run `tools/make_icon.py`, then rebuild.
 
@@ -61,7 +62,7 @@ The app is signed with the hardened runtime (`packaging/entitlements.plist` allo
 1. Set the version in `bakkis_sorter/__init__.py` (for example `2.0.0`) and commit.
 2. Run `./build_mac_app.sh`.
 3. Test the app from `dist/`, ideally on a second Mac or a fresh user account without your settings.
-4. On GitHub: **Releases → Draft a new release**, tag `v2.0.0`, attach `dist/BAKKIS-MUSIC-SORTER-2.0.0.zip`, and write what is new.
+4. On GitHub: **Releases → Draft a new release**, tag `v2.0.0`, attach `dist/BAKKIS-MUSIC-SORTER-2.0.0.dmg` and `.zip`, and write what is new.
 
 The app's update check looks at the latest GitHub release, so people get a notice once the release is published (the repository must be public for that).
 

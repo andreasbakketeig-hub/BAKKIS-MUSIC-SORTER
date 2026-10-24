@@ -220,7 +220,8 @@ def default_settings() -> dict:
         "queue_filter": True,  # BPM / key filter in the queue drawer
         "colored_tiles": True,
         "game_controller": True,  # Xbox / PlayStation / Switch controllers as a remote, with rumble  # off: grid tiles look like swipe tiles (dark, colour stripe on top)
-        "welcome_seen": False,  # the "why I built this" card, once on first launch
+        "welcome_seen": False,
+        "move_hint_seen": False,  # "drag the app to Applications", once  # the "why I built this" card, once on first launch
         "sorted_total": 0,  # tracks sorted across sessions (for the one-time support note)
         "support_nudged": False,
     }
@@ -250,6 +251,7 @@ def normalize_settings(raw: object) -> dict:
         "discover_in_topbar",
         "queue_filter",
         "welcome_seen",
+        "move_hint_seen",
         "support_nudged",
         "colored_tiles",
         "game_controller",

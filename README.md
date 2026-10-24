@@ -22,9 +22,9 @@ Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
 
 **Requirements:** macOS 13 Ventura or later, Apple Silicon or Intel.
 
-1. Download the latest `BAKKIS-MUSIC-SORTER-x.y.z.zip` from the [Releases page](https://github.com/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/releases).
-2. Open the zip (Safari usually unzips it for you) and drag **BAKKIS MUSIC SORTER** into your **Applications** folder.
-3. Open it once as described below. You only need to do this the first time.
+1. Download `BAKKIS-MUSIC-SORTER-x.y.z.dmg` from [bakkis.com/tools](https://bakkis.com/tools) or the [Releases page](https://github.com/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/releases).
+2. Open the DMG and drag **BAKKIS MUSIC SORTER** onto the **Applications** folder in the window. (Open it from Applications, not from the DMG: only then can it update itself.)
+3. Open it once as described below. You only need to do this the first time. You can then eject the DMG and delete it.
 
 ### First launch of an unsigned app
 

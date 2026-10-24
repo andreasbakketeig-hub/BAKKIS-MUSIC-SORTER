@@ -147,6 +147,8 @@ class AppBackend:
                 "scan": dict(self.scan),
                 "session": snap,
                 "default_folder_exists": self._default_folder_exists(),
+                # Packaged app opened from the download or the DMG: the UI suggests moving it (once).
+                "move_hint": updater.MOVE_HINT if updater.runs_from_outside_applications(self.updater.bundle) else None,
                 "home": str(Path.home()),
             }
 
@@ -578,6 +580,11 @@ class AppBackend:
             return self.updater.start(r.get("release") or {}, r["latest"])
         except updater.UpdateError as e:
             raise ApiError(str(e), 409) from e
+
+    def api_show_applications(self) -> str:
+        """Open the Applications folder in Finder (for the 'drag the app there' hint)."""
+        self._open_in_finder(Path("/Applications"))
+        return "/Applications"
 
     def api_update_status(self) -> dict:
         return self.updater.snapshot()

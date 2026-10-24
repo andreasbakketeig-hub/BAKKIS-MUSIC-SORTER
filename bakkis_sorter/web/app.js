@@ -1016,10 +1016,16 @@ async function checkForUpdate() {
     const r = await api("check_update");
     S.update = r;
     if (r.newer && r.url) {
-      const action = r.can_install ? { label: "Update now", fn: installUpdate } : { label: "Download", fn: () => openExternal(r.url) };
-      toast(`BAKKIS MUSIC SORTER ${r.latest} is available`, { ms: 15000, action });
+      if (r.can_install) toast(`BAKKIS MUSIC SORTER ${r.latest} is available`, { ms: 15000, action: { label: "Update now", fn: installUpdate } });
+      else toast(`BAKKIS MUSIC SORTER ${r.latest} is available. ${r.install_problem || ""}`.trim(), { ms: 15000, action: { label: "Download", fn: () => openExternal(r.url) } });
     }
   } catch (_) { /* never bother the user about this */ }
+}
+
+/** Opened from the download or the DMG: suggest moving the app to Applications (once). */
+function showMoveHint(text) {
+  setTimeout(() => toast(text, { ms: 20000, action: { label: "Show Applications", fn: () => api("show_applications").catch(() => {}) } }), 2500);
+  api("set_settings", { move_hint_seen: true }).then((x) => (S.settings = x)).catch(() => {});
 }
 
 /** One-click update: confirm, download + verify in the background, then restart into the new version. */
@@ -1770,6 +1776,7 @@ async function boot() {
     refreshCountsSoon(0);
   }
   if (S.settings.show_queue_panel_on_startup && S.session) Drawers.show("queue");
+  if (st.move_hint && !S.settings.move_hint_seen) showMoveHint(st.move_hint);
   if (S.settings.check_for_updates) setTimeout(checkForUpdate, 4000);
   if (!S.settings.welcome_seen) {
     Welcome.show(); // first launch: the welcome card points to H instead of opening the guide on top
