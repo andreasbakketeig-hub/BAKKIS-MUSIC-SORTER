@@ -898,6 +898,9 @@ const Guide = {
         ["H", "Shortcuts"],
       ], discover ? "In Discover: ← → next / previous, ↑ heart." : ""],
     ];
+    if (typeof Pad !== "undefined" && Pad.prev.size) {
+      groups.push(["Controller", [["D-pad", "Sort (like the arrows)"], ["A", "Play / pause"], ["B", "Undo / close"], ["LB  RB", "−30 s / +30 s"], ["Start", "Shortcuts"]]]);
+    }
     for (const [title, rows, foot] of groups) {
       const g = el("div", "guide-group");
       g.appendChild(el("h3", null, title));

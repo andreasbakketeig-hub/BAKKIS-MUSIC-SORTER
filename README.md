@@ -200,6 +200,10 @@ Use headphones: with speakers the microphone also hears the music, and vocals ca
 
 ---
 
+## Game controller
+
+Plug in or pair an Xbox, PlayStation or 8BitDo controller and press any button: the D-pad (or left stick) sorts like the arrow keys, **A / ✕** plays and pauses, **B / ○** undoes (or closes a dialog), **LB / RB** jump −30 / +30 s and **Start** shows the shortcuts.
+
 ## More features
 
 These are on by default. Switch them off under **Settings → Advanced → Features** if you don't use them:

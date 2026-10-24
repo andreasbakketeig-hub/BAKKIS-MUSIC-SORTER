@@ -573,6 +573,7 @@ function computePeaks(audio, n) {
 }
 
 function frame() {
+  Pad.tick(); // game controllers: a no-op without one
   if (body.classList.contains("is-player")) {
     Wave.draw();
     Wave.drawMarkers();
