@@ -409,16 +409,23 @@ class Session:
 
         if error is not None:
             library.prune_sorted_dirs(a.dest_dir, self.music_root)  # the folder we just made, if empty
+            gone = not a.src.exists()
             with self.lock:
                 a.status = "failed"
                 if a in self.history:
                     self.history.remove(a)
                 if not a.undo_requested:
                     self.counts[a.count_key] = max(0, self.counts.get(a.count_key, 0) - 1)
-                    # Put it back as *next*, so the track that is playing now is not interrupted.
-                    self.queue.insert(min(1, len(self.queue)), a.track)
+                    if gone:
+                        self.total = max(0, self.total - 1)  # nothing left to sort: it leaves the queue
+                    else:
+                        # Put it back as *next*, so the track that is playing now is not interrupted.
+                        self.queue.insert(min(1, len(self.queue)), a.track)
             self._journal_safe({"event": "failed", **self._journal_fields(a), "error": error})
-            self.notify("error", f"Could not {a.op} {a.src.name}: {error}", action_id=a.id)
+            if gone and not a.undo_requested:
+                self.notify("warning", f"{a.src.name} is not there any more, so it was removed from the queue", action_id=a.id)
+            else:
+                self.notify("error", f"Could not {a.op} {a.src.name}: {error}", action_id=a.id)
             return
 
         deleted: list[Path] = []
@@ -467,7 +474,9 @@ class Session:
         try:
             if a.op == "copy":
                 if a.dest.exists():
-                    if a.src.exists() and a.dest.stat().st_size != a.src.stat().st_size:
+                    if not a.src.exists():
+                        raise OSError("the original is gone, so the copy is kept")
+                    if a.dest.stat().st_size != a.src.stat().st_size:
                         # Not our copy any more (replaced in Finder): leave it alone.
                         raise OSError(f"{a.dest.name} was changed since it was copied; it is left in place")
                     a.dest.unlink()

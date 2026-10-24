@@ -116,14 +116,24 @@ def restore(
             results.append({"id": eid, "ok": False, "message": f"{dest.name} is no longer in {dest.parent.name}"})
             continue
         try:
+            restored: Optional[Path] = None
             if e.get("op") == "copy":
+                if not src.exists():
+                    raise OSError("the original is gone, so the copy is kept")
+                if dest.stat().st_size != src.stat().st_size:
+                    raise OSError(f"{dest.name} was changed since it was copied; it is kept")
                 dest.unlink()
-                restored: Optional[Path] = src
+                restored = src
                 _forget_copy(e, src)
             else:
                 src.parent.mkdir(parents=True, exist_ok=True)
-                restored = src if not os.path.lexists(src) else library.unique_destination(src.parent, src.name)
-                move(dest, restored)
+                restored = library.reserve_destination(src.parent, src.name)  # exclusive: never overwrites
+                try:
+                    move(dest, restored)
+                except OSError:
+                    if restored.exists() and dest.exists():
+                        restored.unlink()  # our placeholder (or a partial copy); the sorted file is intact
+                    raise
         except OSError as err:
             results.append({"id": eid, "ok": False, "message": f"Could not put back {src.name}: {err}"})
             continue

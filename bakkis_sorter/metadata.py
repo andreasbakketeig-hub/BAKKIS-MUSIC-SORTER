@@ -378,7 +378,7 @@ class MetadataCache:
                 self._inflight.discard(key)
 
     def shutdown(self) -> None:
-        self._pool.shutdown(wait=False)
+        self._pool.shutdown(wait=False, cancel_futures=True)  # queued prefetches must not delay quitting
 
 
 # --------------------------------------------------------------------------- waveform peaks (waveform.py or the UI)

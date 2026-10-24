@@ -279,8 +279,9 @@ class AppBackend:
         return s.snapshot()
 
     def api_sort(self, track_id: str, mode: str, slot: int) -> dict:
-        s = self._changing()
-        s.sort(str(track_id), norm_mode(mode), int(slot))
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.sort(str(track_id), norm_mode(mode), int(slot))
         nudge = self._count_sorted()
         out = self._after_queue_change(s)
         if nudge:
@@ -300,18 +301,21 @@ class AppBackend:
         return nudge
 
     def api_skip(self, track_id: str, mode: str = "swipe") -> dict:
-        s = self._changing()
-        s.skip(str(track_id), norm_mode(mode))
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.skip(str(track_id), norm_mode(mode))
         return self._after_queue_change(s)
 
     def api_undo(self) -> dict:
-        s = self._changing()
-        s.undo_last()
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.undo_last()
         return self._after_queue_change(s)
 
     def api_undo_all(self) -> dict:
-        s = self._changing()
-        s.undo_all()
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.undo_all()
         return self._after_queue_change(s)
 
     def api_set_order(self, order: str) -> dict:
@@ -325,8 +329,9 @@ class AppBackend:
         return {}
 
     def api_play_next(self, track_id: str) -> dict:
-        s = self._changing()
-        s.play_next(str(track_id))
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.play_next(str(track_id))
         return self._after_queue_change(s)
 
     def api_queue(self, offset: int = 0, limit: int = 100, q: str = "") -> dict:
@@ -465,8 +470,9 @@ class AppBackend:
         return self._after_queue_change(s)
 
     def api_clear_filter(self) -> dict:
-        s = self._changing()
-        s.clear_filter()
+        with self.lock:  # same lock as load_folder: no sort slips in while a scan starts
+            s = self._changing()
+            s.clear_filter()
         return self._after_queue_change(s)
 
     # ------------------------------------------------------------------ listen mode (Discover; never moves files)

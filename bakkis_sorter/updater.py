@@ -77,10 +77,13 @@ def bundle_version(app: Path) -> tuple[str, str]:
 
 
 def helper_script(old: Path, new: Path, backup: Path, staging: Path, pid: int, open_cmd: str = "open") -> str:
-    """Bash that waits for ``pid`` to exit, swaps ``new`` into ``old`` (rolling back on failure) and opens it."""
+    """Bash that waits for ``pid`` to exit, swaps ``new`` into ``old`` (rolling back on failure) and opens it.
+    If the app is still running after two minutes it changes nothing (the leftovers are cleaned up later)."""
     q = shlex.quote
     return f"""#!/bin/bash
-for i in $(seq 1 600); do kill -0 {pid} 2>/dev/null || break; sleep 0.1; done
+for i in $(seq 1 1200); do kill -0 {pid} 2>/dev/null || break; sleep 0.1; done
+kill -0 {pid} 2>/dev/null && exit 0
+[ -e {q(str(backup))} ] && exit 0
 if mv {q(str(old))} {q(str(backup))}; then
   if mv {q(str(new))} {q(str(old))}; then
     rm -rf {q(str(backup))}
@@ -125,6 +128,20 @@ class Installer:
         self.state: dict = {"status": "idle", "progress": 0.0, "error": None, "version": None}
         self._staging: Optional[Path] = None
         self._new_app: Optional[Path] = None
+        self.cleanup_leftovers()
+
+    def cleanup_leftovers(self, older_than: float = 600.0) -> None:
+        """Remove staging folders and old bundles an earlier update left next to the app (quit mid-download,
+        never restarted, a failed swap). Only our own ``.bakkis-update-*`` names, and only stale ones."""
+        if self.bundle is None or install_problem(self.bundle) is not None:
+            return
+        now = time.time()
+        try:
+            for p in self.bundle.parent.iterdir():
+                if p.name.startswith(STAGING_PREFIX) and p != self._staging and now - p.stat().st_mtime > older_than:
+                    shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -142,15 +159,16 @@ class Installer:
         if asset is None:
             raise UpdateError("This release has no verified download.")
         with self._lock:
-            if self.state["status"] in ("downloading", "unpacking", "ready"):
+            if self.state["status"] in ("downloading", "unpacking", "ready", "restarting"):
                 return dict(self.state)
             self.state = {"status": "downloading", "progress": 0.0, "error": None, "version": version}
+        self.cleanup_leftovers()
         threading.Thread(target=self._run, args=(asset, version), name="bakkis-update", daemon=True).start()
         return self.snapshot()
 
     def _run(self, asset: dict, version: str) -> None:
         assert self.bundle is not None
-        staging = self.bundle.parent / f"{STAGING_PREFIX}{int(time.time())}"
+        staging = self.bundle.parent / f"{STAGING_PREFIX}{os.getpid()}-{time.time_ns()}"
         activity = _begin_activity("Downloading an update")
         try:
             shutil.rmtree(staging, ignore_errors=True)
@@ -195,12 +213,17 @@ class Installer:
 
     def restart(self, pid: Optional[int] = None, open_cmd: str = "open") -> Path:
         """Start the swap helper (it waits for this process to exit). Returns the script path."""
-        if self.state["status"] != "ready" or self._new_app is None or self._staging is None or self.bundle is None:
-            raise UpdateError("The update is not ready yet.")
-        backup = self.bundle.parent / f"{STAGING_PREFIX}old-{int(time.time())}.app"
-        script = self._staging / "swap.sh"
-        script.write_text(helper_script(self.bundle, self._new_app, backup, self._staging, pid or os.getpid(), open_cmd))
-        script.chmod(0o755)
-        subprocess.Popen(["/bin/bash", str(script)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self._set(status="restarting")
+        with self._lock:  # exactly one helper, even if Update is confirmed twice at once
+            if self.state["status"] != "ready" or self._new_app is None or self._staging is None or self.bundle is None:
+                raise UpdateError("The update is not ready yet.")
+            self.state["status"] = "restarting"
+        try:
+            backup = self.bundle.parent / f"{STAGING_PREFIX}old-{os.getpid()}-{time.time_ns()}.app"
+            script = self._staging / "swap.sh"
+            script.write_text(helper_script(self.bundle, self._new_app, backup, self._staging, pid or os.getpid(), open_cmd))
+            script.chmod(0o755)
+            subprocess.Popen(["/bin/bash", str(script)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            self._set(status="ready")
+            raise UpdateError(f"Could not start the update: {e}") from e
         return script

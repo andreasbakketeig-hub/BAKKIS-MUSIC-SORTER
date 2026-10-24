@@ -136,3 +136,94 @@ def test_no_empty_placeholder_when_the_sorted_file_is_gone(music, tmp_path):
         assert s.notices_since(0)[-1]["level"] == "error"
     finally:
         s.close()
+
+
+def test_a_track_whose_file_is_gone_leaves_the_queue(music, tmp_path):
+    a, b = touch(music / "a.mp3", b"a"), touch(music / "b.mp3", b"b")
+    s = make(music, [a, b], tmp_path)
+    try:
+        a.unlink()
+        s.skip(s.current.id, "swipe")
+        s.flush()
+        with s.lock:
+            assert [t.path.name for t in s.queue] == ["b.mp3"] and s.total == 1
+        assert "removed from the queue" in s.notices_since(0)[-1]["message"]
+        s.skip(s.current.id, "swipe")
+        s.flush()
+        assert s.current is None  # the session can finish
+    finally:
+        s.close()
+
+
+def test_copy_undo_keeps_the_copy_when_the_original_is_gone(music, tmp_path):
+    a = touch(music / "a.mp3", b"original")
+    s = make(music, [a], tmp_path, file_operation="copy")
+    try:
+        s.sort(s.current.id, "swipe", 0)
+        s.flush()
+        copy = s.history[-1].dest
+        a.unlink()
+        s.undo_last()
+        s.flush()
+        assert copy.exists()  # the only file left is never deleted
+    finally:
+        s.close()
+
+
+def test_history_put_back_of_a_copy_keeps_it_when_the_original_is_gone(music, tmp_path):
+    from bakkis_sorter import history
+
+    a = touch(music / "a.mp3", b"original")
+    j = Journal(tmp_path / "j")
+    s = Session(music, [a], presets=PresetStore(), settings=lambda: dict(default_settings(), file_operation="copy"), journal=j)
+    s.sort(s.current.id, "swipe", 0)
+    s.close()
+    copy = music.resolve() / "BAKKIS_SORTED_COPIES" / "Quick Sort" / "Keep" / "a.mp3"
+    a.unlink()
+    entry_id = next(i["id"] for sess in history.load(j) for i in sess["items"])
+    (res,) = history.restore(j, [entry_id])
+    assert not res["ok"] and "original is gone" in res["message"] and copy.exists()
+
+
+def test_restart_starts_exactly_one_helper(tmp_path, monkeypatch):
+    from bakkis_sorter import updater
+
+    started = []
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: started.append(a) or time.sleep(0.2))
+    apps = tmp_path / "Applications"
+    (apps / "X.app").mkdir(parents=True)
+    inst = updater.Installer(apps / "X.app")
+    inst._staging = apps / ".bakkis-update-1"
+    inst._staging.mkdir()
+    inst._new_app = inst._staging / "X.app"
+    inst.state["status"] = "ready"
+    errors = []
+
+    def go():
+        try:
+            inst.restart(open_cmd="true")
+        except updater.UpdateError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(started) == 1 and len(errors) == 1
+
+
+def test_stale_update_leftovers_are_cleaned_up(tmp_path):
+    import os as _os
+
+    from bakkis_sorter import updater
+
+    apps = tmp_path / "Applications"
+    (apps / "X.app").mkdir(parents=True)
+    old = apps / ".bakkis-update-123"
+    (old / "unpacked" / "X.app").mkdir(parents=True)
+    fresh = apps / ".bakkis-update-456"
+    fresh.mkdir()
+    _os.utime(old, (time.time() - 3600, time.time() - 3600))
+    keep = apps / "Other.app"
+    keep.mkdir()
+    updater.Installer(apps / "X.app")
+    assert not old.exists() and fresh.exists() and keep.exists()
