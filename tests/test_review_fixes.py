@@ -109,3 +109,30 @@ def test_open_url_allowlist(app, monkeypatch):
     for bad in ("https://evil.example.com", "https://bakkis.com.evil.net/", "mailto:someone@else.com"):
         assert api(server, "open_url", url=bad)[0] == 400, bad
     assert len(opened) == 2
+
+
+def test_no_empty_placeholder_when_the_source_is_gone(music, tmp_path):
+    a = touch(music / "Sub" / "a.mp3", b"audio")
+    s = make(music, [a], tmp_path)
+    try:
+        a.unlink()  # removed in Finder before the sort runs
+        s.sort(s.current.id, "swipe", 0)
+        s.flush()
+        assert not any((music / "BAKKIS_SORTED").rglob("a*.mp3")) if (music / "BAKKIS_SORTED").exists() else True
+    finally:
+        s.close()
+
+
+def test_no_empty_placeholder_when_the_sorted_file_is_gone(music, tmp_path):
+    a = touch(music / "Sub" / "a.mp3", b"audio")
+    s = make(music, [a], tmp_path)
+    try:
+        s.sort(s.current.id, "swipe", 0)
+        s.flush()
+        s.history[-1].dest.unlink()  # moved away in Finder (or by a later pass)
+        s.undo_last()
+        s.flush()
+        assert not a.exists() and not list((music / "Sub").glob("a*.mp3")) if (music / "Sub").exists() else True
+        assert s.notices_since(0)[-1]["level"] == "error"
+    finally:
+        s.close()

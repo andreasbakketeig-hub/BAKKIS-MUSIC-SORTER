@@ -104,6 +104,13 @@ def _copy(src: Path, dest: Path) -> None:
     shutil.copy2(str(src), str(dest))
 
 
+def _is_empty(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size == 0
+    except OSError:
+        return False
+
+
 # --------------------------------------------------------------------------- copy-mode index
 
 
@@ -382,6 +389,8 @@ class Session:
         error: Optional[str] = None
         dest: Optional[Path] = None
         try:
+            if not a.src.exists():
+                raise FileNotFoundError(f"{a.src.name} is not there any more")
             a.dest_dir.mkdir(parents=True, exist_ok=True)
             dest = library.reserve_destination(a.dest_dir, a.src.name)
             if a.op == "copy":
@@ -391,7 +400,8 @@ class Session:
         except OSError as e:
             error = str(e)
             # A failed cross-device move/copy can leave a partial file behind; remove it only if the source survived.
-            if dest is not None and dest.exists() and a.src.exists():
+            # Our own empty placeholder always goes.
+            if dest is not None and dest.exists() and (a.src.exists() or _is_empty(dest)):
                 try:
                     dest.unlink()
                 except OSError:
@@ -464,13 +474,16 @@ class Session:
                 self._forget_copy(a.src)
                 restored = a.src
             else:
+                if not a.dest.exists():
+                    raise FileNotFoundError(f"{a.dest.name} is no longer in {a.dest.parent.name}")
                 # Recreates any source folders the cleanup removed (they are all ancestors of src).
                 a.src.parent.mkdir(parents=True, exist_ok=True)
                 restored = library.reserve_destination(a.src.parent, a.src.name)
                 _move(a.dest, restored)
         except OSError as e:
             # A failed cross-device move back can leave a partial file; remove it while the sorted file survives.
-            if a.op == "move" and restored is not None and restored.exists() and a.dest.exists():
+            # Our own empty placeholder always goes.
+            if a.op == "move" and restored is not None and restored.exists() and (a.dest.exists() or _is_empty(restored)):
                 try:
                     restored.unlink()
                 except OSError:

@@ -1104,6 +1104,12 @@ async function ensureMoveAcknowledged() {
   return true;
 }
 
+/** Why a track won't play, in words: an empty file (e.g. a cloud placeholder) says so. */
+function cantPlay(track, name) {
+  const m = S.meta.get(track.id);
+  return m && m.size === 0 ? `“${name}” is an empty file (0 bytes)` : `Can't play “${name}”`;
+}
+
 /** kind: 'sort' | 'skip'. `auto` marks automatic skips (track ended / playback error). */
 async function decide({ kind, slot, auto }) {
   if (Listen.active || modalOpen()) return; // listening never moves files; nothing sorts behind a dialog
@@ -1114,13 +1120,13 @@ async function decide({ kind, slot, auto }) {
   if (auto && s && s.file_operation === "move" && !s.move_warning_acknowledged) {
     // Never move files automatically before the user has accepted moving.
     const name = trackDisplay(cur, S.meta.get(cur.id)).title;
-    toast(auto === "error" ? `Can't play “${name}”. Press ↓ to skip it.` : "Track ended. Press ↓ to skip it.", { level: "warning", ms: 6000 });
+    toast(auto === "error" ? `${cantPlay(cur, name)}. Press ↓ to skip it.` : "Track ended. Press ↓ to skip it.", { level: "warning", ms: 6000 });
     return;
   }
   if (auto && S.restoredIds.has(cur.id)) {
     // The user undid this one on purpose; don't move it away again on its own.
     const name = trackDisplay(cur, S.meta.get(cur.id)).title;
-    toast(auto === "error" ? `Can't play “${name}”. Press ↓ to skip it.` : "Track ended.", { level: "warning", ms: 6000 });
+    toast(auto === "error" ? `${cantPlay(cur, name)}. Press ↓ to skip it.` : "Track ended.", { level: "warning", ms: 6000 });
     return;
   }
   if (auto === "ended" && S.autoSkips >= MAX_AUTO_SKIPS) {
@@ -1155,7 +1161,7 @@ async function decide({ kind, slot, auto }) {
     if (!auto) clickSound(); // after the next track has started, so sound setup never delays it
     const verb = snap.operation === "copy" ? "Copied to" : "Moved to";
     const name = trackDisplay(cur, S.meta.get(cur.id)).title;
-    if (auto === "error") toast(`Can't play “${name}” — skipped`, { level: "warning", undo: true });
+    if (auto === "error") toast(`${cantPlay(cur, name)} — skipped`, { level: "warning", undo: true });
     else if (auto === "ended") toast(`Track ended — skipped “${name}”`, { undo: true });
     else toast(kind === "skip" ? `Skipped “${name}”` : `${verb} ${label}`, { undo: true });
     if (snap.support_nudge && SUPPORT_URL) {
@@ -1542,25 +1548,29 @@ function setupDrag() {
 }
 
 function setupTrackpadFlick() {
-  let acc = 0, lastT = 0, lockedUntil = 0;
-  $("main").addEventListener("wheel", (e) => {
+  let accX = 0, accY = 0, lastT = 0, lockedUntil = 0;
+  const main = $("main");
+  main.addEventListener("wheel", (e) => {
     if (S.mode !== "swipe" || !S.session || !S.session.current || modalOpen()) return;
-    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    const vertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+    // A window too small for the page still needs vertical scrolling.
+    if (vertical && main.scrollHeight > main.clientHeight + 4) return;
     e.preventDefault();
     const now = performance.now();
     if (now < lockedUntil) return;
-    if (now - lastT > 250) acc = 0;
+    if (now - lastT > 250) accX = accY = 0;
     lastT = now;
-    // With macOS "natural scrolling" (the default) fingers moving right give negative deltaX; without it
+    // With macOS "natural scrolling" (the default) fingers moving right/down give negative deltas; without it
     // positive. WebKit says which via webkitDirectionInvertedFromDevice, so the card always follows the fingers.
-    const natural = e.webkitDirectionInvertedFromDevice !== false;
-    acc += natural ? e.deltaX : -e.deltaX;
-    if (Math.abs(acc) > 140) {
-      const dir = acc < 0 ? "right" : "left";
-      acc = 0;
-      lockedUntil = now + 700;
-      decide(gestureTarget(dir).action);
-    }
+    const sign = e.webkitDirectionInvertedFromDevice !== false ? 1 : -1;
+    if (vertical) accY += sign * e.deltaY; else accX += sign * e.deltaX;
+    let dir = null;
+    if (Math.abs(accX) > 140) dir = accX < 0 ? "right" : "left";
+    else if (Math.abs(accY) > 160) dir = accY < 0 ? "down" : "up"; // a little more travel: less accidental
+    if (!dir) return;
+    accX = accY = 0;
+    lockedUntil = now + 700; // swallow the momentum that follows a flick
+    decide(gestureTarget(dir).action);
   }, { passive: false });
 }
 

@@ -106,8 +106,8 @@ Inside `BAKKIS_SORTED_COPIES` the tracks are already copies, so a second pass mo
 |---|---|
 | Keep | **→**, drag the card right, or flick right with two fingers |
 | Archive | **←**, drag left, or flick left |
-| Favorite | **↑** or drag up (↑ can sort to Archive instead, see Settings) |
-| Skip | **↓** or drag down |
+| Favorite | **↑**, drag up, or flick up (the ↑ key can sort to Archive instead, see Settings) |
+| Skip | **↓**, drag down, or flick down |
 
 Prefer Keep on the left? Change **Settings → Sorting → Swipe direction**. The trackpad flick follows your fingers whether macOS "natural scrolling" is on or off.
 
