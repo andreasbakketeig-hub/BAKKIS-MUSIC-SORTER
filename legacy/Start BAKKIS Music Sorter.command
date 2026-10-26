@@ -21,7 +21,7 @@ fi
 VENV_DIR="$SCRIPT_DIR/.venv"
 PYTHON="$VENV_DIR/bin/python"
 PIP="$VENV_DIR/bin/pip"
-REQ_FILE="$SCRIPT_DIR/requirements.txt"
+REQ_FILE="$SCRIPT_DIR/../requirements.txt"  # the shared requirements at the repo root
 REQ_STAMP="$VENV_DIR/.requirements.stamp"
 
 requirements_stamp() {

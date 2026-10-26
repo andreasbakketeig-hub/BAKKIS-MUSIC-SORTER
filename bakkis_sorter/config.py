@@ -110,7 +110,10 @@ def migrate_from_v1(v1_dir: Optional[Path] = None) -> list[str]:
     marker = dest / MIGRATION_MARKER
     if marker.exists():
         return []
-    src = Path(v1_dir) if v1_dir is not None else bundle_dir()
+    if v1_dir is not None:
+        src = Path(v1_dir)
+    else:  # v1 lives in legacy/ (it keeps its JSON next to its script); older checkouts had it at the root
+        src = bundle_dir() / "legacy" if (bundle_dir() / "legacy").is_dir() else bundle_dir()
     copied: list[str] = []
     if src.resolve() != dest.resolve():
         settings_src = src / SETTINGS_JSON

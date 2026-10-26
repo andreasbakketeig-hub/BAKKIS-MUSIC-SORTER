@@ -1,6 +1,6 @@
 # Packaging BAKKIS MUSIC SORTER for macOS
 
-This builds the v2 app (`bakkis_sorter/`). v1 (`bakkis_music_sorter.py`) is no longer packaged.
+This builds the v2 app (`bakkis_sorter/`). v1 (`legacy/bakkis_music_sorter.py`) is no longer packaged.
 
 ## What you get
 
