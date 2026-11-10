@@ -13,6 +13,7 @@ import { PresetEditor } from "./presets.js";
 import { describeFolder } from "../cards.js";
 import { pickFolderPath, loadFolder, exportPlaylists, installUpdate } from "../folder.js";
 import { setMode } from "../decisions.js";
+import { CommentsModal } from "../comments.js";
 
 export const isCopy = () => window.S && window.S.settings && window.S.settings.file_operation === "copy";
 
@@ -39,18 +40,12 @@ export const SETTINGS_SCHEMA = [
   { key: "end_of_track", type: "select", label: "When a track ends", options: [["skip", "Skip it and play the next"], ["stop", "Stop"]] },
   { section: "Presets" },
   { type: "presets" },
+  { section: "Music Promos (Inflyte & Trackstack)" },
+  { type: "promo_settings" },
   { advanced: true },
   { sub: "Files" },
   { key: "hide_copied_on_rescan", type: "bool", label: "Hide tracks I already copied", note: "When the folder is loaded again.", show: isCopy },
   { key: "create_dated_sorting_sessions", type: "bool", label: "Date folders for new presets", note: "A folder per day: <preset>/YYYY-MM-DD/. Each preset has its own switch." },
-  {
-    key: "promo_duplicate_retention_days",
-    type: "select",
-    label: "Promo duplicate history",
-    options: [[90, "Keep for 90 days"], [180, "Keep for 180 days (recommended)"], [365, "Keep for 1 year"], [0, "Keep forever"]],
-    number: true,
-    note: "Flags previously rated or dismissed tracks if re-sent under a new promo.",
-  },
   { sub: "Controls" },
   { key: "swipe_archive_hotkey", type: "select", label: "Up arrow key", options: [["down", "Favorite"], ["up", "Archive (drag the card up for Favorite)"]] },
   { key: "game_controller", type: "bool", label: "Game controller", note: "PlayStation 4/5, Xbox One/Series, Switch Pro and most 8BitDo controllers. Connect it (USB or Bluetooth), press any button, and it sorts like the arrow keys and rumbles on every sort. Buttons: press H." },
@@ -99,6 +94,7 @@ export const SettingsDrawer = {
       if (item.sub) { box.appendChild(window.el("h4", "set-sub", item.sub)); continue; }
       if (item.advanced) { box = this.advancedBox(body); continue; }
       if (item.type === "presets") { this.renderPresets(box); continue; }
+      if (item.type === "promo_settings") { this.renderPromoSettings(box); continue; }
       if (item.type === "export") { box.appendChild(this.exportRow()); continue; }
       if (item.type === "reset") { box.appendChild(this.resetRow()); continue; }
       if (item.type === "diagnostics") { this.renderDiagnostics(box); continue; }
@@ -317,6 +313,97 @@ export const SettingsDrawer = {
 
     updateStats();
     refreshLogs();
+  },
+
+  renderPromoSettings(box) {
+    const el = window.el;
+    const S = window.S;
+    const s = S ? S.settings : {};
+    const api = window.api;
+
+    const wrap = el("div", "set-promo-group");
+    wrap.dataset.anchor = "promos";
+
+    // 1. Promo Download Folder
+    const dlRow = el("div", "set-row");
+    dlRow.appendChild(el("div", "set-label", "Promo download folder"));
+    const dlPath = (s && s.promo_download_dir) || "~/Downloads";
+    const pathDiv = el("div", "set-path");
+    pathDiv.textContent = dlPath;
+    pathDiv.title = dlPath;
+    dlRow.appendChild(pathDiv);
+
+    const dlBtns = el("div", "set-btns");
+    const chooseBtn = el("button", "ghost-btn small-btn", "Choose…");
+    chooseBtn.type = "button";
+    chooseBtn.addEventListener("click", async () => {
+      try {
+        const folder = await api("choose_folder");
+        if (folder) {
+          await this.save({ promo_download_dir: folder });
+          this.render();
+        }
+      } catch (err) {
+        window.toast("Folder chooser failed: " + err.message, { level: "error" });
+      }
+    });
+    dlBtns.appendChild(chooseBtn);
+
+    if (dlPath !== "~/Downloads") {
+      const resetBtn = el("button", "ghost-btn small-btn", "Reset to ~/Downloads");
+      resetBtn.type = "button";
+      resetBtn.addEventListener("click", async () => {
+        await this.save({ promo_download_dir: "~/Downloads" });
+        this.render();
+      });
+      dlBtns.appendChild(resetBtn);
+    }
+    dlRow.appendChild(dlBtns);
+    dlRow.appendChild(el("div", "set-note", "Where full-resolution downloads from Trackstack are saved. Existing files are never moved."));
+    wrap.appendChild(dlRow);
+
+    // 2. Comments & Ratings
+    const commRow = el("div", "set-row");
+    commRow.appendChild(el("div", "set-label", "Feedback comments & ratings"));
+    const commBtns = el("div", "set-btns");
+    const editCommBtn = el("button", "ghost-btn small-btn", "💬 Configure Comments & Ratings…");
+    editCommBtn.type = "button";
+    editCommBtn.id = "btn-settings-comments";
+    editCommBtn.addEventListener("click", () => {
+      CommentsModal.open();
+    });
+    commBtns.appendChild(editCommBtn);
+    commRow.appendChild(commBtns);
+    commRow.appendChild(el("div", "set-note", "Customize star ratings (5★ Feeling this, 4★ Keep / Maybe) and randomized comment pools."));
+    wrap.appendChild(commRow);
+
+    // 3. Review Previous Feedback
+    const histRow = el("div", "set-row");
+    histRow.appendChild(el("div", "set-label", "Review previous feedback"));
+    const histBtns = el("div", "set-btns");
+    const histBtn = el("button", "ghost-btn small-btn", "📜 Review Previous Feedback…");
+    histBtn.type = "button";
+    histBtn.id = "btn-settings-promo-history";
+    histBtn.addEventListener("click", () => {
+      if (window.Drawers) window.Drawers.show("promo-history");
+    });
+    histBtns.appendChild(histBtn);
+    histRow.appendChild(histBtns);
+    histRow.appendChild(el("div", "set-note", "Browse past promo reviews, track signatures, delivery status, and submitted feedback."));
+    wrap.appendChild(histRow);
+
+    // 4. Duplicate Campaign Shield
+    const retItem = {
+      key: "promo_duplicate_retention_days",
+      type: "select",
+      label: "Duplicate campaign shield",
+      options: [[90, "Keep for 90 days"], [180, "Keep for 180 days (recommended)"], [365, "Keep for 1 year"], [0, "Keep forever"]],
+      number: true,
+      note: "Flags previously rated or dismissed tracks if re-sent under a new promo campaign.",
+    };
+    wrap.appendChild(this.renderItem(retItem));
+
+    box.appendChild(wrap);
   },
 
   renderItem(item) {

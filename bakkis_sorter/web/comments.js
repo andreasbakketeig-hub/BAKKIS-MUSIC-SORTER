@@ -75,6 +75,10 @@ export const CommentsModal = {
         promo_rating_keep: keepRating,
         promo_download_dir: promoDlDir,
       });
+      if (window.refreshState) await window.refreshState();
+      if (window.Drawers && window.Drawers.open === "settings" && window.SettingsDrawer) {
+        window.SettingsDrawer.render();
+      }
       toast("Comments & settings saved to database", { level: "info" });
       this.close();
     } catch (e) {

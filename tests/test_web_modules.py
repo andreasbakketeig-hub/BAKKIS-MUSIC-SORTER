@@ -202,3 +202,15 @@ def test_promo_caught_up_and_history_drawer() -> None:
     assert "btn-promo-history" in app_js
     assert "btn-caught-up-history" in app_js
     assert "promo-caught-up" in app_js
+
+
+def test_settings_drawer_includes_promo_section_and_actions() -> None:
+    """Verify that settings.js includes the Music Promos section, comments dialog launcher, and promo history launcher."""
+    settings_code = (WEB_DIR / "drawers" / "settings.js").read_text(encoding="utf-8")
+    assert "CommentsModal" in settings_code
+    assert 'section: "Music Promos (Inflyte & Trackstack)"' in settings_code
+    assert 'type: "promo_settings"' in settings_code
+    assert "btn-settings-comments" in settings_code
+    assert "btn-settings-promo-history" in settings_code
+    assert "renderPromoSettings" in settings_code
+
