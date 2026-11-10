@@ -9,7 +9,7 @@ from bakkis_sorter.session import Journal, Session, SessionError, Worker
 
 from .audio_fixtures import make_mp3
 from .conftest import touch
-from .test_server import api, app, load  # noqa: F401  (fixture + helpers)
+from .server_helpers import api, app, load  # noqa: F401  (fixture + helpers)
 
 
 def test_reserve_destination_is_exclusive(tmp_path):

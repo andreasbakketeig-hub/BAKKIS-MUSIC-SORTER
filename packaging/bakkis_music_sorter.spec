@@ -1,21 +1,35 @@
 # PyInstaller spec for BAKKIS MUSIC SORTER v2. Built by ../build_mac_app.sh; see ../PACKAGING.md.
 #
-# A universal2 (Apple Silicon + Intel) windowed .app. pywebview uses the system WebKit, so no browser
-# or audio player is bundled. Set CODESIGN_IDENTITY to sign with a Developer ID (hardened runtime).
+# Windowed macOS .app targeting Apple Silicon (arm64) by default (or universal2 if configured).
+# pywebview uses macOS system WebKit, so no heavy browser engines are bundled.
 import os
+import platform
 import re
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path(SPECPATH).parent
 APP_NAME = "BAKKIS MUSIC SORTER"
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "bakkis_sorter" / "__init__.py").read_text()).group(1)
 IDENTITY = os.environ.get("CODESIGN_IDENTITY") or None
+TARGET_ARCH = os.environ.get("BAKKIS_ARCH", platform.machine())
+
+# Collect libsonare native dylib, signatures, and models
+sonare_datas, sonare_binaries, sonare_hidden = collect_all("libsonare")
+
+datas = [
+    (str(ROOT / "bakkis_sorter" / "web"), "bakkis_sorter/web"),
+] + sonare_datas
+
+binaries = sonare_binaries
+hiddenimports = ["webview.platforms.cocoa", "libsonare"] + sonare_hidden
 
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "bakkis_sorter" / "web"), "bakkis_sorter/web")],
-    hiddenimports=["webview.platforms.cocoa"],
+    datas=datas,
+    binaries=binaries,
+    hiddenimports=hiddenimports,
     excludes=["tkinter", "PIL", "pytest", "PyInstaller", "setuptools"],
     noarchive=False,
 )
@@ -27,7 +41,7 @@ exe = EXE(
     exclude_binaries=True,
     name=APP_NAME,
     console=False,
-    target_arch="universal2",
+    target_arch=TARGET_ARCH,
     codesign_identity=IDENTITY,
     entitlements_file=str(ROOT / "packaging" / "entitlements.plist") if IDENTITY else None,
 )

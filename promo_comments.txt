@@ -1,0 +1,23 @@
+# ============================================================================
+# BAKKIS x Inflyte Auto-Feedback Comment Pool
+#
+# Lines under [5/5] are cycled randomly when you press ↑ (Feeling it -> 5/5).
+# Lines under [4/5] are cycled randomly when you press → (Maybe / Keep -> 4/5).
+# Blank lines and lines starting with # are ignored.
+# ============================================================================
+
+[5/5]
+Groovy af
+Absolute weapon
+Feeling this one 
+Banger! 
+LOVING THIS
+Amazing AF!!!
+SO HYPED!!!!
+NEED THIS IN MY LIFE
+[4/5]
+Dope af
+Great work
+Dope track
+Good job
+

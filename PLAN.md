@@ -1,19 +1,17 @@
 # BAKKIS MUSIC SORTER v2 — rebuild plan
 
-Status: milestones 1–6 done on `v2-pywebview` (plus a review pass); next: features below, then packaging. Written 2026-10-23 after a full review of v1 (`bakkis_music_sorter.py`, Tkinter, 8,634 lines).
-Owner: Andreas (BAKKIS). Communicate with him in Norwegian; code, comments and commits in English.
+Status: v3.0.0 major milestone implemented on `manhof-3.x-update` (Unified Promo Reviewer, Libsonare Audio Engine, Modernized Frontend, and Full Architecture Modularization).
 
 ## Goal
 
-Rebuild the app with a modern UI (pywebview + HTML/CSS/JS) that is **fast and responsive**, keeps **full feature parity** with v1,
-and can be **shared with other DJs and friends** as a double-clickable macOS app.
+Rebuild and evolve the app with a modern UI (pywebview + HTML/CSS/JS) that is **fast and responsive**, keeps **full feature parity** with v1, integrates unified promo review across Inflyte and Trackstack, and can be **shared with other DJs and friends** as a double-clickable macOS app.
 
-## Decisions (agreed with Andreas)
+## Decisions
 
 | Topic | Decision |
 |---|---|
 | UI toolkit | Leave Tkinter. **pywebview** (WKWebView on macOS) with an HTML/CSS/JS frontend, Python backend. |
-| Scope v1 of the rebuild | **Full parity** with the old app (checklist below), redesigned UX. |
+| Scope of the rebuild | **Full parity** with the old app, redesigned UX, plus encrypted local storage and unified promo review. |
 | File handling | **Move by default**, **Copy** as a setting. Warn once that moving breaks Rekordbox/Serato library links. |
 | Platform | **macOS only.** |
 | Playback | **Drop mpv.** Play audio in WebKit via `<audio>` served by a local HTTP server with Range support. Removes the mpv/dylib packaging problem and makes seeking instant. |
@@ -32,6 +30,11 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 | Ko-fi spots (2.0.0) | Settings → About, a quiet link on the welcome card, one toast after 250 sorted tracks (once), README + FUNDING.yml. **Not** in the top bar or on the end screen. |
 | Settings layout (2.0.2) | Main view: Music folder, Sorting (Move/Copy, with "Remove folders that become empty" under Move; Swipe direction), Playback, Presets. Everything else in a collapsed **Advanced** part (Files, Controls, Look and sound, Features, Startup, Reset all settings). Options without effect are hidden (copy-only / move-only). "Show advanced features" is gone: Discover and the BPM/key filter are on by default with their own switches; playlist export is always available. Welcome card closes only via its button, Enter or Esc. |
 | Updates (2.1.0) | One-click **Update now** (toast at startup and in About): downloads the release zip, verifies the SHA-256 GitHub publishes for the asset, unpacks next to the app, checks bundle id + version, then a helper swaps the bundles after the app quits and reopens it. Only on the user's click; never in the background. No quarantine on the new app, so no second "Open Anyway". Running from source or from App Translocation falls back to the download link. |
+| Version 2.1.2 | Integrated unified promo review queue (`⚡ Review All Promos`) across Inflyte and Trackstack, macOS Keychain 256-bit AES-256 encrypted SQLite database (`bakkis.db`), burst-first token-bucket API rate limiting, live connection indicators, and direct high-quality downloads into `~/Music/Inflyte Music`. |
+| Version 2.1.3 | Dedicated promo caught-up empty state ("All Caught Up!"), and in-app Promo Review History drawer with instant search, delivery status indicators (Inflyte Dropbox auto-sync vs Trackstack direct downloads), and SQLite feedback retrieval. |
+| Version 2.1.4 | Frontend architecture & style modularization: segmented monolithic `panels.js` into modular `web/drawers/` controllers and monolithic `app.css` into domain `web/css/` stylesheets. |
+| Version 2.1.5 | Modularized metadata (`metadata/`), config (`config/`), and segmented server test suite. |
+| Version 3.0.0 | Major Milestone (`__version__ = "3.0.0"`). Unified Promo Reviewer across Inflyte + Trackstack, offline stash travel mode, native Apple Silicon `libsonare` BPM/key/drop detection, waveform BLOB storage, 50-track lookahead pipeline, virtual scrolling queue, domain modular stylesheets (`web/css/`) and drawers (`web/drawers/`), and complete subsystem modularization. |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)
@@ -50,20 +53,35 @@ and can be **shared with other DJs and friends** as a double-clickable macOS app
 
 ```
 bakkis_sorter/
-  __init__.py      version, APP_NAME
-  config.py        paths (bundle dir, user config dir), settings load/save/normalize/migrate, mode presets store + CRUD
+  __init__.py      version (2.1.2), APP_NAME
+  platform.py      Cocoa masks, pywebview dialog IDs, and platform-specific window constants
+  types.py         typed frozen dataclasses (WindowLayout, TrackstackAuthState, InflyteAuthState, AppNotice)
+  logger.py        structured logging with SQLiteLogHandler rolling buffer in bakkis.db
+  bridge.py        BaseWebViewBridge: shared pywebview window lifecycle, PyObjC ordering, and JS timeouts
+  config.py        paths (bundle dir, user config dir), settings & presets stored in bakkis.db kv_store
   library.py       supported formats, scanning (thread, cancel, progress), skip-dir rules, BAKKIS_SORTED destination paths,
                    unique_destination, empty-source-folder cleanup chain
-  metadata.py      mutagen: duration, title, artist, BPM, key, embedded cover bytes; LRU cache; prefetch thread pool
+  metadata.py      mutagen: duration, title, artist, BPM, key, embedded cover bytes; LRU cache; PeakStore in bakkis.db
   session.py       queue (source of truth), sort/skip/undo/undo-all, single worker thread for file ops,
-                   persistent journal (JSONL), copy-mode "already sorted" index, counters, notices
+                   session history in bakkis.db, copy_index in bakkis.db, counters, notices
+  storage.py       encrypted SQLite storage (bakkis.db) in WAL mode via macOS Keychain 256-bit AES-256-CBC + HMAC-SHA256,
+                   caching promo metadata, review state, waveform peaks, copy index, app logs, and settings
+  ratelimit.py     thread-safe token-bucket rate limiter with burst capability, exponential backoff, jitter, and priority lane
+  inflyte/         subpackage for Inflyte Promo Box integration:
+                   - models.py: InflyteTrack, InflytePromo, InflyteAction
+                   - comments.py: CommentPool and promo_comments.txt rotation
+                   - bridge.py: InflyteBridge (subclasses BaseWebViewBridge), CSRF tokens, and DOM scrapers
+                   - session.py: InflyteSession, multi-track queue, prefetching, and auto-feedback submission
+                   - __init__.py: top-level re-exports for seamless imports
+  trackstack.py    TrackstackBridge: WKWebView bridge for Trackstack, dynamic cookie/localStorage CUID discovery,
+                   pending queue ingestion, Thumbs Up / Down routing, and direct high-quality downloads to ~/Music/Inflyte Music
   server.py        ThreadingHTTPServer on 127.0.0.1:<random port> with a per-launch secret token:
                    GET / and /static/* (UI), GET /audio/<track_id> (Range support), GET /cover/<track_id>,
                    POST /api/<method> (JSON)
-  app.py           pywebview window, native folder dialog, fullscreen, reveal in Finder, shutdown
-  web/             index.html, app.css, app.js (no build step, no framework needed)
+  app.py           pywebview window, native folder dialog, fullscreen, window layout persistence, shutdown
+  web/             index.html, app.css, app.js, panels.js (no build step, no framework needed)
 main.py            entry point
-tests/             pytest for config, library, session (moves, copy, undo, journal, cleanup, collisions)
+tests/             pytest for config, library, session, storage, rate limiting, logger, Inflyte, and Trackstack
 ```
 
 Why an HTTP API instead of only `js_api`: the same frontend runs in a normal browser against the server for fast UI development and
@@ -193,15 +211,29 @@ from Finder, a real two-finger flick, and a first launch on a Mac/user account w
 - Remove `_bakkis_sort_click.wav` from git (sound is synthesized in v2).
 - Decide on PR #1 (`AGENTS.md`) — merge or close; this file + `CLAUDE.md` supersede it.
 
-## Features added after the review (all approved by Andreas, 2026-10-23)
+## Features added after the review
 
 1. **Export playlists for Rekordbox / Serato**: M3U8 per destination folder (and Rekordbox XML) after or during a session.
 2. **History across sessions**: a view over the journal with "put back" for past sessions; never overwrites.
 3. **Filter / order the queue by BPM or key** (BPM range, Camelot order).
-4. **Report a problem**: prefilled e-mail to bakkis@bakkis.com with version, macOS and a recent log excerpt.
+4. **Report a problem**: prefilled e-mail with version, macOS and a recent log excerpt.
 5. **Update check**: on startup, compare with the latest GitHub Release and show a notice (no auto-update; can be turned off; documented in README since it uses the network).
 6. **Duplicate warning**: flag tracks that already exist in BAKKIS_SORTED (title + artist + duration).
 7. **Search the queue** by name in the queue drawer.
+8. **Unified Promo Reviewer (Inflyte + Trackstack)**:
+   - Single unified review queue combining all unreviewed Inflyte and Trackstack promos.
+   - Per-platform status chips (`INFLYTE`, `TRACKSTACK`) and topbar/main landing login buttons with live `🟢`/`⚪` indicators.
+   - Dynamic track stepping: `Track 1` starts at `2:00`; pressing `↓` (Skip) steps through `Track 2..N` at `2:00` before skipping the promo.
+   - Decision mapping:
+     - **Inflyte**: `↑` (5/5 + comment + Dropbox sync), `→` (4/5 + comment + Dropbox sync), `←` (dismiss promo).
+     - **Trackstack**: `↑` / `→` (Thumbs Up to `Downloaded` inbox + download full-quality audio files directly into `~/Music/Inflyte Music`), `←` (Thumbs Down / decline).
+9. **Encrypted SQLite Database (`bakkis.db`)**:
+   - Stored in `~/Library/Application Support/BAKKIS MUSIC SORTER/bakkis.db` (WAL mode).
+   - Encrypted with AES-256-CBC + HMAC-SHA256 (`CommonCrypto`) via master key managed in macOS Keychain (`service="com.bakkis.music-sorter"`, `account="db-master-key"`).
+   - Manages promo caching, review history, key-value state, and automatic media cleanup on review.
+10. **Token-Bucket Rate Limiter with Backoff**:
+    - Burst-first rate limiter (`burst=10`) with priority bypass lane for active playback/user actions.
+    - Exponential backoff with jitter on `HTTP 429` / `5xx` / `Retry-After`.
 
 ## Milestones
 

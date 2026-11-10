@@ -1,7 +1,6 @@
-# Tkinter is built into Python.
-# Audio metadata uses mutagen. Playback uses macOS built-in afplay.
-# Pillow: logo image (resize + transparency) for branding footer.
+# Core dependencies for BAKKIS MUSIC SORTER v2
 mutagen>=1.47.0
-Pillow>=10.0.0
-# v2 (bakkis_sorter/, main.py): pywebview window, playback in WebKit.
 pywebview>=5.0
+libsonare>=1.10.0
+numpy>=2.0.0
+

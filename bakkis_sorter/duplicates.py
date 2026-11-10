@@ -18,12 +18,43 @@ from .metadata import TrackMeta
 DURATION_TOLERANCE = 2.0  # seconds
 _NOISE_RE = re.compile(r"\((?:original|extended)(?: mix| version)?\)|[^\w\s]", re.IGNORECASE)
 
+_FEAT_RE = re.compile(r"\b(?:feat\.?|ft\.?|featuring|vs\.?|pres\.?|presents|with)\b.*", re.IGNORECASE)
+_MIX_RE = re.compile(r"\s*[\(\[](?:original|extended|club|radio|dub|instrumental|vocal|remix|edit|vip|mix|version)[\s\w]*[\)\]]", re.IGNORECASE)
+_PUNCT_RE = re.compile(r"[^\w\s]", re.IGNORECASE)
+
 
 def norm(text: Optional[str]) -> str:
     """Comparable form: lowercase, no punctuation, no "(Original Mix)" suffix, single spaces."""
     if not text:
         return ""
     return " ".join(_NOISE_RE.sub(" ", text.lower()).split())
+
+
+def normalize_artist(artist: Optional[str]) -> str:
+    """Strip featuring/vs/with tags, punctuation, and normalize whitespace for duplicate matching."""
+    if not artist:
+        return ""
+    a = _FEAT_RE.sub("", artist)
+    a = _PUNCT_RE.sub(" ", a.lower())
+    return " ".join(a.split())
+
+
+def normalize_title(title: Optional[str]) -> str:
+    """Strip bracketed mix suffixes (e.g. Club Mix, Extended Mix), punctuation, and lowercase."""
+    if not title:
+        return ""
+    t = _MIX_RE.sub("", title)
+    t = _PUNCT_RE.sub(" ", t.lower())
+    return " ".join(t.split())
+
+
+def track_signature(artist: Optional[str], title: Optional[str]) -> Optional[str]:
+    """Generate a canonical 'artist:title' signature for cross-promo duplicate tracking."""
+    a = normalize_artist(artist)
+    t = normalize_title(title)
+    if not a or not t:
+        return None
+    return f"{a}:{t}"
 
 
 def key_for(meta: TrackMeta) -> Optional[tuple[str, str]]:

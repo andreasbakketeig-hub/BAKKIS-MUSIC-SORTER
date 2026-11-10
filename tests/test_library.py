@@ -168,3 +168,25 @@ def test_cleanup_stops_at_nonempty_subdir(music):
     src.unlink()
     assert library.cleanup_empty_parents(src, music) == ([], None)
     assert (r / "A").is_dir()
+
+
+def test_scan_job_streaming_batches(music):
+    for i in range(55):
+        touch(music / f"track_{i:02d}.mp3")
+    batches = []
+    done = []
+    job = library.ScanJob(
+        music,
+        batch_size=20,
+        on_batch=batches.append,
+        on_done=done.append,
+    ).start()
+    job.join(5)
+    assert len(done) == 1 and len(done[0]) == 55
+    assert len(batches) == 3
+    assert len(batches[0]) == 20
+    assert len(batches[1]) == 20
+    assert len(batches[2]) == 15
+    flattened = [p for b in batches for p in b]
+    assert flattened == done[0]
+

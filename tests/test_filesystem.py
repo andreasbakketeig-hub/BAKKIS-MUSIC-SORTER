@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 from bakkis_sorter import history, library
 from bakkis_sorter.config import PresetStore, default_settings
 from bakkis_sorter.session import Journal, Session

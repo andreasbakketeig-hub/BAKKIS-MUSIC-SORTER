@@ -3,7 +3,7 @@ import random
 from bakkis_sorter import listen, metadata
 
 from .audio_fixtures import make_mp3
-from .test_server import api, app, load, request  # noqa: F401  (fixture + helpers)
+from .server_helpers import api, app, load, request  # noqa: F401  (fixture + helpers)
 
 
 def tree(music):

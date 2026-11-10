@@ -20,6 +20,7 @@ from . import library, playlists
 from .config import config_dir, safe_segment, write_json_atomic
 from .metadata import TrackMeta
 from .session import Journal, Track, new_track
+from .storage import EncryptedStorage, get_storage
 
 HEARTS_JSON = "hearts.json"
 DISCOVER_DIR = "Discover"
@@ -95,19 +96,40 @@ class ListenSession:
 
 
 class Hearts:
-    """Hearted tracks by path, kept across launches until they are made into a folder or cleared."""
+    """Hearted tracks by path, kept across launches until they are made into a folder or cleared.
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    Backed by bakkis.db kv_store with automatic migration from legacy hearts.json.
+    """
+
+    def __init__(self, path: Optional[Path] = None, *, storage: Optional[EncryptedStorage] = None) -> None:
         self.path = Path(path) if path is not None else config_dir() / HEARTS_JSON
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            items = data.get("items") if isinstance(data, dict) else None
-        except (OSError, ValueError):
-            items = None
-        self.items: list[dict] = [i for i in (items or []) if isinstance(i, dict) and i.get("path")]
+        self.storage = storage or get_storage()
+
+        # 1. Try reading from SQLite kv_store
+        db_items = self.storage.get_kv("hearts")
+        if isinstance(db_items, list):
+            self.items: list[dict] = [i for i in db_items if isinstance(i, dict) and i.get("path")]
+            return
+
+        # 2. Fallback & migration from legacy hearts.json
+        items = None
+        if self.path.is_file():
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                items = data.get("items") if isinstance(data, dict) else None
+            except (OSError, ValueError):
+                items = None
+        self.items = [i for i in (items or []) if isinstance(i, dict) and i.get("path")]
+        if self.items:
+            self._save()
+            try:
+                # Retain old file as backup
+                self.path.rename(self.path.with_suffix(".json.migrated"))
+            except OSError:
+                pass
 
     def _save(self) -> None:
-        write_json_atomic(self.path, {"version": 1, "items": self.items})
+        self.storage.put_kv("hearts", self.items)
 
     def has(self, path: Path) -> bool:
         return any(i["path"] == str(path) for i in self.items)

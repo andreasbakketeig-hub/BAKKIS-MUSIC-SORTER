@@ -1,7 +1,7 @@
 """Sorting in steps: Genre Sort first, then Quick Sort inside each genre folder."""
 
 from .audio_fixtures import make_mp3
-from .test_server import api, app, load  # noqa: F401  (fixture + helpers)
+from .server_helpers import api, app, load  # noqa: F401  (fixture + helpers)
 
 
 def test_genre_then_quick_sort_inside_the_genre_folder(app, music, monkeypatch):

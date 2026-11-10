@@ -77,3 +77,34 @@ def test_drop_loads_folder_in_ui(music):
         assert len(win.js) == 3
     finally:
         backend.close()
+
+
+def test_window_layout_persistence(tmp_path, monkeypatch):
+    import secrets
+    from bakkis_sorter.storage import EncryptedStorage
+    import bakkis_sorter.storage as storage_mod
+    import bakkis_sorter.app as app_mod
+
+    store = EncryptedStorage(db_path=tmp_path / "bakkis.db", master_key=secrets.token_bytes(32))
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: store)
+    monkeypatch.setattr(app_mod, "get_storage", lambda: store)
+
+    win = FakeWindow()
+    win.width = 1440
+    win.height = 920
+    win.x = 100
+    win.y = 80
+
+    b, backend = bridge(win)
+    try:
+        b.save_window_layout()
+        saved = store.get_kv("window_layout")
+        assert saved is not None
+        assert saved["width"] == 1440
+        assert saved["height"] == 920
+        assert saved["x"] == 100
+        assert saved["y"] == 80
+        assert saved["is_fullscreen"] is False
+    finally:
+        backend.close()
+        store.close()
