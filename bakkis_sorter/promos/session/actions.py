@@ -211,7 +211,10 @@ class SessionActionsMixin:
                 if self.trackstack_bridge is None:  # type: ignore[attr-defined]
                     raise SessionError("Trackstack bridge is not initialized")
                 if a.kind.startswith("rate_"):
-                    saved_files = self.trackstack_bridge.accept_and_download_submission(a.promo)  # type: ignore[attr-defined]
+                    settings_dict = self._settings() if callable(self._settings) else {}  # type: ignore[attr-defined]
+                    raw_dl = str(settings_dict.get("promo_download_dir") or "~/Downloads").strip()
+                    target_dir = Path(raw_dl).expanduser() if raw_dl else None
+                    saved_files = self.trackstack_bridge.accept_and_download_submission(a.promo, dest_dir=target_dir)  # type: ignore[attr-defined]
                     with self.lock:  # type: ignore[attr-defined]
                         a.status = "done"
                     if self.storage is not None:  # type: ignore[attr-defined]
@@ -227,7 +230,8 @@ class SessionActionsMixin:
                             },
                             media_paths=self._promo_media_paths(a.promo),
                         )
-                    dl_note = f"Downloaded {len(saved_files)} file(s) to ~/Music/Inflyte Music" if saved_files else "Moved to Downloaded"
+                    folder_label = f"~/{target_dir.name}" if target_dir else "~/Downloads"
+                    dl_note = f"Downloaded {len(saved_files)} file(s) to {folder_label}" if saved_files else "Moved to Downloaded"
                     self.notify("info", f"Trackstack 👍 “{a.promo.name}” · {dl_note}")  # type: ignore[attr-defined]
                 elif a.kind == "dismiss":
                     self.trackstack_bridge.decline_submission(a.promo)  # type: ignore[attr-defined]

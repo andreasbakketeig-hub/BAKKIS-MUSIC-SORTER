@@ -53,6 +53,7 @@ def default_settings() -> dict:
         "promo_duplicate_retention_days": 180,  # 0 means keep forever
         "promo_rating_favorite": 5,  # star rating sent for Feeling this (Up arrow)
         "promo_rating_keep": 4,  # star rating sent for Keep / Maybe (Right arrow)
+        "promo_download_dir": "~/Downloads",  # destination folder for Trackstack promo downloads
     }
 
 
@@ -130,6 +131,8 @@ def normalize_settings(raw: object) -> dict:
         out["promo_rating_keep"] = max(1, min(5, int(src.get("promo_rating_keep", 4))))
     except (TypeError, ValueError):
         out["promo_rating_keep"] = 4
+    dl_dir = str(src.get("promo_download_dir") or "").strip()
+    out["promo_download_dir"] = dl_dir if dl_dir else "~/Downloads"
     return out
 
 

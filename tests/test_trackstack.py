@@ -170,13 +170,14 @@ def test_trackstack_grouping_and_unified_session_workflow(tmp_path: Path) -> Non
     comments_file.write_text("[5/5]\nHuge weapon!\n[4/5]\nNice groove!\n", encoding="utf-8")
     pool = CommentPool(path=comments_file)
 
+    custom_settings = {**default_settings(), "promo_download_dir": str(tmp_path / "Inflyte Music")}
     session = InflyteSession(
         [ts_promos[0], ts_promos[1], inf_promo],
         bridge=inf_bridge,
         trackstack_bridge=ts_bridge,
         storage=store,
         presets=presets,
-        settings=default_settings,
+        settings=lambda: custom_settings,
         comment_pool=pool,
     )
     session._download_file = lambda url, dest: (dest.write_bytes(b"AAC-PREVIEW"), dest)[1]  # type: ignore[method-assign]
@@ -283,4 +284,19 @@ def test_trackstack_context_discovery_and_window_autohide(tmp_path: Path) -> Non
     assert bridge.downloaded_stack_id == "stack-dl-400"
 
     store.close()
+
+
+def test_trackstack_configurable_download_dir(tmp_path: Path) -> None:
+    from bakkis_sorter.promos.trackstack.downloader import promo_download_dir
+
+    # 1. Default fallback is ~/Downloads
+    default_dir = promo_download_dir()
+    assert default_dir == Path("~/Downloads").expanduser()
+
+    # 2. Custom directory passed is respected
+    custom_target = tmp_path / "MyCustomDownloads"
+    resolved = promo_download_dir(str(custom_target))
+    assert resolved == custom_target
+    assert resolved.exists()
+
 

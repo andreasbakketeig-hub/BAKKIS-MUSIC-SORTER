@@ -16,7 +16,7 @@ from ...logger import get_logger
 
 logger = get_logger("trackstack")
 
-DEFAULT_PROMO_DOWNLOAD_DIR = "~/Music/Inflyte Music"
+DEFAULT_PROMO_DOWNLOAD_DIR = "~/Downloads"
 
 
 def trackstack_cache_dir() -> Path:

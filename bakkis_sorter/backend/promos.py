@@ -54,6 +54,7 @@ class PromoApiMixin:
             "comments_4": pools.get(4, []),
             "promo_rating_favorite": int(settings.get("promo_rating_favorite", 5)),
             "promo_rating_keep": int(settings.get("promo_rating_keep", 4)),
+            "promo_download_dir": str(settings.get("promo_download_dir") or "~/Downloads"),
         }
 
     def api_promo_comments_save(
@@ -62,6 +63,7 @@ class PromoApiMixin:
         comments_4: Optional[list[str]] = None,
         promo_rating_favorite: int = 5,
         promo_rating_keep: int = 4,
+        promo_download_dir: Optional[str] = None,
     ) -> dict:
         """Save comments pools to SQLite and update rating numbers in settings."""
         from ..storage import get_storage
@@ -95,8 +97,12 @@ class PromoApiMixin:
         # Update settings if api_set_settings exists
         fav = max(1, min(5, int(promo_rating_favorite)))
         keep = max(1, min(5, int(promo_rating_keep)))
+        patch_kwargs: dict[str, Any] = {"promo_rating_favorite": fav, "promo_rating_keep": keep}
+        clean_dl = str(promo_download_dir or "").strip()
+        if clean_dl:
+            patch_kwargs["promo_download_dir"] = clean_dl
         if hasattr(self, "api_set_settings"):
-            self.api_set_settings(promo_rating_favorite=fav, promo_rating_keep=keep)
+            self.api_set_settings(**patch_kwargs)
 
         return {
             "ok": True,
@@ -104,6 +110,7 @@ class PromoApiMixin:
             "comments_4": c4,
             "promo_rating_favorite": fav,
             "promo_rating_keep": keep,
+            "promo_download_dir": clean_dl or "~/Downloads",
         }
 
     def api_auth_status(self) -> dict:

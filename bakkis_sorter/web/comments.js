@@ -26,6 +26,9 @@ export const CommentsModal = {
         if ($("select-rating-keep")) {
           $("select-rating-keep").value = String(data.promo_rating_keep || 4);
         }
+        if ($("inp-promo-dl-dir")) {
+          $("inp-promo-dl-dir").value = data.promo_download_dir || "~/Downloads";
+        }
         if ($("txt-comments-fav")) {
           $("txt-comments-fav").value = (data.comments_5 || []).join("\n");
         }
@@ -45,6 +48,7 @@ export const CommentsModal = {
   async save() {
     const favRating = $("select-rating-fav") ? Number($("select-rating-fav").value) : 5;
     const keepRating = $("select-rating-keep") ? Number($("select-rating-keep").value) : 4;
+    const promoDlDir = $("inp-promo-dl-dir") ? $("inp-promo-dl-dir").value.trim() : "~/Downloads";
     const favText = $("txt-comments-fav") ? $("txt-comments-fav").value : "";
     const keepText = $("txt-comments-keep") ? $("txt-comments-keep").value : "";
 
@@ -69,8 +73,9 @@ export const CommentsModal = {
         comments_4,
         promo_rating_favorite: favRating,
         promo_rating_keep: keepRating,
+        promo_download_dir: promoDlDir,
       });
-      toast("Comments & ratings saved to database", { level: "info" });
+      toast("Comments & settings saved to database", { level: "info" });
       this.close();
     } catch (e) {
       toast("Failed to save comments: " + e.message, { level: "error" });
@@ -89,6 +94,18 @@ export function initCommentsModal() {
   }
   if ($("btn-empty-comments")) {
     $("btn-empty-comments").addEventListener("click", () => CommentsModal.open());
+  }
+  if ($("btn-choose-promo-dl-dir")) {
+    $("btn-choose-promo-dl-dir").addEventListener("click", async () => {
+      try {
+        const folder = await api("choose_folder");
+        if (folder && $("inp-promo-dl-dir")) {
+          $("inp-promo-dl-dir").value = folder;
+        }
+      } catch (err) {
+        toast("Folder chooser failed: " + err.message, { level: "error" });
+      }
+    });
   }
   if ($("btn-close-comments")) {
     $("btn-close-comments").addEventListener("click", () => CommentsModal.close());
