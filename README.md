@@ -1,20 +1,28 @@
 # BAKKIS MUSIC SORTER
 
-**Fast. Instinctive. Sorting.**
+**Fast. Instinctive. Sorting & Promo Response.**
 
-*Clear the backlog. Keep the bangers.*
+*Clear the backlog. Keep the bangers. Respond in seconds.*
 
-A free macOS app for DJs to sort big folders of promos and downloads, one track at a time. Listen from the best part of the track, decide with one key (or a swipe), and the file is filed away instantly while the next track is already playing.
+A free macOS app for DJs and producers with two focused workflows:
+
+1. **Sorting & Organizing Local Music**: Sort massive crates, downloads, and unorganized folders one track at a time. Listen from the best part, decide with a single key or swipe, and file the music away instantly while the next track plays.
+2. **Responding to Music Promos**: A unified promo reviewer combining **Inflyte Promo Box** and **Trackstack** into one fast queue. Preview releases, send automated ratings and comments with a single keystroke, download full-res tracks directly to your Downloads folder, and queue feedback offline for flights.
 
 Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
 
 > *My music folders were huge and messy, and sorting them meant endless clicking and dragging. So I built the app I wanted: listen, swipe, next. No mouse needed.* (BAKKIS)
 
-- Swipe mode: Keep, Archive, Favorite or Skip with the arrow keys, a mouse drag or a two-finger trackpad flick
-- Grid mode: sort into up to nine genres with the number keys
-- Plays MP3, WAV, AIFF, FLAC, ALAC, AAC/M4A (and Ogg where macOS supports it)
-- Undo anything, including whole past sessions
-- No track is ever deleted or overwritten
+*Promo review integration, cross-platform queueing, and v3.0 performance enhancements were conceived and developed in collaboration with DJ and producer [Ed Hoffman](https://www.instagram.com/edhoffman_music/) ([@edhoffman_music](https://www.instagram.com/edhoffman_music/)), who needed a lightning-fast way to eliminate promo backlogs and respond to label promotions without clicking through endless websites.*
+
+- **Two Core Modes**: Swipe mode (Keep, Archive, Favorite, Skip) & Grid mode (sort into up to 9 genre crates)
+- **Unified Promo Box**: Review Inflyte & Trackstack campaigns in one combined stream
+- **Offline Travel Stash**: Stash promos to your Mac for offline reviewing on airplanes; syncs reviews back when reconnected
+- **Duplicate Campaign Shield**: Fingerprints tracks across different promoter mailouts and badges tracks you already reviewed
+- **Clean Downloads**: Full-res promo downloads saved straight to your `~/Downloads` folder (or custom folder) with zero file moving
+- **High-Performance Audio**: Apple Silicon `libsonare` engine for real-time Camelot key, BPM, and drop detection
+- **Lossless Undo**: Undo anything, including whole past sessions
+- **File Safety**: No track is ever deleted or overwritten
 
 ---
 
@@ -204,6 +212,56 @@ Use headphones: with speakers the microphone also hears the music, and vocals ca
 
 ---
 
+## Responding to music promotion (Inflyte & Trackstack)
+
+DJs receiving dozens of weekly promos across different platforms can clear their entire inbox in minutes instead of hours. BAKKIS connects directly to **Inflyte Promo Box** and **Trackstack**, merging unreviewed mailouts into one fast, unified review flow.
+
+### Connecting your accounts
+
+On the Welcome Hub, you'll find live status indicators for both platforms:
+- **Inflyte**: Click **Inflyte · Log In** once. A secure WKWebView window opens to `inflyteapp.com`; log in as normal. Once authenticated, your session is remembered securely in macOS Keychain encrypted storage (`bakkis.db`), so you stay connected across restarts.
+- **Trackstack**: Click **Trackstack · Log In**. Sign in once on `trackstack.app`. Your workspace and inbox are discovered automatically.
+
+Click **⚡ Load Promos** to start reviewing!
+
+### Promo decisions & feedback
+
+When reviewing promos, the app automatically maps your keystrokes to platform feedback:
+
+| Keystroke / Gesture | Inflyte Action | Trackstack Action |
+|---|---|---|
+| **↑** (Feeling this / Favorite) | Submits your configured 5-star rating + cycles a personalized comment; triggers Dropbox cloud sync | Moves track to your Trackstack shortlist/downloaded stack; downloads full-quality file to `~/Downloads` |
+| **→** (Keep / Maybe) | Submits positive 4-star rating + comment; triggers Dropbox cloud sync | Moves track to shortlist/downloaded stack; downloads full-quality file to `~/Downloads` |
+| **←** (Not for me / Decline) | Dismisses the promo from your Inflyte inbox | Declines the submission on Trackstack |
+| **↓** (Skip / Next Track) | Advances to the next track in the promo; on the final track, sets the promo aside for later | Advances to the next track or sets aside for later |
+
+### In-app comments pool & ratings
+
+Promoters appreciate authentic, varied feedback. Click **💬 Feedback Comments** on the Welcome Hub to customize:
+- Numeric star rating for *Feeling this* (default: 5/5) and *Keep / Maybe* (default: 4/5)
+- Separate comment pools for 5-star and 4-star ratings (e.g., *"Absolute weapon, playing this weekend!"*, *"Solid groove, will test this out"*). The app cycles through comments randomly so you never sound repetitive.
+- **Download Location**: Defaults to your native macOS `~/Downloads` folder. You can change it to any folder on your Mac with the **Choose…** button.
+
+### Cross-campaign duplicate detection
+
+Promoters and PR agencies frequently send the same release under different campaigns or subject lines. BAKKIS generates a canonical track signature (`artist:title`) for every track. If a song was already reviewed in a past campaign, the card displays an **"Already Reviewed: 5/5 on [Promo Name]"** badge so you never waste time re-listening or send conflicting ratings.
+
+### Offline Stash (flight mode)
+
+Traveling without internet? Click **✈️ Stash Promos for Travel** before heading to the airport.
+- BAKKIS pre-downloads audio previews and cover art to your local cache.
+- Review your entire promo queue offline with full keyboard shortcuts and waveforms.
+- When you reconnect to Wi-Fi, click **Sync Stashed Reviews**: all ratings, comments, and decisions are instantly dispatched to Inflyte and Trackstack in the background.
+
+### Zero file movement on disk
+
+Your local files are sacred:
+- Downloads from Trackstack stream directly into `~/Downloads` (or your chosen download folder) and **stay there permanently**.
+- Inflyte syncs files directly into your connected folder.
+- BAKKIS **never moves, renames, or alters** your downloaded promo files. All review status, duplicate checks, and ratings are tracked 100% inside encrypted SQLite (`bakkis.db`).
+
+---
+
 ## Game controller
 
 Sort from the sofa: connect a game controller with USB or Bluetooth, press any button, and it works like the keyboard. It rumbles on every sort, so you can feel each decision.
@@ -318,22 +376,21 @@ The tests only use temporary folders. Never point tests or dev mode at a music f
 
 ```
 bakkis_sorter/
-  config.py      settings, presets (mode_presets.json), v1 migration
+  promos/        Inflyte & Trackstack bridges, tRPC client, offline stash, multi-track session
+  session/       local queue, sort/skip/undo, worker, copy index, journal
+  storage/       macOS Keychain AES-256 SQLite database (bakkis.db), reviews, signatures, peaks
+  metadata/      ID3 tags, cover downsampler, ByteBoundedLRU, content hashes
+  config/        settings, presets, coercions, atomic persistence
+  backend/       API mixins (promos, library, settings, diagnostics)
   library.py     scanning, destination paths, empty-folder cleanup
-  session.py     queue, sort/skip/undo, background file worker, journal, copy mode
-  metadata.py    tags, cover art, waveform peak cache, display cleanup
-  history.py     past sessions from the journal, "put back"
-  duplicates.py  "already sorted" index
-  playlists.py   M3U8 export
-  keys.py        Camelot key parsing
-  updates.py     GitHub release check
-  updater.py     one-click update: download, verify, swap, relaunch
-  api.py         backend methods exposed to the UI
-  server.py      local HTTP server (UI, audio with Range requests, JSON API)
-  app.py         pywebview window, folder dialog, drag and drop, full screen
-  web/           index.html, app.css, app.js, panels.js
+  duplicates.py  cross-campaign track signatures and "already sorted" index
+  analyzer.py    libsonare integration (BPM, Camelot key, drops)
+  logger.py      structured SQLite logger
+  server.py      local HTTP server (UI, audio streaming with Range requests, JSON API)
+  app.py         pywebview window, folder dialog, native drag-and-drop
+  web/           HTML5 UI, domain modular CSS (web/css/), ES modules (web/drawers/)
 main.py          entry point
-tests/           pytest suite
+tests/           pytest suite (284 unit & integration tests)
 ```
 
 The original v1 (Tkinter) is kept for reference in `legacy/`; run it with `legacy/Start BAKKIS Music Sorter.command`. It is no longer developed.
