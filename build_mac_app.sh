@@ -33,7 +33,7 @@ rm -rf build "dist/${APP_NAME}" "dist/${APP_NAME}.app" "$ZIP" "$DMG"
 APP="dist/${APP_NAME}.app"
 [[ -d "$APP" ]] || { echo "Build failed: ${APP} missing"; exit 1; }
 
-# Sanity checks: both architectures, and nothing linked from Homebrew.
+# Sanity checks: target architecture, and nothing linked from Homebrew.
 EXE="${APP}/Contents/MacOS/${APP_NAME}"
 echo "Architectures: $(lipo -archs "$EXE")"
 if find "$APP" -type f \( -name '*.so' -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -q -E '/opt/homebrew|/usr/local/(Cellar|opt)'; then
@@ -49,6 +49,9 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
     xcrun stapler staple "$APP"
     rm -f "$ZIP"
   fi
+else
+  echo "Applying ad-hoc code signature for local execution…"
+  codesign --force --deep -s - "$APP"
 fi
 
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"

@@ -4,6 +4,8 @@ import wave
 
 import pytest
 
+pytestmark = pytest.mark.audio
+
 from bakkis_sorter import waveform
 
 from .audio_fixtures import HAS_AFCONVERT, convert, make_mp3

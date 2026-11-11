@@ -1,0 +1,40 @@
+/* BAKKIS MUSIC SORTER v2 — Responsive Half-Screen & Mobile Breakpoints */
+
+@media (max-width: 960px) {
+  .topbar { gap: 10px; padding: 6px 12px; }
+  .folder-chip { max-width: 140px; }
+  .preset-select { max-width: 130px; }
+  #btn-edit-comments span, #btn-stash-flight span { max-width: 80px; }
+}
+
+@media (max-width: 768px) {
+  .top-progress { display: none; }
+  .brand-sub { display: none; }
+  .screen-player { padding: 12px 12px; gap: 10px; }
+  .card { padding: 12px; gap: 14px; }
+  .cover { width: 80px; height: 80px; }
+  .title { font-size: var(--fs-l); }
+  .artist { font-size: var(--fs-m); }
+  .chips { margin-top: 8px; gap: 4px; }
+  .wave { height: clamp(64px, 11vh, 110px); }
+  .volume input { width: 80px; }
+  .tiles { max-height: clamp(200px, 32vh, 400px); }
+  .tile .glyph { font-size: 28px; }
+  .tile .label { font-size: var(--fs-m); }
+  .tile { padding: 6px 4px; min-height: 48px; }
+}
+
+@media (max-width: 680px) {
+  .welcome-hub { grid-template-columns: 1fr; gap: 16px; margin: 18px auto 0; }
+  .ratings-config-row { grid-template-columns: 1fr; gap: 12px; }
+  .comments-pool-row { grid-template-columns: 1fr; gap: 12px; }
+}
+
+@media (max-width: 640px) {
+  body.mode-swipe .tiles-swipe {
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .drawer { width: 100vw; }
+}

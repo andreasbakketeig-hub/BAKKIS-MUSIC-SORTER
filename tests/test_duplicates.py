@@ -1,9 +1,12 @@
 from mutagen.id3 import ID3, TIT2, TPE1
+import pytest
 
 from bakkis_sorter import metadata
-from bakkis_sorter.duplicates import DuplicateIndex, norm
+from bakkis_sorter.duplicates import DuplicateIndex, norm, normalize_artist, normalize_title, track_signature
 
 from .audio_fixtures import make_mp3
+
+pytestmark = pytest.mark.promos
 
 
 def tagged(path, title, artist, frames=40):
@@ -58,3 +61,24 @@ def test_untagged_files_are_not_matched(music):
     assert idx.ready.wait(5)
     new = make_mp3(music / "Artist - Song.mp3")
     assert idx.find(new, metadata.read_meta(new)) is None
+
+
+def test_track_signature_and_normalization():
+    # Feat / ft stripping
+    assert normalize_artist("Fisher feat. Chris Lake") == "fisher"
+    assert normalize_artist("Solomun ft. Bicep") == "solomun"
+    assert normalize_artist("CamelPhat & Elderbrook") == "camelphat elderbrook"
+
+    # Mix / version stripping
+    assert normalize_title("Losing It (Extended Mix)") == "losing it"
+    assert normalize_title("Losing It [Club Edit]") == "losing it"
+    assert normalize_title("Cola (Original Mix)") == "cola"
+
+    # Cross-promo signature matching
+    sig1 = track_signature("Fisher", "Losing It (Extended Mix)")
+    sig2 = track_signature("Fisher feat. Chris Lake", "Losing It (Club Mix)")
+    assert sig1 == sig2 == "fisher:losing it"
+
+    assert track_signature(None, "Song") is None
+    assert track_signature("Artist", None) is None
+

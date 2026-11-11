@@ -8,13 +8,37 @@
 </head>
 <body class="is-empty">
 <header class="topbar">
-  <div class="brand-lockup" aria-label="BAKKIS MUSIC SORTER">
+  <div class="brand-lockup" id="brand-home" title="Return to Welcome Hub (Home)" role="button" tabindex="0" aria-label="BAKKIS Home">
     <span class="logo logo-wordmark brand" role="img" aria-hidden="true"></span>
     <span class="brand-sub">MUSIC SORTER</span>
   </div>
+  <button type="button" class="icon-btn btn-home" id="btn-home" title="Return to Welcome Hub (Home)" aria-label="Return to Welcome Hub">
+    <svg viewBox="0 0 24 24"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H4a1 1 0 0 1-1-1V9.5z"/></svg>
+  </button>
   <button type="button" class="folder-chip" id="folder-chip" title="Choose another folder">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
     <span id="folder-name"></span>
+  </button>
+  <button type="button" class="folder-chip" id="btn-top-inflyte" hidden title="Review all unreviewed promos from Inflyte &amp; Trackstack">
+    <span>⚡ Review Promos</span>
+  </button>
+  <button type="button" class="folder-chip auth-chip" id="btn-top-login-inflyte" hidden title="Log into Inflyte Promo Box">
+    <span class="status-dot" id="dot-top-inflyte"></span>
+    <span id="lbl-top-inflyte">Inflyte</span>
+  </button>
+  <button type="button" class="folder-chip auth-chip" id="btn-top-login-trackstack" hidden title="Log into Trackstack">
+    <span class="status-dot" id="dot-top-trackstack"></span>
+    <span id="lbl-top-trackstack">Trackstack</span>
+  </button>
+  <button type="button" class="folder-chip" id="btn-edit-comments" hidden title="Edit feedback comments &amp; ratings in SQLite database">
+    <span>💬 Comments</span>
+  </button>
+  <button type="button" class="folder-chip" id="btn-stash-flight" hidden title="Stash unreviewed promos (audio + art) for offline use on flights">
+    <span>✈️ Stash</span>
+  </button>
+  <button type="button" class="folder-chip sync-chip" id="btn-sync-offline" hidden title="Sync queued offline reviews to Inflyte and Trackstack">
+    <span class="sync-dot"></span>
+    <span id="lbl-sync-offline">Sync (0)</span>
   </button>
   <select id="preset-select" class="preset-select" aria-label="Active preset"></select>
   <div class="mode-switch" role="tablist" aria-label="Sorting mode">
@@ -47,14 +71,81 @@
   <section class="screen screen-empty" id="screen-empty">
     <div class="empty-inner">
       <span class="logo logo-boxed hero-logo" role="img" aria-label="BAKKIS"></span>
-      <p class="slogan">Fast.&nbsp; · &nbsp;Instinctive.&nbsp; · &nbsp;<span>Sorting.</span></p>
+      <p class="slogan">Fast.&nbsp; · &nbsp;Instinctive.&nbsp; · &nbsp;Sorting.&nbsp; · &nbsp;<span>Promo Mgmt.</span></p>
       <h1>Clear the backlog. Keep the bangers.</h1>
-      <div class="row-btns">
-        <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
-        <button type="button" class="primary-btn" id="btn-choose">Choose music folder</button>
+
+      <div class="promo-caught-up-banner" id="promo-caught-up" hidden>
+        <div class="caught-up-badge">⚡✓</div>
+        <div class="caught-up-content">
+          <h3>All Caught Up!</h3>
+          <p class="muted">No promo tracks are currently awaiting feedback in Inflyte or Trackstack.</p>
+        </div>
+        <div class="caught-up-actions">
+          <button type="button" class="primary-btn small-btn" id="btn-caught-up-history">
+            📜 Review Previous Feedback
+          </button>
+          <button type="button" class="ghost-btn small-btn" id="btn-caught-up-refresh" title="Check Inflyte and Trackstack again">
+            🔄 Check Again
+          </button>
+          <button type="button" class="icon-btn small-btn" id="btn-caught-up-dismiss" title="Dismiss banner">
+            ✕
+          </button>
+        </div>
       </div>
-      <p class="muted">or drop a folder anywhere in this window</p>
-      <p class="muted small">Sorted tracks go to <code>BAKKIS_SORTED</code> inside the folder you choose (copies to <code>BAKKIS_SORTED_COPIES</code>). Every step can be undone.</p>
+
+      <div class="welcome-hub">
+        <!-- Pillar 1: Sorter Hub (Start Here) -->
+        <div class="welcome-card welcome-card-sorter">
+          <div class="welcome-card-head">
+            <div class="welcome-card-badge-row">
+              <span class="welcome-badge">📁 Workflow 1: Sorter</span>
+            </div>
+            <h2>Sort Music</h2>
+            <p class="muted small">Organize &amp; clean local DJ folders</p>
+          </div>
+          <button type="button" class="primary-btn welcome-action-btn" id="btn-choose">
+            Choose Music Folder
+          </button>
+          <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
+          <div class="welcome-drop-info">
+            <p class="muted">or drop a folder anywhere in this window</p>
+            <p class="muted small">Sorted tracks go to <code>BAKKIS_SORTED</code> inside the folder you choose (copies to <code>BAKKIS_SORTED_COPIES</code>).</p>
+          </div>
+          <button type="button" class="text-link-btn welcome-comments-link" id="btn-sorter-settings">
+            ⚙️ Sorter presets &amp; options
+          </button>
+        </div>
+
+        <!-- Pillar 2: Promo Hub -->
+        <div class="welcome-card welcome-card-promos">
+          <div class="welcome-card-head">
+            <div class="welcome-card-badge-row">
+              <span class="welcome-badge">⚡ Workflow 2: Promos</span>
+            </div>
+            <h2>Review Promos</h2>
+            <p class="muted small">Inflyte Promo Box &amp; Trackstack</p>
+          </div>
+          <button type="button" class="primary-btn welcome-action-btn welcome-promo-btn" id="btn-load-inflyte">
+            ⚡ Review All Promos
+          </button>
+          <div class="welcome-auth-pills" aria-label="Promo service connections">
+            <button type="button" class="ghost-btn auth-pill" id="btn-login-inflyte" title="Click to log into Inflyte Promo Box">
+              <span class="status-dot" id="dot-main-inflyte"></span>
+              <span id="lbl-main-inflyte">Inflyte · Log In</span>
+            </button>
+            <button type="button" class="ghost-btn auth-pill" id="btn-login-trackstack" title="Click to log into Trackstack">
+              <span class="status-dot" id="dot-main-trackstack"></span>
+              <span id="lbl-main-trackstack">Trackstack · Log In</span>
+            </button>
+          </div>
+          <button type="button" class="text-link-btn welcome-comments-link" id="btn-empty-comments">
+            💬 Configure comments &amp; ratings
+          </button>
+          <button type="button" class="text-link-btn welcome-comments-link" id="btn-promo-history">
+            📜 Review previous feedback
+          </button>
+        </div>
+      </div>
       <p class="warn small" id="empty-message" hidden></p>
     </div>
   </section>
@@ -145,7 +236,10 @@
         <button type="button" class="ghost-btn" id="btn-done-feedback" title="Copy a summary of your decisions for a promo report or demo replies">Copy feedback</button>
         <button type="button" class="ghost-btn" id="btn-done-reveal">Reveal in Finder</button>
         <button type="button" class="ghost-btn" id="btn-done-export" hidden>Export playlists</button>
-        <button type="button" class="primary-btn" id="btn-done-load">Load another folder</button>
+        <button type="button" class="primary-btn welcome-promo-btn" id="btn-done-inflyte" hidden>⚡ Reload All Promos</button>
+        <button type="button" class="ghost-btn" id="btn-done-promo-history" hidden>📜 Review Previous Feedback</button>
+        <button type="button" class="ghost-btn" id="btn-done-home">Return to Hub</button>
+        <button type="button" class="ghost-btn" id="btn-done-load">Load another folder</button>
       </div>
     </div>
   </section>
@@ -221,6 +315,25 @@
   <div class="drawer-scroll" id="history-body"></div>
 </aside>
 
+<aside class="drawer drawer-wide" id="drawer-promo-history" hidden aria-label="Promo Review History">
+  <div class="drawer-head">
+    <h2>Promo Review History</h2>
+    <button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button>
+  </div>
+  <div class="promo-hist-toolbar">
+    <input type="search" id="promo-hist-search" class="promo-hist-search-input" placeholder="Search artist, title, promo, comment…" />
+    <div class="promo-hist-filters">
+      <button type="button" class="promo-filter-btn active" data-filter="all">All</button>
+      <button type="button" class="promo-filter-btn" data-filter="inflyte">Inflyte</button>
+      <button type="button" class="promo-filter-btn" data-filter="trackstack">Trackstack</button>
+      <button type="button" class="promo-filter-btn" data-filter="favorites">5★ Favorites</button>
+      <button type="button" class="promo-filter-btn" data-filter="keeps">4★ Keeps</button>
+      <button type="button" class="promo-filter-btn" data-filter="dismissed">Dismissed</button>
+    </div>
+  </div>
+  <div class="drawer-scroll" id="promo-history-body"></div>
+</aside>
+
 <aside class="drawer drawer-wide" id="drawer-settings" hidden aria-label="Settings">
   <div class="drawer-head"><h2 id="settings-title">Settings</h2><button type="button" class="icon-btn" data-close-drawer aria-label="Close">✕</button></div>
   <div class="drawer-scroll" id="settings-body"></div>
@@ -239,10 +352,11 @@
     <div class="welcome-body">
       <span class="logo logo-boxed welcome-logo" role="img" aria-label="BAKKIS"></span>
       <h2 id="welcome-title">Hi, I'm BAKKIS.</h2>
-      <p>My music folders were huge and messy, and sorting them meant endless clicking and dragging. So I built the app I wanted: listen, swipe, next. No mouse needed.</p>
-      <p>It moves your tracks into tidy folders and removes the empty ones left behind. Every step can be undone.</p>
-      <p class="muted small">Press H any time for the shortcuts.</p>
-      <div class="row-btns"><button type="button" class="primary-btn" id="welcome-go">Let's sort</button></div>
+      <p>I built this app to eliminate music clutter and promo fatigue with two focused workflows:</p>
+      <p><strong>1. Sort Local Music:</strong> Listen from the drop, swipe or tap to file into clean folders, and clean up empty directories with full lossless undo.</p>
+      <p><strong>2. Review Music Promos:</strong> Clear Inflyte and Trackstack mailouts in one unified queue with 1-key ratings, rotating comments, and offline flight mode.</p>
+      <p class="muted small">Press H or ? any time for the full shortcut guide.</p>
+      <div class="row-btns"><button type="button" class="primary-btn" id="welcome-go">Get Started</button></div>
       <p class="muted small welcome-foot">Free and open source. <button type="button" class="link-btn" id="welcome-support">Buy me a coffee ☕</button></p>
     </div>
   </div>
@@ -274,9 +388,110 @@
   </div>
 </div>
 
-<script src="/static/panels.js"></script>
+<div class="modal-backdrop" id="stash-modal" hidden>
+  <div class="modal stash-dialog" role="dialog" aria-modal="true" aria-labelledby="stash-title">
+    <div class="modal-head">
+      <h2 id="stash-title">✈️ Stash Promos for Flight</h2>
+      <button type="button" class="icon-btn" id="btn-close-stash" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-lead">Pre-download upcoming promos (audio streams, covers, and libsonare beat markers) so you can review seamlessly offline with zero Wi-Fi.</p>
+      <div class="stash-options">
+        <label class="stash-opt">
+          <input type="radio" name="stash_count" value="25" checked>
+          <div class="stash-opt-card">
+            <b>25 Promos</b>
+            <span>~150 MB · Quick Flight</span>
+          </div>
+        </label>
+        <label class="stash-opt">
+          <input type="radio" name="stash_count" value="50">
+          <div class="stash-opt-card">
+            <b>50 Promos</b>
+            <span>~300 MB · Medium Haul</span>
+          </div>
+        </label>
+        <label class="stash-opt">
+          <input type="radio" name="stash_count" value="100">
+          <div class="stash-opt-card">
+            <b>100 Promos</b>
+            <span>~600 MB · Long Haul</span>
+          </div>
+        </label>
+      </div>
+      <div class="stash-progress-wrap" id="stash-progress-box" hidden>
+        <div class="stash-progress-bar">
+          <div class="stash-progress-fill" id="stash-progress-fill"></div>
+        </div>
+        <div class="stash-status-text" id="stash-status-text">Stashing promos…</div>
+      </div>
+    </div>
+    <div class="row-btns modal-actions">
+      <button type="button" class="ghost-btn" id="btn-cancel-stash">Cancel</button>
+      <button type="button" class="primary-btn" id="btn-start-stash">Start Stash</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="comments-modal" hidden>
+  <div class="modal comments-dialog" role="dialog" aria-modal="true" aria-labelledby="comments-title">
+    <div class="modal-head">
+      <h2 id="comments-title">💬 Feedback Comments &amp; Ratings</h2>
+      <button type="button" class="icon-btn" id="btn-close-comments" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-lead">Configure the auto-feedback comments and numeric stars submitted to Inflyte on swipe.</p>
+
+      <div class="ratings-config-row">
+        <div class="rating-field">
+          <label for="select-rating-fav"><b>Feeling this</b> (↑ Arrow rating)</label>
+          <select id="select-rating-fav" class="dialog-select">
+            <option value="5">5/5 ⭐⭐⭐⭐⭐ (Full Support)</option>
+            <option value="4">4/5 ⭐⭐⭐⭐ (Very Good)</option>
+            <option value="3">3/5 ⭐⭐⭐ (Good)</option>
+          </select>
+        </div>
+        <div class="rating-field">
+          <label for="select-rating-keep"><b>Keep / Maybe</b> (→ Arrow rating)</label>
+          <select id="select-rating-keep" class="dialog-select">
+            <option value="5">5/5 ⭐⭐⭐⭐⭐ (Full Support)</option>
+            <option value="4">4/5 ⭐⭐⭐⭐ (Very Good)</option>
+            <option value="3">3/5 ⭐⭐⭐ (Good)</option>
+            <option value="2">2/5 ⭐⭐ (Fair)</option>
+            <option value="1">1/5 ⭐ (Passing)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="promo-dl-config-row" style="margin-top: 12px; margin-bottom: 14px;">
+        <label for="inp-promo-dl-dir" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--fg);"><b>Download Location</b> (Trackstack full-quality audio)</label>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="text" id="inp-promo-dl-dir" class="dialog-select" style="flex: 1; cursor: default;" readonly value="~/Downloads">
+          <button type="button" class="ghost-btn" id="btn-choose-promo-dl-dir" style="white-space: nowrap; padding: 6px 14px; font-size: 13px;">Choose…</button>
+        </div>
+      </div>
+
+      <div class="comments-pool-row">
+        <div class="comment-field">
+          <label for="txt-comments-fav"><b>Feeling this</b> Comments (cycled randomly, one per line):</label>
+          <textarea id="txt-comments-fav" rows="6" class="dialog-textarea" placeholder="Absolute weapon, full support!"></textarea>
+        </div>
+        <div class="comment-field">
+          <label for="txt-comments-keep"><b>Keep / Maybe</b> Comments (cycled randomly, one per line):</label>
+          <textarea id="txt-comments-keep" rows="6" class="dialog-textarea" placeholder="Solid groove, will test this out"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="row-btns modal-actions">
+      <button type="button" class="ghost-btn" id="btn-cancel-comments">Cancel</button>
+      <button type="button" class="primary-btn" id="btn-save-comments">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/static/panels.js"></script>
 <script src="/static/listen.js"></script>
 <script src="/static/gamepad.js"></script>
-<script src="/static/app.js"></script>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>

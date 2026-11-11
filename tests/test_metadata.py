@@ -1,6 +1,8 @@
 import time
 
 import pytest
+
+pytestmark = pytest.mark.audio
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3, TBPM, TIT2, TKEY, TPE1
 from mutagen.mp4 import MP4, MP4Cover
@@ -150,6 +152,28 @@ def test_peak_store(tmp_path):
     assert store.get(tmp_path / "missing.wav") is None
 
 
+def test_peak_store_content_digest_move_resilience(tmp_path):
+    import shutil
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    p1 = make_wav(inbox / "track.wav")
+    store = metadata.PeakStore(tmp_path / "peaks")
+    raw_peaks = bytes(range(256)) * 3 + bytes(range(32))
+
+    assert store.put_bytes(p1, raw_peaks)
+    assert store.get_bytes(p1) == raw_peaks
+
+    # Move file to a destination folder (simulating sorter action)
+    dest_dir = tmp_path / "sorted" / "2026" / "House"
+    dest_dir.mkdir(parents=True)
+    p2 = dest_dir / "track.wav"
+    shutil.move(p1, p2)
+
+    # Path-independent content digest allows the moved track to resolve the cached peaks instantly
+    assert store.get_bytes(p2) == raw_peaks
+
+
 @pytest.mark.parametrize(
     "raw, clean",
     [
@@ -193,3 +217,105 @@ def test_dash_variants_and_stem_fallback(tmp_path):
     assert metadata.read_meta(make_wav(tmp_path / "Ælg Øyvind – Søt Ünicode.wav")).display == "Søt Ünicode — Ælg Øyvind"
     assert metadata.read_meta(make_wav(tmp_path / "Artist — Title.wav")).display == "Title — Artist"
     assert metadata.read_meta(make_wav(tmp_path / "No Separator Here.WAV")).display == "No Separator Here"
+
+
+def test_downsample_cover_resizes_large_images():
+    import io
+    from PIL import Image
+
+    # 1. Create large 1600x1600 image
+    im = Image.new("RGB", (1600, 1600), color=(50, 100, 150))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=90)
+    raw = buf.getvalue()
+    assert len(raw) > 25_000
+
+    # 2. Downsample
+    thumb = metadata.downsample_cover(raw, max_dim=320)
+    assert thumb is not None
+    assert len(thumb) < len(raw)
+
+    # 3. Verify dimensions
+    with Image.open(io.BytesIO(thumb)) as thumb_im:
+        w, h = thumb_im.size
+        assert w <= 320 and h <= 320
+
+
+def test_downsample_cover_passthrough_and_corrupt_safety():
+    assert metadata.downsample_cover(None) is None
+    assert metadata.downsample_cover(b"") == b""
+
+    # Small dimension image (<= 320x320) passes through untouched
+    from PIL import Image
+    import io
+
+    im = Image.new("RGB", (100, 100), color=(50, 50, 50))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG")
+    small = buf.getvalue()
+    assert metadata.downsample_cover(small) == small
+
+    # Corrupt data returns original bytes without raising
+    corrupt = b"not an image at all" * 2000
+    assert metadata.downsample_cover(corrupt) == corrupt
+
+
+def test_byte_bounded_lru_eviction():
+    # 1. Count-based eviction
+    lru = metadata.ByteBoundedLRU(max_items=3, max_bytes=100_000)
+    lru.put("a", b"111")
+    lru.put("b", b"222")
+    lru.put("c", b"333")
+    assert len(lru) == 3
+    lru.put("d", b"444")
+    assert len(lru) == 3
+    assert "a" not in lru
+    assert "d" in lru
+
+    # 2. Byte-limit eviction
+    lru_bytes = metadata.ByteBoundedLRU(max_items=10, max_bytes=1000)
+    lru_bytes.put("x", b"A" * 400)
+    lru_bytes.put("y", b"B" * 400)
+    assert lru_bytes.current_bytes == 800
+    lru_bytes.put("z", b"C" * 400)
+    # Total would be 1200 > 1000, so oldest ("x") is evicted
+    assert "x" not in lru_bytes
+    assert "y" in lru_bytes
+    assert "z" in lru_bytes
+    assert lru_bytes.current_bytes == 800
+
+    # 3. Sentinel _MISSING has 0 bytes
+    lru_bytes.put("miss", metadata._MISSING)
+    assert lru_bytes.current_bytes == 800
+    assert "miss" in lru_bytes
+    assert lru_bytes.get("miss") is metadata._MISSING
+
+
+def test_metadata_cache_cover_downsamples_and_bounds_memory(tmp_path):
+    import io
+    from PIL import Image
+
+    # Create a real MP3 with large embedded APIC
+    im = Image.new("RGB", (1000, 1000), color=(120, 60, 30))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=90)
+    large_cover = buf.getvalue()
+
+    p = make_mp3(tmp_path / "big_cover.mp3")
+    tag_id3(p, apic=APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=large_cover))
+
+    cache = metadata.MetadataCache()
+    try:
+        thumb = cache.cover(p)
+        assert thumb is not None
+        assert len(thumb) < len(large_cover)
+
+        with Image.open(io.BytesIO(thumb)) as thumb_im:
+            w, h = thumb_im.size
+            assert w <= 320 and h <= 320
+
+        # Cache memory is tracked and bounded
+        assert cache._covers.current_bytes == len(thumb)
+    finally:
+        cache.shutdown()
+

@@ -4,6 +4,8 @@ from datetime import date
 
 import pytest
 
+pytestmark = pytest.mark.session
+
 from bakkis_sorter import session as session_mod
 from bakkis_sorter.config import PresetStore, default_settings
 from bakkis_sorter.session import Journal, Session, SessionError, filter_already_copied, load_copied_index
@@ -370,3 +372,22 @@ def test_queue_search(music, make_session):
     assert [t["index"] for t in res["items"]] == [0, 1]
     assert s.queue_slice(q="promos solomun")["total"] == 1
     assert s.queue_slice(q="  ")["total"] == 3
+
+
+def test_session_append_tracks(music, make_session):
+    p1, p2 = tracks(music, "track_1.mp3", "track_2.mp3")
+    changed = []
+    s = make_session([p1], on_change=lambda: changed.append(1))
+    assert s.total == 1
+    assert len(s.queue) == 1
+    assert s.queue[0].path == p1
+
+    p3, p4 = tracks(music, "track_3.mp3", "track_4.mp3")
+    # Append p2, p3, p4 and duplicate p1
+    added = s.append_tracks([p2, p3, p4, p1])
+    assert len(added) == 3
+    assert s.total == 4
+    assert len(s.queue) == 4
+    assert [t.path for t in s.queue] == [p1, p2, p3, p4]
+    assert len(changed) >= 1
+

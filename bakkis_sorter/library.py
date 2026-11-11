@@ -102,18 +102,28 @@ def scan(
     recursive: bool = True,
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[Callable[[int], None]] = None,
+    on_batch: Optional[Callable[[list[Path]], None]] = None,
+    batch_size: int = 25,
     root_skip: frozenset = frozenset(),
 ) -> Optional[list[Path]]:
     """Collect audio files. Returns None if ``cancel`` was set during the scan."""
     out: list[Path] = []
+    batch: list[Path] = []
     for p in iter_audio_files(root, recursive=recursive, root_skip=root_skip):
         if cancel is not None and cancel.is_set():
             return None
         out.append(p)
+        if on_batch is not None:
+            batch.append(p)
+            if len(batch) >= batch_size:
+                on_batch(batch)
+                batch = []
         if on_progress is not None and len(out) % PROGRESS_EVERY == 0:
             on_progress(len(out))
     if cancel is not None and cancel.is_set():
         return None
+    if on_batch is not None and batch:
+        on_batch(batch)
     return out
 
 
@@ -126,6 +136,8 @@ class ScanJob:
         *,
         recursive: bool = True,
         on_progress: Optional[Callable[[int], None]] = None,
+        on_batch: Optional[Callable[[list[Path]], None]] = None,
+        batch_size: int = 25,
         on_done: Optional[Callable[[list[Path]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
         root_skip: frozenset = frozenset(),
@@ -137,6 +149,8 @@ class ScanJob:
         self._cancel = threading.Event()
         self._recursive = recursive
         self._on_progress = on_progress
+        self._on_batch = on_batch
+        self._batch_size = batch_size
         self._on_done = on_done
         self._on_error = on_error
         self.result: Optional[list[Path]] = None
@@ -160,6 +174,10 @@ class ScanJob:
         if self._on_progress is not None and not self._cancel.is_set():
             self._on_progress(n)
 
+    def _batch(self, chunk: list[Path]) -> None:
+        if self._on_batch is not None and not self._cancel.is_set():
+            self._on_batch(chunk)
+
     def _run(self) -> None:
         try:
             if self._before is not None:
@@ -169,6 +187,8 @@ class ScanJob:
                 recursive=self._recursive,
                 cancel=self._cancel,
                 on_progress=self._progress,
+                on_batch=self._batch if self._on_batch is not None else None,
+                batch_size=self._batch_size,
                 root_skip=self._root_skip,
             )
         except Exception as e:  # noqa: BLE001 - reported to caller
