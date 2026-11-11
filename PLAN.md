@@ -1,6 +1,6 @@
 # BAKKIS MUSIC SORTER v2 — rebuild plan
 
-Status: v3.0.0 major milestone implemented on `manhof-3.x-update` (Unified Promo Reviewer, Libsonare Audio Engine, Modernized Frontend, and Full Architecture Modularization).
+Status: v3.0.1 patch update implemented on `manhof-3.x-update` (Dual-Workflow Onboarding Split, Done-Screen Action Isolation, and SemVer Enforcement).
 
 ## Goal
 
@@ -35,6 +35,7 @@ Rebuild and evolve the app with a modern UI (pywebview + HTML/CSS/JS) that is **
 | Version 2.1.4 | Frontend architecture & style modularization: segmented monolithic `panels.js` into modular `web/drawers/` controllers and monolithic `app.css` into domain `web/css/` stylesheets. |
 | Version 2.1.5 | Modularized metadata (`metadata/`), config (`config/`), and segmented server test suite. |
 | Version 3.0.0 | Major Milestone (`__version__ = "3.0.0"`). Unified Promo Reviewer across Inflyte + Trackstack, offline stash travel mode, native Apple Silicon `libsonare` BPM/key/drop detection, waveform BLOB storage, 50-track lookahead pipeline, virtual scrolling queue, domain modular stylesheets (`web/css/`) and drawers (`web/drawers/`), and complete subsystem modularization. |
+| Version 3.0.1 | Patch Update (`__version__ = "3.0.1"`). Dual-workflow onboarding split (Workflow 1: Local Sorter primary / Workflow 2: Promo Reviewer), completion screen action button isolation between local and promo modes, and explicit Semantic Versioning enforcement (`docs/VERSIONING.md`). |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)

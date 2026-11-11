@@ -17,6 +17,7 @@ This registry tracks architectural specifications and feature plans. Each plan i
 | **PLN-11** | Backend & Storage Modularization (Phase 1) | Completed | `promos/session/`, `storage/` | [11_backend_and_storage_modularization.md](./archive/11_backend_and_storage_modularization.md) |
 | **PLN-12** | Frontend Architecture & Style Modularization (Phase 2, v2.1.4) | Completed | `web/drawers/`, `web/css/` | [12_frontend_architecture_and_css_modularization.md](./archive/12_frontend_architecture_and_css_modularization.md) |
 | **PLN-13** | Metadata, Config & Test Suite Segmentation (Phase 3, v2.1.5) | Completed | `metadata/`, `config/`, `tests/` | [13_metadata_config_and_test_segmentation.md](./archive/13_metadata_config_and_test_segmentation.md) |
+| **PLN-14** | Dual-Workflow Onboarding & Getting Started Architecture | Completed | `README.md`, `web/`, `docs/plans/` | [14_workflow_onboarding_split.md](./archive/14_workflow_onboarding_split.md) |
 
 ---
 

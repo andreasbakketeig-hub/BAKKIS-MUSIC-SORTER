@@ -89,6 +89,18 @@ body.is-done .screen-done { display: flex; align-items: center; justify-content:
   cursor: pointer;
 }
 
+.welcome-promo-btn {
+  background: rgba(0, 214, 180, 0.16);
+  border: 1px solid rgba(0, 214, 180, 0.45);
+  color: #00d6b4;
+}
+
+.welcome-promo-btn:hover {
+  background: rgba(0, 214, 180, 0.26);
+  border-color: rgba(0, 214, 180, 0.75);
+  filter: brightness(1.1);
+}
+
 .welcome-auth-pills {
   display: flex;
   flex-direction: column;

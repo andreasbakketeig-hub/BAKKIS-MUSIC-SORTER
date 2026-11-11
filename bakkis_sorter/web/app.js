@@ -378,20 +378,48 @@ export function renderDone() {
   const verb = currentOperation() === "copy" ? "copied" : "moved";
   renderDoneFollow();
   const held = sess.held || 0;
-  if ($("btn-done-clear-filter")) $("btn-done-clear-filter").hidden = !held;
+  const isPromo = !!(sess.is_inflyte || (sess.root && sess.root.includes("Inflyte Promo Box")));
   const h1 = document.querySelector("#screen-done h1");
   if (h1) h1.textContent = held ? "No more tracks match the filter" : "All done";
-  if ($("btn-done-export")) $("btn-done-export").hidden = !total;
-  const folder = sess.root.split("/").filter(Boolean).pop();
-  const tree = sess.in_place ? folder : verb === "copied" ? "BAKKIS_SORTED_COPIES" : "BAKKIS_SORTED";
-  let note = total
-    ? `Files were ${verb} into ${sess.in_place ? "preset folders inside " + folder : tree + " inside " + folder}.`
-    : "";
-  const grid = rows.find(
-    (r) => r.order !== 99 && S.presets && S.presets.presets.some((p) => p.mode === "grid" && p.name === r.sub)
-  );
-  if (grid && !sess.in_place) note += ` Next step: load ${tree}/${grid.sub}/${grid.label} and Quick Sort it.`;
-  if ($("done-note")) $("done-note").textContent = note;
+
+  if (isPromo) {
+    if ($("btn-done-clear-filter")) $("btn-done-clear-filter").hidden = true;
+    if ($("btn-done-undo")) $("btn-done-undo").hidden = true;
+    if ($("btn-done-feedback")) $("btn-done-feedback").hidden = true;
+    if ($("btn-done-reveal")) $("btn-done-reveal").hidden = true;
+    if ($("btn-done-export")) $("btn-done-export").hidden = true;
+    if ($("btn-done-load")) $("btn-done-load").hidden = true;
+    if ($("btn-done-inflyte")) $("btn-done-inflyte").hidden = false;
+    if ($("btn-done-promo-history")) $("btn-done-promo-history").hidden = false;
+    if ($("btn-done-home")) $("btn-done-home").hidden = false;
+
+    if ($("done-note")) {
+      $("done-note").textContent = total
+        ? "All promo feedback was submitted to Inflyte & Trackstack. Full-res files downloaded to your Downloads folder."
+        : "No promos were reviewed.";
+    }
+  } else {
+    if ($("btn-done-clear-filter")) $("btn-done-clear-filter").hidden = !held;
+    if ($("btn-done-undo")) $("btn-done-undo").hidden = false;
+    if ($("btn-done-feedback")) $("btn-done-feedback").hidden = false;
+    if ($("btn-done-reveal")) $("btn-done-reveal").hidden = false;
+    if ($("btn-done-export")) $("btn-done-export").hidden = !total;
+    if ($("btn-done-load")) $("btn-done-load").hidden = false;
+    if ($("btn-done-inflyte")) $("btn-done-inflyte").hidden = true;
+    if ($("btn-done-promo-history")) $("btn-done-promo-history").hidden = true;
+    if ($("btn-done-home")) $("btn-done-home").hidden = false;
+
+    const folder = sess.root ? sess.root.split("/").filter(Boolean).pop() : "";
+    const tree = sess.in_place ? folder : verb === "copied" ? "BAKKIS_SORTED_COPIES" : "BAKKIS_SORTED";
+    let note = total
+      ? `Files were ${verb} into ${sess.in_place ? "preset folders inside " + folder : tree + " inside " + folder}.`
+      : "";
+    const grid = rows.find(
+      (r) => r.order !== 99 && S.presets && S.presets.presets.some((p) => p.mode === "grid" && p.name === r.sub)
+    );
+    if (grid && !sess.in_place) note += ` Next step: load ${tree}/${grid.sub}/${grid.label} and Quick Sort it.`;
+    if ($("done-note")) $("done-note").textContent = note;
+  }
 }
 
 export function renderAll() {
@@ -560,6 +588,9 @@ export async function boot() {
   if ($("btn-load-inflyte")) $("btn-load-inflyte").addEventListener("click", () => loadInflyte("all"));
   if ($("btn-top-inflyte")) $("btn-top-inflyte").addEventListener("click", () => loadInflyte("all"));
   if ($("btn-done-inflyte")) $("btn-done-inflyte").addEventListener("click", () => loadInflyte("all"));
+  if ($("btn-done-promo-history"))
+    $("btn-done-promo-history").addEventListener("click", () => window.Drawers && window.Drawers.show("promo-history"));
+  if ($("btn-done-home")) $("btn-done-home").addEventListener("click", goHome);
   if ($("btn-login-inflyte")) $("btn-login-inflyte").addEventListener("click", loginInflyte);
   if ($("btn-top-login-inflyte")) $("btn-top-login-inflyte").addEventListener("click", loginInflyte);
   if ($("btn-login-trackstack")) $("btn-login-trackstack").addEventListener("click", loginTrackstack);

@@ -68,20 +68,31 @@ When a new version is out, the app tells you at startup. Click **Update now**: i
 
 ## Getting started
 
+BAKKIS MUSIC SORTER provides two distinct, focused workflows depending on what you are tackling:
+
+| Workflow | Best For | Input Source | File Action | Primary Shortcuts |
+|---|---|---|---|---|
+| **Workflow 1: Local Sorter** *(Start Here)* | Organizing messy folders, downloads, and hard drive archives | Any local folder or drive on your Mac | Moves or copies into sorted folders (`BAKKIS_SORTED`) | **→** Keep · **←** Archive · **↑** Favorite · **↓** Skip · **1–9** Grid Crates |
+| **Workflow 2: Promo Reviewer** | Clearing promo backlogs from record labels & PR agencies | Inflyte Promo Box & Trackstack accounts | Direct high-res download to `~/Downloads` (files never moved) | **↑** 5★ Favorite · **→** 4★ Keep · **←** Decline · **↓** Next Track |
+
+---
+
+### Workflow 1: Local Music Sorter (Start Here)
+
 > **Before your first session:** back up your music (Time Machine or a copy on another disk), or try the app on a copy of one folder first. If the tracks are in a Rekordbox or Serato library, choose **Copy** when the app asks, so the originals stay where your library expects them.
 
-1. **Choose a music folder**: click **Choose music folder**, or drag a folder (or a track inside it) into the window. Subfolders are included.
-2. The first track starts playing at **2:00**. Choose anything from 0:00 to 6:00 in Settings → Playback; a track too short for that starts about a third of the way in.
-3. **Decide.** The track is filed and the next one plays immediately.
+1. **Choose a music folder**: on the Welcome Hub, click **Choose Music Folder** under *Workflow 1: Sorter*, or drag a folder (or a track inside it) anywhere into the window. Subfolders are included automatically.
+2. **Instant playback**: the first track immediately starts playing at the drop or jump point (default: **2:00**; customize between 0:00 and 6:00 in Settings → Playback).
+3. **Decide with one key**:
+   - **Swipe mode**: **→** Keep, **←** Archive, **↑** Favorite, **↓** Skip (or flick on trackpad).
+   - **Grid mode**: Press **1–9** to file into up to 9 custom genre crates.
+   - The file is sorted instantly in the background while the next track plays immediately with zero delay.
 
 The first time you sort, the app asks whether to **move** or **copy** files:
+- **Move** (default) keeps your hard drive clean and removes empty folders left behind. *(Warning: moving files alters their file path, which will break existing Rekordbox or Serato library links).*
+- **Copy** leaves your originals untouched and writes copies into a separate `BAKKIS_SORTED_COPIES` directory, so you can safely experiment without modifying your primary collection.
 
-- **Move** (default) keeps your folders tidy, but if the tracks are in a **Rekordbox or Serato library, their links will break**.
-- **Copy** leaves the originals where they are and puts the copies in a separate `BAKKIS_SORTED_COPIES` folder, so you can always tell them apart (and delete them all if you change your mind). Copied tracks are hidden the next time you load the folder.
-
-Press **H** or **?** at any time to see all shortcuts.
-
-### Where your files go
+#### Where your files go
 
 Moved tracks go into a `BAKKIS_SORTED` folder inside the folder you chose (copies into `BAKKIS_SORTED_COPIES`):
 
@@ -95,10 +106,27 @@ Your Folder/
         └── Skipped/           ← keeps your original subfolders
 ```
 
-- **No track is ever deleted or overwritten.** If a file with the same name already exists, the new one is saved as `name (2).mp3`.
-- **Tidy folders:** when you move tracks, source folders that end up empty are removed (turn it off in Settings → Sorting). Undo recreates them.
-- Undo puts the file back where it came from, and never overwrites anything there.
-- **Date folders:** a preset can put each day's sorting in its own folder (`Promos/2026-10-23/Keep/`). Promos and Demos do this out of the box; switch it per preset in *Edit presets*.
+- **Zero Overwriting**: If a track with the same filename already exists, the new copy is saved as `name (2).mp3`.
+- **Tidy Folders**: Source directories that become empty after moving tracks are automatically cleaned up.
+- **Lossless Undo**: Press **Z** (or **⌘Z**) at any time to move the track back to its exact original location.
+
+---
+
+### Workflow 2: Unified Promo Review (Inflyte & Trackstack)
+
+DJs receiving dozens of weekly promos across different platforms can clear their entire inbox in minutes without clicking through slow web interfaces:
+
+1. **Connect your accounts**: on the Welcome Hub under *Workflow 2: Promos*, click **Inflyte · Log In** and **Trackstack · Log In**. Authenticate once in the secure WKWebView window; credentials and session tokens are encrypted in your macOS Keychain.
+2. **Configure your feedback**: click **💬 Configure comments & ratings** to customize your rating numbers (e.g. 5★ for favorites, 4★ for keeps) and comment pools. BAKKIS rotates through authentic comments so your promoter replies remain varied and natural.
+3. **Review with one keystroke**: click **⚡ Review All Promos**.
+   - **↑** (Feeling this / Favorite): Submits your 5★ rating + cycles a personal comment, triggers cloud sync, and downloads the full-res file.
+   - **→** (Keep / Maybe): Submits 4★ rating + comment, triggers cloud sync, and downloads the track.
+   - **←** (Not for me / Decline): Dismisses the promo from your inbox or declines on Trackstack.
+   - **↓** (Skip / Next Track): Steps through tracks in multi-track releases.
+4. **Offline flight mode**: traveling without Wi-Fi? Click **✈️ Stash Promos for Travel** to pre-download waveforms and preview audio. Review while offline, and click **Sync Stashed Reviews** once you land.
+5. **Zero file movement on disk**: all promo downloads save cleanly to your native `~/Downloads` folder. BAKKIS never moves or renames promo files; tracking and ratings remain strictly in SQLite (`bakkis.db`).
+
+---
 
 ### Example workflow: genre first, then Quick Sort
 

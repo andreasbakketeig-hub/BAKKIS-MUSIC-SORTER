@@ -178,10 +178,10 @@ def test_home_navigation_and_topbar_isolation() -> None:
 
 
 def test_promo_caught_up_and_history_drawer() -> None:
-    """Verify v2.1.4 version, promo caught-up empty state, and history drawer markup & controllers."""
+    """Verify promo caught-up empty state and history drawer markup & controllers."""
     import bakkis_sorter
 
-    assert bakkis_sorter.__version__ == "3.0.0"
+    assert bakkis_sorter.__version__ == "3.0.1"
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="promo-caught-up"' in html
@@ -213,4 +213,41 @@ def test_settings_drawer_includes_promo_section_and_actions() -> None:
     assert "btn-settings-comments" in settings_code
     assert "btn-settings-promo-history" in settings_code
     assert "renderPromoSettings" in settings_code
+
+
+def test_welcome_hub_workflow_ordering() -> None:
+    """Verify that Workflow 1 (Sorter) precedes Workflow 2 (Promos) on the Welcome Hub."""
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    sorter_idx = html.find("welcome-card-sorter")
+    promo_idx = html.find("welcome-card-promos")
+    assert sorter_idx != -1 and promo_idx != -1
+    assert sorter_idx < promo_idx, "Workflow 1 (Sorter) must precede Workflow 2 (Promos)"
+    assert "Workflow 1: Sorter" in html
+    assert "Workflow 2: Promos" in html
+
+    # Verify Guide modal categorizes workflows
+    modals_code = (WEB_DIR / "drawers" / "modals.js").read_text(encoding="utf-8")
+    assert "Workflow 1: Local Sorter" in modals_code
+    assert "Workflow 2: Promo Reviewer" in modals_code
+
+
+def test_done_screen_workflow_isolation() -> None:
+    """Verify that screen-done isolates actions between Local Sorter and Promo Reviewer."""
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="btn-done-inflyte" hidden' in html
+    assert 'id="btn-done-promo-history"' in html
+    assert 'id="btn-done-home"' in html
+
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    # Verify renderDone isolates promo and local modes
+    assert 'if (isPromo)' in app_js
+    assert '$("btn-done-inflyte").hidden = false' in app_js
+    assert '$("btn-done-inflyte").hidden = true' in app_js
+    assert '$("btn-done-undo").hidden = true' in app_js
+    assert '$("btn-done-reveal").hidden = true' in app_js
+    assert '$("btn-done-export").hidden = true' in app_js
+    assert '$("btn-done-load").hidden = true' in app_js
+    assert "All promo feedback was submitted to Inflyte & Trackstack" in app_js
+
+
 

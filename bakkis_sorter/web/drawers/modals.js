@@ -26,14 +26,21 @@ export const Guide = {
     };
     const discover = !!(S && S.settings && S.settings.discover_in_topbar);
     const groups = [
-      ["Sort", [
+      ["Workflow 1: Local Sorter", [
         [keyFor(0), sw ? sw.labels[0] : "Keep"],
         [keyFor(1) + (upArchive ? " ↑" : ""), sw ? sw.labels[1] : "Archive"],
         [upArchive ? "drag ↑" : "↑", sw ? sw.labels[2] : "Favorite"],
         ["↓", "Skip"],
-        ["1–9", "Grid tile"],
+        ["1–9", "Grid crate tile"],
+        ["S  G", "Swipe mode / Grid mode"],
       ], "Or drag the card, or flick with two fingers."],
-      ["Listen", [
+      ["Workflow 2: Promo Reviewer", [
+        ["↑", "5★ Favorite + Comment + Sync"],
+        ["→", "4★ Keep + Comment + Sync"],
+        ["←", "Decline / Dismiss"],
+        ["↓", "Next track / Skip"],
+      ], "Inflyte & Trackstack: submits feedback & downloads full-res."],
+      ["Playback", [
         ["Space", "Play / pause"],
         ["1–8", "Jump points"],
         ["9", "Outro"],
@@ -43,13 +50,12 @@ export const Guide = {
         ["R", "Replay"],
       ]],
       ["General", [
-        ["Z", "Undo"],
-        ["⇧⌘Z", "Undo all"],
-        ["S  G", "Swipe / Grid"],
-        ...(discover ? [["L", "Discover"]] : []),
-        ["Q", "Queue"],
-        ["⌘F", "Fullscreen"],
-        ["H", "Shortcuts"],
+        ["Z", "Undo last"],
+        ["⇧⌘Z", "Undo whole session"],
+        ...(discover ? [["L", "Discover mode"]] : []),
+        ["Q", "Queue drawer"],
+        ["⌘F", "Fullscreen toggle"],
+        ["H", "Shortcuts guide"],
       ], discover ? "In Discover: ← → next / previous, ↑ heart." : ""],
     ];
     if (typeof Pad !== "undefined" && Pad.enabled) {

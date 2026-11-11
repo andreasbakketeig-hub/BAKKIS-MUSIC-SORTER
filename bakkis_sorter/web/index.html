@@ -94,16 +94,38 @@
       </div>
 
       <div class="welcome-hub">
-        <!-- Pillar 1: Promo Hub -->
+        <!-- Pillar 1: Sorter Hub (Start Here) -->
+        <div class="welcome-card welcome-card-sorter">
+          <div class="welcome-card-head">
+            <div class="welcome-card-badge-row">
+              <span class="welcome-badge">📁 Workflow 1: Sorter</span>
+            </div>
+            <h2>Sort Music</h2>
+            <p class="muted small">Organize &amp; clean local DJ folders</p>
+          </div>
+          <button type="button" class="primary-btn welcome-action-btn" id="btn-choose">
+            Choose Music Folder
+          </button>
+          <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
+          <div class="welcome-drop-info">
+            <p class="muted">or drop a folder anywhere in this window</p>
+            <p class="muted small">Sorted tracks go to <code>BAKKIS_SORTED</code> inside the folder you choose (copies to <code>BAKKIS_SORTED_COPIES</code>).</p>
+          </div>
+          <button type="button" class="text-link-btn welcome-comments-link" id="btn-sorter-settings">
+            ⚙️ Sorter presets &amp; options
+          </button>
+        </div>
+
+        <!-- Pillar 2: Promo Hub -->
         <div class="welcome-card welcome-card-promos">
           <div class="welcome-card-head">
             <div class="welcome-card-badge-row">
-              <span class="welcome-badge">⚡ Promos</span>
+              <span class="welcome-badge">⚡ Workflow 2: Promos</span>
             </div>
             <h2>Review Promos</h2>
             <p class="muted small">Inflyte Promo Box &amp; Trackstack</p>
           </div>
-          <button type="button" class="primary-btn welcome-action-btn" id="btn-load-inflyte">
+          <button type="button" class="primary-btn welcome-action-btn welcome-promo-btn" id="btn-load-inflyte">
             ⚡ Review All Promos
           </button>
           <div class="welcome-auth-pills" aria-label="Promo service connections">
@@ -121,28 +143,6 @@
           </button>
           <button type="button" class="text-link-btn welcome-comments-link" id="btn-promo-history">
             📜 Review previous feedback
-          </button>
-        </div>
-
-        <!-- Pillar 2: Sorter Hub -->
-        <div class="welcome-card welcome-card-sorter">
-          <div class="welcome-card-head">
-            <div class="welcome-card-badge-row">
-              <span class="welcome-badge">📁 Sorter</span>
-            </div>
-            <h2>Sort Music</h2>
-            <p class="muted small">Organize &amp; slice local DJ tracks</p>
-          </div>
-          <button type="button" class="ghost-btn welcome-action-btn" id="btn-choose">
-            Choose Music Folder
-          </button>
-          <button type="button" class="ghost-btn" id="btn-load-default" hidden></button>
-          <div class="welcome-drop-info">
-            <p class="muted">or drop a folder anywhere in this window</p>
-            <p class="muted small">Sorted tracks go to <code>BAKKIS_SORTED</code> inside the folder you choose (copies to <code>BAKKIS_SORTED_COPIES</code>).</p>
-          </div>
-          <button type="button" class="text-link-btn welcome-comments-link" id="btn-sorter-settings">
-            ⚙️ Sorter presets &amp; options
           </button>
         </div>
       </div>
@@ -236,7 +236,9 @@
         <button type="button" class="ghost-btn" id="btn-done-feedback" title="Copy a summary of your decisions for a promo report or demo replies">Copy feedback</button>
         <button type="button" class="ghost-btn" id="btn-done-reveal">Reveal in Finder</button>
         <button type="button" class="ghost-btn" id="btn-done-export" hidden>Export playlists</button>
-        <button type="button" class="primary-btn" id="btn-done-inflyte">⚡ Reload All Promos</button>
+        <button type="button" class="primary-btn welcome-promo-btn" id="btn-done-inflyte" hidden>⚡ Reload All Promos</button>
+        <button type="button" class="ghost-btn" id="btn-done-promo-history" hidden>📜 Review Previous Feedback</button>
+        <button type="button" class="ghost-btn" id="btn-done-home">Return to Hub</button>
         <button type="button" class="ghost-btn" id="btn-done-load">Load another folder</button>
       </div>
     </div>
@@ -350,10 +352,11 @@
     <div class="welcome-body">
       <span class="logo logo-boxed welcome-logo" role="img" aria-label="BAKKIS"></span>
       <h2 id="welcome-title">Hi, I'm BAKKIS.</h2>
-      <p>My music folders were huge and messy, and sorting them meant endless clicking and dragging. So I built the app I wanted: listen, swipe, next. No mouse needed.</p>
-      <p>It moves your tracks into tidy folders and removes the empty ones left behind. Every step can be undone.</p>
-      <p class="muted small">Press H any time for the shortcuts.</p>
-      <div class="row-btns"><button type="button" class="primary-btn" id="welcome-go">Let's sort</button></div>
+      <p>I built this app to eliminate music clutter and promo fatigue with two focused workflows:</p>
+      <p><strong>1. Sort Local Music:</strong> Listen from the drop, swipe or tap to file into clean folders, and clean up empty directories with full lossless undo.</p>
+      <p><strong>2. Review Music Promos:</strong> Clear Inflyte and Trackstack mailouts in one unified queue with 1-key ratings, rotating comments, and offline flight mode.</p>
+      <p class="muted small">Press H or ? any time for the full shortcut guide.</p>
+      <div class="row-btns"><button type="button" class="primary-btn" id="welcome-go">Get Started</button></div>
       <p class="muted small welcome-foot">Free and open source. <button type="button" class="link-btn" id="welcome-support">Buy me a coffee ☕</button></p>
     </div>
   </div>
