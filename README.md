@@ -72,8 +72,8 @@ BAKKIS MUSIC SORTER provides two distinct, focused workflows depending on what y
 
 | Workflow | Best For | Input Source | File Action | Primary Shortcuts |
 |---|---|---|---|---|
-| **Workflow 1: Local Sorter** *(Start Here)* | Organizing messy folders, downloads, and hard drive archives | Any local folder or drive on your Mac | Moves or copies into sorted folders (`BAKKIS_SORTED`) | **→** Keep · **←** Archive · **↑** Favorite · **↓** Skip · **1–9** Grid Crates |
-| **Workflow 2: Promo Reviewer** | Clearing promo backlogs from record labels & PR agencies | Inflyte Promo Box & Trackstack accounts | Direct high-res download to `~/Downloads` (files never moved) | **↑** 5★ Favorite · **→** 4★ Keep · **←** Decline · **↓** Next Track |
+| **Workflow 1: Local Sorter**<br>*(Start Here)* | Organizing messy folders, downloads, and hard drive archives | Any local folder or drive on your Mac | Moves or copies into sorted folders (`BAKKIS_SORTED`) | • **→** Keep<br>• **←** Archive<br>• **↑** Favorite<br>• **↓** Skip<br>• **1–9** Grid Crates |
+| **Workflow 2: Promo Reviewer** | Clearing promo backlogs from record labels & PR agencies | Inflyte Promo Box & Trackstack accounts | Direct high-res download to `~/Downloads`<br>*(files never moved)* | • **↑** 5★ Favorite + Comment<br>• **→** 4★ Keep + Comment<br>• **←** Decline / Dismiss<br>• **↓** Next Track / Skip |
 
 ---
 
@@ -84,7 +84,11 @@ BAKKIS MUSIC SORTER provides two distinct, focused workflows depending on what y
 1. **Choose a music folder**: on the Welcome Hub, click **Choose Music Folder** under *Workflow 1: Sorter*, or drag a folder (or a track inside it) anywhere into the window. Subfolders are included automatically.
 2. **Instant playback**: the first track immediately starts playing at the drop or jump point (default: **2:00**; customize between 0:00 and 6:00 in Settings → Playback).
 3. **Decide with one key**:
-   - **Swipe mode**: **→** Keep, **←** Archive, **↑** Favorite, **↓** Skip (or flick on trackpad).
+   - **Swipe mode**:
+     - **→** Keep
+     - **←** Archive
+     - **↑** Favorite
+     - **↓** Skip (or flick on trackpad)
    - **Grid mode**: Press **1–9** to file into up to 9 custom genre crates.
    - The file is sorted instantly in the background while the next track plays immediately with zero delay.
 

@@ -181,7 +181,7 @@ def test_promo_caught_up_and_history_drawer() -> None:
     """Verify promo caught-up empty state and history drawer markup & controllers."""
     import bakkis_sorter
 
-    assert bakkis_sorter.__version__ == "3.0.1"
+    assert bakkis_sorter.__version__ == "3.0.2"
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="promo-caught-up"' in html
