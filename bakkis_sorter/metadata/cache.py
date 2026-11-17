@@ -6,17 +6,11 @@ import os
 import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from .cover import (
-    COVER_MAX_DIM,
-    COVER_THUMB_QUALITY,
-    MAX_COVER_BYTES,
-    downsample_cover,
-    image_mime,
-    read_cover,
-)
+from .cover import downsample_cover, read_cover
 from .reader import _cache_key, read_meta
 from .tags import TrackMeta
 
@@ -25,13 +19,6 @@ COVER_CACHE_ITEMS = 128
 COVER_CACHE_BYTES = 8 * 1024 * 1024
 COVER_CACHE_SIZE = COVER_CACHE_ITEMS
 PREFETCH_WORKERS = 3
-
-def _cache_key(path: Path) -> Optional[tuple]:
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (str(path), st.st_size, st.st_mtime_ns)
 
 
 class _LRU:
@@ -53,6 +40,9 @@ class _LRU:
         self._d.move_to_end(key)
         while len(self._d) > self.size:
             self._d.popitem(last=False)
+
+    def pop(self, key: tuple) -> None:
+        self._d.pop(key, None)
 
 
 class ByteBoundedLRU:
@@ -142,6 +132,55 @@ class MetadataCache:
             return None
         with self._lock:
             return self._meta.get(key)  # type: ignore[return-value]
+
+    def invalidate(self, path: Path) -> None:
+        """Evict cached metadata so the next lookup re-reads tags + SQLite analysis."""
+        key = _cache_key(path)
+        if key is None:
+            return
+        with self._lock:
+            self._meta.pop(key)
+
+    def update_analysis(self, path: Path, analysis: dict) -> None:
+        """Enrich cached TrackMeta in RAM with completed background DSP analysis."""
+        key = _cache_key(path)
+        if key is None or not analysis:
+            return
+        with self._lock:
+            existing: Optional[TrackMeta] = self._meta.get(key)  # type: ignore[assignment]
+            if existing is None:
+                return
+            raw_bpm = analysis.get("bpm")
+            detected_bpm = existing.detected_bpm
+            if raw_bpm is not None:
+                try:
+                    detected_bpm = float(raw_bpm)
+                except (TypeError, ValueError):
+                    pass
+            camelot = existing.camelot or (str(analysis["camelot_key"]) if analysis.get("camelot_key") else None)
+            drop_seconds = analysis.get("drop_seconds")
+            if drop_seconds is None:
+                drop_seconds = existing.drop_seconds
+            jump_delta = existing.jump_delta
+            if not existing.bpm:
+                raw_delta = analysis.get("jump_delta")
+                if raw_delta:
+                    try:
+                        jump_delta = float(raw_delta)
+                    except (TypeError, ValueError):
+                        pass
+                elif detected_bpm and detected_bpm > 0:
+                    jump_delta = round(32.0 * (60.0 / detected_bpm), 2)
+            self._meta.put(
+                key,
+                replace(
+                    existing,
+                    detected_bpm=detected_bpm,
+                    camelot=camelot,
+                    drop_seconds=drop_seconds,
+                    jump_delta=jump_delta,
+                ),
+            )
 
     def cover(self, path: Path) -> Optional[bytes]:
         key = _cache_key(path)

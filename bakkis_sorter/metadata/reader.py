@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from mutagen import File as MutagenFile
@@ -50,7 +50,7 @@ def file_digest(path: Path) -> Optional[str]:
     return hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
 
 
-def read_meta(path: Path) -> TrackMeta:
+def read_meta(path: Path, *, storage: Optional[Any] = None) -> TrackMeta:
     audio = _open(path)
     duration = 0.0
     title = artist = bpm = key = None
@@ -69,7 +69,7 @@ def read_meta(path: Path) -> TrackMeta:
         bpm = format_bpm(_tag(audio, BPM_KEYS))
         key = _tag(audio, KEY_KEYS)
 
-    from ..analyzer import analyze_audio_file, to_camelot
+    from ..analyzer import to_camelot
     from .cover import _cover_from_audio, _size
 
     camelot = to_camelot(key)
@@ -78,13 +78,14 @@ def read_meta(path: Path) -> TrackMeta:
     detected_bpm: Optional[float] = None
 
     digest = file_digest(path)
-    st = None
-    try:
-        from ..storage import get_storage
+    st = storage
+    if st is None:
+        try:
+            from ..storage import get_storage
 
-        st = get_storage()
-    except Exception:
-        pass
+            st = get_storage()
+        except Exception:
+            pass
 
     analysis = None
     if st is not None and digest:
@@ -94,34 +95,18 @@ def read_meta(path: Path) -> TrackMeta:
             pass
 
     if analysis:
-        detected_bpm = float(analysis["bpm"])
+        try:
+            if analysis.get("bpm") is not None:
+                detected_bpm = float(analysis["bpm"])
+        except (TypeError, ValueError):
+            detected_bpm = None
         if not camelot and analysis.get("camelot_key"):
             camelot = str(analysis["camelot_key"])
         drop_seconds = analysis.get("drop_seconds")
-        jump_delta = float(analysis.get("jump_delta") or 15.24)
-    elif path.is_file():
         try:
-            res = analyze_audio_file(path)
-            detected_bpm = res.bpm
-            if not camelot:
-                camelot = res.camelot_key
-            drop_seconds = res.drop_seconds
-            jump_delta = res.jump_delta
-            if st is not None and digest:
-                try:
-                    st.put_analysis(
-                        file_hash=digest,
-                        bpm=res.bpm,
-                        musical_key=res.musical_key,
-                        camelot_key=res.camelot_key,
-                        drop_seconds=res.drop_seconds,
-                        jump_delta=res.jump_delta,
-                        confidence=res.confidence,
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            jump_delta = float(analysis.get("jump_delta") or 15.24)
+        except (TypeError, ValueError):
+            jump_delta = 15.24
 
     if bpm:
         try:

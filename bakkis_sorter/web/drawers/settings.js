@@ -467,7 +467,7 @@ export const SettingsDrawer = {
         b.addEventListener("click", fn);
         btns.appendChild(b);
       };
-      mk("Use current folder", () => this.save({ default_folder_path: S.session.root }).then(window.refreshState).then(() => this.render()), !(S && S.session));
+      mk("Use current folder", () => this.save({ default_folder_path: S.session.root }).then(window.refreshState).then(() => this.render()), !(S && S.session && !S.session.is_inflyte));
       mk("Choose…", async () => { const p = await pickFolderPath(); if (p) { await this.save({ default_folder_path: p }); if (window.refreshState) await window.refreshState(); this.render(); } });
       mk("Clear", () => this.save({ default_folder_path: null }).then(() => this.render()), !path);
       if (path && S && S.defaultFolderExists) mk("Load now", () => { if (window.Drawers) window.Drawers.close(); loadFolder(path); });

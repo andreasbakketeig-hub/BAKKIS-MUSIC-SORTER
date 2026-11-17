@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -21,6 +22,7 @@ from .client import (
     TRACKSTACK_STATIC_BASE_URL,
     TRACKSTACK_STREAM_BASE_URL,
     _INTERCEPTOR_JS,
+    build_trpc_async_fetch_js,
     build_trpc_request_js,
 )
 from .downloader import (
@@ -192,14 +194,21 @@ class TrackstackBridge(BaseWebViewBridge):
         """Execute an authenticated tRPC request inside the Trackstack WKWebView under rate-limit + backoff."""
 
         def do_call() -> Any:
-            js = build_trpc_request_js(
+            async_js = build_trpc_async_fetch_js(
                 api_base_url=self.api_base_url,
                 workspace_id=self.workspace_id,
                 method=method,
                 procedure=procedure,
                 payload=payload,
             )
-            res = self._eval_js(js, timeout=20.0) or {}
+            sync_js = build_trpc_request_js(
+                api_base_url=self.api_base_url,
+                workspace_id=self.workspace_id,
+                method=method,
+                procedure=procedure,
+                payload=payload,
+            )
+            res = self._eval_async_js(async_js, sync_fallback=sync_js, timeout=20.0) or {}
             status = int(res.get("status") or 0)
             if status in (429, 502, 503, 504):
                 raise RateLimitError(

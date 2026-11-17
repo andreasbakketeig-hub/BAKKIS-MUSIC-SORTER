@@ -525,7 +525,30 @@ class InflyteBridge(BaseWebViewBridge):
         encoded_body = urllib.parse.urlencode(form_body) if form_body else ""
 
         def do_call() -> dict:
-            js = f"""
+            async_js = """
+            const csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+            const headers = {
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'X-Requested-With': 'XMLHttpRequest'
+            };
+            if (csrf) headers['X-CSRF-Token'] = csrf;
+            const opts = { method: method, headers: headers, credentials: 'same-origin' };
+            if (encodedBody) {
+                headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+                opts.body = encodedBody;
+            }
+            const resp = await fetch(reqPath, opts);
+            const txt = await resp.text();
+            let data = null;
+            try { data = JSON.parse(txt); } catch (_) { data = { raw: txt }; }
+            const retryAfter = resp.headers.get('Retry-After');
+            return JSON.stringify({
+                status: resp.status,
+                retryAfter: retryAfter ? parseFloat(retryAfter) : null,
+                data: data
+            });
+            """
+            sync_js = f"""
             (function() {{
                 const csrf = (document.querySelector('meta[name="csrf-token"]') || {{}}).content || '';
                 const xhr = new XMLHttpRequest();
@@ -549,7 +572,14 @@ class InflyteBridge(BaseWebViewBridge):
                 }};
             }})()
             """
-            res = self._eval_js(js) or {}
+            res = (
+                self._eval_async_js(
+                    async_js,
+                    sync_fallback=sync_js,
+                    args={"method": method, "reqPath": path, "encodedBody": encoded_body},
+                )
+                or {}
+            )
             status = int(res.get("status") or 0)
             if status in (429, 502, 503, 504):
                 _log_debug("xhr_rate_limit", method=method, path=path, status=status)

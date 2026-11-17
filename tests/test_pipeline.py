@@ -112,3 +112,56 @@ def test_warmup_engine_skip_cached(tmp_path: Path) -> None:
         engine.shutdown()
         cache.shutdown()
         store.close()
+
+
+def test_warmup_engine_skips_evicted_dsp_tracks(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import bakkis_sorter.pipeline as pipeline_mod
+    from bakkis_sorter.analyzer import TrackAnalysis
+
+    db_file = tmp_path / "bakkis.db"
+    store = EncryptedStorage(db_path=db_file, master_key=secrets.token_bytes(32))
+    cache = MetadataCache(workers=2)
+
+    p1 = make_wav(tmp_path / "01_first.wav", seconds=1)
+    p2 = make_wav(tmp_path / "02_evicted.wav", seconds=1)
+    p3 = make_wav(tmp_path / "03_promoted.wav", seconds=1)
+
+    entered_first = threading.Event()
+    release_first = threading.Event()
+    analyzed: list[str] = []
+
+    def fake_analyze(path: Path) -> TrackAnalysis:
+        name = Path(path).name
+        analyzed.append(name)
+        if name == "01_first.wav":
+            entered_first.set()
+            release_first.wait(timeout=3.0)
+        return TrackAnalysis(bpm=126.0, musical_key="A minor", camelot_key="8A", drop_seconds=32.0, confidence=0.9)
+
+    monkeypatch.setattr(pipeline_mod, "analyze_audio_file", fake_analyze)
+
+    engine = WarmupEngine(metadata_cache=cache, storage=store, workers=2, lookahead=2)
+    try:
+        engine.update_queue([p1, p2])
+        assert entered_first.wait(timeout=3.0)
+
+        # While p1 is busy analyzing, shift the active window so p2 is evicted and p3 enters
+        engine.update_queue([p3])
+        release_first.set()
+
+        deadline = time.time() + 4.0
+        while time.time() < deadline:
+            with engine._lock:
+                if not engine._inflight:
+                    break
+            time.sleep(0.02)
+
+        assert "01_first.wav" in analyzed
+        assert "03_promoted.wav" in analyzed
+        assert "02_evicted.wav" not in analyzed
+    finally:
+        release_first.set()
+        engine.shutdown()
+        cache.shutdown()
+        store.close()

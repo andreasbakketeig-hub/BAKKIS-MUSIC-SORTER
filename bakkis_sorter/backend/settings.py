@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from .. import __version__, keys, listen, playlists, updater, updates, waveform
 from ..config import MODES, norm_mode, reset_settings, save_settings
-from ..metadata import MetadataCache, PeakStore
+from ..metadata import MetadataCache, PeakStore, file_digest
 from ..server import ApiError
 from ..session import Journal, Session
 
@@ -98,6 +98,12 @@ class SettingsApiMixin:
         if p is None:
             raise ApiError("Unknown track", 404)
         meta = self.meta.get(p)
+        if meta.detected_bpm is None and getattr(self, "storage", None) is not None:
+            f_hash = file_digest(p)
+            analysis = self.storage.get_analysis(f_hash) if f_hash else None
+            if analysis:
+                self.meta.update_analysis(p, analysis)
+                meta = self.meta.peek(p) or meta
         dupes = self.dupes
         dup = dupes.find(p, meta) if dupes is not None else None
         return {"track_id": track_id, **meta.to_dict(), "duplicate": dup, "pcm": waveform.is_pcm_path(p)}

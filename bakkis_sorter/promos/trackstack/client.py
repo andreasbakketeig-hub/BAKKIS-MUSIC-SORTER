@@ -140,16 +140,15 @@ _INTERCEPTOR_JS = """
 """
 
 
-def build_trpc_request_js(
+def _build_trpc_prelude_js(
     api_base_url: str,
     workspace_id: str | None,
     method: str,
     procedure: str,
     payload: Any,
 ) -> str:
-    """Build the executable JavaScript for a tRPC call inside the WKWebView."""
+    """Shared JS prelude resolving tRPC URL, workspace header, and Cognito/cookie JWT."""
     return f"""
-    (function() {{
         const ts = window.__bakkis_ts || {{}};
         const baseUrl = ts.apiBaseUrl || {json.dumps(api_base_url)};
         let wsId = '';
@@ -171,9 +170,9 @@ def build_trpc_request_js(
             try {{
                 for (let i = 0; i < localStorage.length; i++) {{
                     const k = localStorage.key(i) || '';
-                    if (k.includes('CognitoIdentityServiceProvider') && k.endsWith('.idToken')) {{
+                    if (k.includes('CognitoIdentityServiceProvider') && (k.endsWith('.idToken') || k.endsWith('.accessToken'))) {{
                         authHeader = localStorage.getItem(k) || '';
-                        break;
+                        if (k.endsWith('.idToken')) break;
                     }}
                 }}
             }} catch (_) {{}}
@@ -183,7 +182,21 @@ def build_trpc_request_js(
         if (method === 'GET' && payload !== null && payload !== undefined) {{
             url += '?input=' + encodeURIComponent(JSON.stringify(payload));
         }}
+    """
 
+
+def build_trpc_request_js(
+    api_base_url: str,
+    workspace_id: str | None,
+    method: str,
+    procedure: str,
+    payload: Any,
+) -> str:
+    """Build the executable JavaScript for a synchronous tRPC call inside the WKWebView."""
+    prelude = _build_trpc_prelude_js(api_base_url, workspace_id, method, procedure, payload)
+    return f"""
+    (function() {{
+        {prelude}
         const xhr = new XMLHttpRequest();
         xhr.open(method, url, false);
         xhr.setRequestHeader('Accept', '*/*');
@@ -206,4 +219,37 @@ def build_trpc_request_js(
             data: parsed
         }};
     }})()
+    """
+
+
+def build_trpc_async_fetch_js(
+    api_base_url: str,
+    workspace_id: str | None,
+    method: str,
+    procedure: str,
+    payload: Any,
+) -> str:
+    """Build an async ``fetch()`` body for WKWebView ``callAsyncJavaScript``."""
+    prelude = _build_trpc_prelude_js(api_base_url, workspace_id, method, procedure, payload)
+    return f"""
+    {prelude}
+    const headers = {{ 'Accept': '*/*', 'Content-Type': 'application/json' }};
+    if (wsId) headers['x-workspace-id'] = wsId;
+    if (authHeader) headers['Authorization'] = authHeader;
+
+    const opts = {{ method: method, headers: headers }};
+    if (method === 'POST') {{
+        opts.body = payload !== null && payload !== undefined ? JSON.stringify(payload) : '{{}}';
+    }}
+
+    const resp = await fetch(url, opts);
+    const txt = await resp.text();
+    let parsed = null;
+    try {{ parsed = JSON.parse(txt); }} catch (_) {{ parsed = {{ raw: txt }}; }}
+    const retryAfter = resp.headers.get('Retry-After');
+    return JSON.stringify({{
+        status: resp.status,
+        retryAfter: retryAfter ? parseFloat(retryAfter) : null,
+        data: parsed
+    }});
     """

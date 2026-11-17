@@ -187,6 +187,7 @@ def test_trackstack_grouping_and_unified_session_workflow(tmp_path: Path) -> Non
     assert cur is not None
     assert cur.source == "trackstack"
     assert cur.track_index == 0
+    assert session.snapshot()["root"] == "Promos"
 
     # Press ↓ (skip) -> steps to Track 2 of the same Trackstack submission
     session.skip(cur.id)
@@ -298,5 +299,64 @@ def test_trackstack_configurable_download_dir(tmp_path: Path) -> None:
     resolved = promo_download_dir(str(custom_target))
     assert resolved == custom_target
     assert resolved.exists()
+
+
+def test_trackstack_open_login_window_and_auth_watcher(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    key = secrets.token_bytes(32)
+    store = EncryptedStorage(db_path=tmp_path / "bakkis.db", master_key=key)
+    bridge = TrackstackBridge(storage=store, download_dir=tmp_path / "Downloads")
+
+    class _DummyWin:
+        def __init__(self) -> None:
+            self.shown = False
+            self.hidden = False
+
+        def show(self) -> None:
+            self.shown = True
+
+        def hide(self) -> None:
+            self.hidden = True
+
+    win = _DummyWin()
+    ready_flag = {"ready": False}
+    eval_calls = {"n": 0}
+    watcher_done = threading.Event()
+
+    bridge._ensure_window = lambda *, visible=False: setattr(bridge, "_win", win) or win  # type: ignore[method-assign]
+
+    def fake_eval_js(script: str, timeout: float = 15.0, *, visible: bool = False):
+        eval_calls["n"] += 1
+        if eval_calls["n"] >= 2:
+            ready_flag["ready"] = True
+        return {
+            "ready": ready_flag["ready"],
+            "workspaceId": "ws-watch-1",
+            "inboxId": "inbox-watch-1" if ready_flag["ready"] else None,
+            "userId": "user-watch-1",
+            "apiBaseUrl": "https://example.lambda-url.eu-west-1.on.aws",
+        }
+
+    bridge._eval_js = fake_eval_js  # type: ignore[method-assign]
+    bridge.ensure_context_ids = lambda: watcher_done.set()  # type: ignore[method-assign]
+
+    bridge.open_login_window()
+    assert win.shown is True
+    assert watcher_done.wait(timeout=4.0)
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not win.hidden:
+        time.sleep(0.02)
+    assert win.hidden is True
+
+    # Also verify ensure_authenticated succeeds without raising NameError on time
+    bridge._is_connected = False
+    bridge.workspace_id = "ws-watch-1"
+    bridge.inbox_id = "inbox-watch-1"
+    bridge.ensure_authenticated()
+    assert bridge.check_auth_status()["connected"] is True
+
+    store.close()
 
 

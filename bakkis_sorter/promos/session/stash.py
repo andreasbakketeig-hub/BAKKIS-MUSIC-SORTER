@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import threading
 import urllib.error
@@ -21,7 +22,13 @@ logger = get_logger("inflyte")
 
 
 class SessionStashMixin:
-    """Pre-downloading, cache verification, pre-fetching, and offline flight stashing."""
+    """Pre-downloading, cache verification, priority pre-fetching, and offline flight stashing."""
+
+    def _mark_cur_ready_if_current(self, track_id: str) -> None:
+        with self.lock:  # type: ignore[attr-defined]
+            cur = self.current  # type: ignore[attr-defined]
+            if cur is not None and cur.id == str(track_id):
+                self._cur_ready_event.set()  # type: ignore[attr-defined]
 
     def _download_file(self, url: str, dest: Path) -> Optional[Path]:
         if dest.is_file() and dest.stat().st_size > 0:
@@ -40,6 +47,7 @@ class SessionStashMixin:
                 return dest
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             logger.debug("Non-fatal: download preview file %s failed: %s", url, exc)
+        finally:
             if tmp.exists():
                 try:
                     tmp.unlink()
@@ -54,17 +62,20 @@ class SessionStashMixin:
             if t is None:
                 return None
             if t.cached_audio_path and t.cached_audio_path.is_file() and t.cached_audio_path.stat().st_size > 0:
+                self._mark_cur_ready_if_current(t.id)
                 return t.cached_audio_path
             tlock = self._audio_locks.setdefault(t.id, threading.Lock())  # type: ignore[attr-defined]
             is_current = self.current is not None and self.current.id == t.id  # type: ignore[attr-defined]
 
         with tlock:
             if t.cached_audio_path and t.cached_audio_path.is_file() and t.cached_audio_path.stat().st_size > 0:
+                self._mark_cur_ready_if_current(t.id)
                 return t.cached_audio_path
             ext = ".aac" if t.source == "trackstack" else ".mp3"
             dest = cache_dir() / f"track_{t.source}_{t.inflyte_track_id}{ext}"
             if dest.is_file() and dest.stat().st_size > 0:
                 t.cached_audio_path = dest
+                self._mark_cur_ready_if_current(t.id)
                 return dest
             try:
                 if not t.preview_url:
@@ -80,6 +91,7 @@ class SessionStashMixin:
                 downloaded = self._download_file(t.preview_url, dest)
                 if downloaded:
                     t.cached_audio_path = downloaded
+                    self._mark_cur_ready_if_current(t.id)
                     return downloaded
             except Exception as exc:
                 if not silent:
@@ -87,70 +99,155 @@ class SessionStashMixin:
         return None
 
     def _prefetch_nearby(self) -> None:
-        """Pre-download Track 1 of the next 8 albums + Track 2/3 of the current and next 2 albums in parallel."""
+        """Schedule tiered priority pre-downloads for upcoming promos without blocking on DSP."""
+        to_push: list[tuple[tuple[int, int, int, int], str]] = []
         with self.lock:  # type: ignore[attr-defined]
-            if not self.promos:  # type: ignore[attr-defined]
+            if self._prefetch_closed or not self.promos:  # type: ignore[attr-defined]
                 return
-            ordered_targets: list[InflyteTrack] = []
+            self._prefetch_gen += 1  # type: ignore[attr-defined]
+            gen = self._prefetch_gen  # type: ignore[attr-defined]
+            ordered_targets: list[tuple[int, InflyteTrack]] = []
             seen: set[str] = set()
 
-            def add_t(tr: InflyteTrack) -> None:
+            def add_t(tier: int, tr: InflyteTrack) -> None:
                 if tr.id not in seen:
                     seen.add(tr.id)
-                    ordered_targets.append(tr)
+                    ordered_targets.append((tier, tr))
 
             cur_promo = self.promos[0]  # type: ignore[attr-defined]
             cur_idx = max(0, min(self.current_track_idx, len(cur_promo.tracks) - 1))  # type: ignore[attr-defined]
-            # 1. Current track
-            add_t(cur_promo.tracks[cur_idx])
-            # 2. Next track in current promo (for ↓ Skip to Next Track) AND Track 1 of next promo (for ↑/→/← Next Album)
+            cur_tr = cur_promo.tracks[cur_idx]
+            if cur_tr.cached_audio_path and cur_tr.cached_audio_path.is_file() and cur_tr.cached_audio_path.stat().st_size > 0:
+                self._cur_ready_event.set()  # type: ignore[attr-defined]
+            else:
+                self._cur_ready_event.clear()  # type: ignore[attr-defined]
+
+            # Tier 0: Current track (uncontended priority)
+            add_t(0, cur_tr)
+            # Tier 1: Next promo Track 1 (swipe) & next track in current promo (skip/down)
             if len(self.promos) > 1 and self.promos[1].tracks:  # type: ignore[attr-defined]
-                add_t(self.promos[1].tracks[0])  # type: ignore[attr-defined]
+                add_t(1, self.promos[1].tracks[0])  # type: ignore[attr-defined]
             if cur_idx + 1 < len(cur_promo.tracks):
-                add_t(cur_promo.tracks[cur_idx + 1])
-            # 3. Track 1 of the next 8 albums so rapid album-to-album swiping never waits on network
-            for p in self.promos[2:9]:  # type: ignore[attr-defined]
+                add_t(1, cur_promo.tracks[cur_idx + 1])
+            # Tier 2: Track 1 of next 10 promos
+            for p in self.promos[2:12]:  # type: ignore[attr-defined]
                 if p.tracks:
-                    add_t(p.tracks[0])
-            # 4. Track 2 & Track 3 of the current and next 2 albums
-            for p in self.promos[:3]:  # type: ignore[attr-defined]
+                    add_t(2, p.tracks[0])
+            # Tier 3: Tracks 2 & 3 of current and next promo
+            for p in self.promos[:2]:  # type: ignore[attr-defined]
                 for t in p.tracks[1:3]:
-                    add_t(t)
+                    add_t(3, t)
 
-            to_submit: list[InflyteTrack] = []
-            for tr in ordered_targets:
-                if tr.id not in self._prefetched_ids:  # type: ignore[attr-defined]
-                    self._prefetched_ids.add(tr.id)  # type: ignore[attr-defined]
-                    to_submit.append(tr)
+            for idx, (tier, tr) in enumerate(ordered_targets):
+                promo = self.track_to_promo.get(tr.id)  # type: ignore[attr-defined]
+                audio_ok = bool(tr.cached_audio_path and tr.cached_audio_path.is_file() and tr.cached_audio_path.stat().st_size > 0)
+                cover_ok = bool(promo and promo.cached_cover_path and promo.cached_cover_path.is_file())
+                if audio_ok and (cover_ok or not (promo and (promo.thumbnail_url or promo.full_image_url))):
+                    continue
+                if tr.id in self._prefetch_running:  # type: ignore[attr-defined]
+                    continue
+                if self._prefetch_queued_gen.get(tr.id, 0) >= gen:  # type: ignore[attr-defined]
+                    continue
+                self._prefetch_queued_gen[tr.id] = gen  # type: ignore[attr-defined]
+                to_push.append(((tier, -gen, idx, next(self._prefetch_seq)), tr.id))  # type: ignore[attr-defined]
 
-        def fetch_one(tr: InflyteTrack) -> None:
+        for item in to_push:
+            self._prefetch_queue.put(item)  # type: ignore[attr-defined]
+
+    def _prefetch_worker_loop(self) -> None:
+        while True:
+            prio, tr_id = self._prefetch_queue.get()  # type: ignore[attr-defined]
+            if tr_id is None:
+                return
+            tier, neg_gen = prio[0], prio[1]
+            gen = -neg_gen
+            with self.lock:  # type: ignore[attr-defined]
+                if self._prefetch_closed:  # type: ignore[attr-defined]
+                    return
+                if gen < self._prefetch_queued_gen.get(tr_id, 0):  # type: ignore[attr-defined]
+                    continue
+                tr = self.tracks.get(tr_id)  # type: ignore[attr-defined]
+                promo = self.track_to_promo.get(tr_id)  # type: ignore[attr-defined]
+                if tr is None or promo is None or promo not in self.promos or tr_id in self._prefetch_running:  # type: ignore[attr-defined]
+                    self._prefetch_queued_gen.pop(tr_id, None)  # type: ignore[attr-defined]
+                    continue
+                need_wait = tier >= 2 and not self._cur_ready_event.is_set()  # type: ignore[attr-defined]
+
+            if need_wait:
+                self._cur_ready_event.wait(timeout=1.5)  # type: ignore[attr-defined]
+                with self.lock:  # type: ignore[attr-defined]
+                    if self._prefetch_closed:  # type: ignore[attr-defined]
+                        return
+                    if gen < self._prefetch_queued_gen.get(tr_id, 0):  # type: ignore[attr-defined]
+                        continue
+                    promo = self.track_to_promo.get(tr_id)  # type: ignore[attr-defined]
+                    if promo is None or promo not in self.promos or tr_id in self._prefetch_running:  # type: ignore[attr-defined]
+                        self._prefetch_queued_gen.pop(tr_id, None)  # type: ignore[attr-defined]
+                        continue
+                    self._prefetch_running.add(tr_id)  # type: ignore[attr-defined]
+            else:
+                with self.lock:  # type: ignore[attr-defined]
+                    if tr_id in self._prefetch_running or promo not in self.promos:  # type: ignore[attr-defined]
+                        continue
+                    self._prefetch_running.add(tr_id)  # type: ignore[attr-defined]
+
             try:
                 cached_audio = self._ensure_audio_cached(tr.id, silent=True)
                 self.cover(tr.id)  # type: ignore[attr-defined]
-                # Post-download warmup: immediately calculate DSP analysis and waveform peaks
                 if cached_audio and cached_audio.is_file():
-                    from ...metadata import PeakStore, read_meta
-
-                    read_meta(cached_audio)
-                    if self.storage is not None:  # type: ignore[attr-defined]
-                        digest = PeakStore(cache_dir() / "peaks", storage=self.storage)._digest(cached_audio)  # type: ignore[attr-defined]
-                        if digest and not self.storage.get_peaks_bytes(digest):  # type: ignore[attr-defined]
-                            from ... import waveform
-
-                            raw = waveform.compute(cached_audio)
-                            if raw is not None:
-                                self.storage.put_peaks_bytes(digest, raw)  # type: ignore[attr-defined]
+                    with self.lock:  # type: ignore[attr-defined]
+                        submit_dsp = tr.id not in self._dsp_submitted and not self._prefetch_closed  # type: ignore[attr-defined]
+                        if submit_dsp:
+                            self._dsp_submitted.add(tr.id)  # type: ignore[attr-defined]
+                    if submit_dsp:
+                        try:
+                            self._dsp_pool.submit(self._warm_promo_dsp, tr.id, cached_audio)  # type: ignore[attr-defined]
+                        except RuntimeError:
+                            pass
             except (SessionError, RateLimitError, urllib.error.URLError, OSError) as exc:
                 logger.debug("Prefetch failed for track %s: %s", tr.id, exc)
+            finally:
                 with self.lock:  # type: ignore[attr-defined]
-                    self._prefetched_ids.discard(tr.id)  # type: ignore[attr-defined]
+                    self._prefetch_running.discard(tr_id)  # type: ignore[attr-defined]
+                    self._prefetch_queued_gen.pop(tr_id, None)  # type: ignore[attr-defined]
 
-        for tr in to_submit:
-            try:
-                self._prefetch_pool.submit(fetch_one, tr)  # type: ignore[attr-defined]
-            except RuntimeError:
-                # Pool already closed during shutdown
-                pass
+    def _warm_promo_dsp(self, track_id: str, audio_path: Path) -> None:
+        """Compute waveform peaks + libsonare DSP on low-priority worker only for active upcoming promos."""
+        with self.lock:  # type: ignore[attr-defined]
+            if self._prefetch_closed:  # type: ignore[attr-defined]
+                return
+            promo = self.track_to_promo.get(track_id)  # type: ignore[attr-defined]
+            if promo is None or promo not in self.promos[:5]:  # type: ignore[attr-defined]
+                return
+        if not audio_path.is_file():
+            return
+        try:
+            from ... import waveform
+            from ...analyzer import analyze_audio_file
+            from ...metadata import content_digest, file_digest
+
+            st = self.storage  # type: ignore[attr-defined]
+            if st is None:
+                return
+            digest = content_digest(audio_path)
+            if digest and not st.get_peaks_bytes(digest):
+                raw = waveform.compute(audio_path)
+                if raw is not None:
+                    st.put_peaks_bytes(digest, raw)
+            f_hash = file_digest(audio_path)
+            if f_hash and not st.get_analysis(f_hash):
+                analysis = analyze_audio_file(audio_path)
+                st.put_analysis(
+                    file_hash=f_hash,
+                    bpm=analysis.bpm,
+                    musical_key=analysis.musical_key,
+                    camelot_key=analysis.camelot_key,
+                    drop_seconds=analysis.drop_seconds,
+                    jump_delta=analysis.jump_delta,
+                    confidence=analysis.confidence,
+                )
+        except Exception as exc:
+            logger.debug("Promo DSP warmup error for %s: %s", track_id, exc)
 
     def stash_promos(self, target_count: int = 50) -> dict:
         """Pre-download audio and artwork for upcoming promos and store encrypted metadata in SQLite for offline flight use."""
@@ -185,27 +282,21 @@ class SessionStashMixin:
                                 dest_cov = cache_dir() / f"cover_{p.source}_{p.release_id}.jpg"
                                 downloaded_cov = self._download_file(cover_url, dest_cov)
                                 if downloaded_cov:
-                                    p.cached_cover_path = downloaded_cov
+                                    with self.lock:  # type: ignore[attr-defined]
+                                        p.cached_cover_path = downloaded_cov
                                     cover_data = downloaded_cov.read_bytes()
                     except Exception:
                         pass
                     if cover_data:
                         total_bytes += len(cover_data)
 
-                    # 2. Cache audio for tracks
+                    # 2. Cache audio for tracks at full network speed (DSP runs lazily on play)
                     for tr in p.tracks:
                         try:
                             audio_path = self._ensure_audio_cached(tr.id, silent=True)
                             if audio_path and audio_path.is_file():
                                 total_bytes += audio_path.stat().st_size
                                 completed_tracks += 1
-                                # Pre-analyze with libsonare
-                                try:
-                                    from ...metadata import read_meta
-
-                                    read_meta(audio_path)
-                                except Exception:
-                                    pass
                         except Exception:
                             pass
 

@@ -319,3 +319,37 @@ def test_metadata_cache_cover_downsamples_and_bounds_memory(tmp_path):
     finally:
         cache.shutdown()
 
+
+def test_read_meta_never_invokes_dsp_synchronously(tmp_path, monkeypatch):
+    import bakkis_sorter.analyzer as analyzer
+
+    def fail_dsp(*_args, **_kwargs):
+        raise AssertionError("read_meta must never invoke analyze_audio_file synchronously")
+
+    monkeypatch.setattr(analyzer, "analyze_audio_file", fail_dsp)
+
+    p = make_wav(tmp_path / "fast_meta.wav", seconds=2)
+    t0 = time.perf_counter()
+    m = metadata.read_meta(p)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    assert elapsed_ms < 200.0
+    assert abs(m.duration - 2.0) < 0.05
+    assert m.detected_bpm is None
+
+    cache = metadata.MetadataCache()
+    try:
+        cached_before = cache.get(p)
+        assert cached_before.detected_bpm is None
+        cache.update_analysis(
+            p,
+            {"bpm": 124.5, "camelot_key": "8A", "drop_seconds": 45.2, "jump_delta": 15.42},
+        )
+        cached_after = cache.peek(p)
+        assert cached_after is not None
+        assert cached_after.detected_bpm == 124.5
+        assert cached_after.camelot == "8A"
+        assert cached_after.drop_seconds == 45.2
+        assert cached_after.jump_delta == 15.42
+    finally:
+        cache.shutdown()
+

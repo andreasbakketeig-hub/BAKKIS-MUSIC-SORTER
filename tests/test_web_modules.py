@@ -181,7 +181,7 @@ def test_promo_caught_up_and_history_drawer() -> None:
     """Verify promo caught-up empty state and history drawer markup & controllers."""
     import bakkis_sorter
 
-    assert bakkis_sorter.__version__ == "3.0.2"
+    assert bakkis_sorter.__version__ == "3.0.4"
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="promo-caught-up"' in html
@@ -248,6 +248,17 @@ def test_done_screen_workflow_isolation() -> None:
     assert '$("btn-done-export").hidden = true' in app_js
     assert '$("btn-done-load").hidden = true' in app_js
     assert "All promo feedback was submitted to Inflyte & Trackstack" in app_js
+
+
+def test_frontend_preload_gate_and_cancel_helpers() -> None:
+    """Verify Player preload cancellation and playback:playing gate exist to protect localhost sockets."""
+    player_js = (WEB_DIR / "player.js").read_text(encoding="utf-8")
+    assert "cancelStalePreloads(" in player_js
+
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "scheduleUpcomingWarmup(" in app_js
+    assert 'bus.on("playback:playing"' in app_js
+    assert "Player.cancelStalePreloads(" in app_js
 
 
 

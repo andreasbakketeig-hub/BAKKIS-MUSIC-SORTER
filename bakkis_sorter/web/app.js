@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { api, el, fmtTime } from "./api.js";
+import { api, coverUrl, el, fmtTime } from "./api.js";
 import { bus } from "./bus.js";
 import {
   cardEnter,
@@ -378,7 +378,7 @@ export function renderDone() {
   const verb = currentOperation() === "copy" ? "copied" : "moved";
   renderDoneFollow();
   const held = sess.held || 0;
-  const isPromo = !!(sess.is_inflyte || (sess.root && sess.root.includes("Inflyte Promo Box")));
+  const isPromo = !!(sess.is_inflyte || (sess.root && (sess.root === "Promos" || sess.root.includes("Inflyte Promo Box"))));
   const h1 = document.querySelector("#screen-done h1");
   if (h1) h1.textContent = held ? "No more tracks match the filter" : "All done";
 
@@ -475,6 +475,53 @@ export function renderAll() {
   }
 }
 
+let pendingWarmupSnap = null;
+let warmupFallbackTimer = 0;
+
+function runUpcomingWarmup(snap) {
+  if (!snap || !snap.current) return;
+  if (pendingWarmupSnap && pendingWarmupSnap.current && pendingWarmupSnap.current.id !== snap.current.id) return;
+  clearTimeout(warmupFallbackTimer);
+  pendingWarmupSnap = null;
+  const nxt = snap.upcoming && snap.upcoming[0];
+  if (nxt) Player.preload(nxt.id);
+  if (snap.next_in_promo_track_id) Player.preloadAlt(snap.next_in_promo_track_id);
+  if (snap.upcoming) {
+    for (const u of snap.upcoming.slice(0, 4)) {
+      getMeta(u.id)
+        .then((m) => {
+          if (m && m.has_cover) {
+            const preImg = new Image();
+            preImg.src = coverUrl(u.id);
+          }
+        })
+        .catch(() => {});
+    }
+  }
+}
+
+function scheduleUpcomingWarmup(snap) {
+  const cur = snap && snap.current;
+  if (!cur) return;
+  clearTimeout(warmupFallbackTimer);
+  pendingWarmupSnap = snap;
+  if (Player.cur && Player.curId === cur.id && Player.cur.readyState >= 3) {
+    runUpcomingWarmup(snap);
+    return;
+  }
+  warmupFallbackTimer = setTimeout(() => {
+    if (pendingWarmupSnap && pendingWarmupSnap.current && pendingWarmupSnap.current.id === cur.id) {
+      runUpcomingWarmup(pendingWarmupSnap);
+    }
+  }, 600);
+}
+
+bus.on("playback:playing", ({ curId }) => {
+  if (pendingWarmupSnap && pendingWarmupSnap.current && pendingWarmupSnap.current.id === curId) {
+    runUpcomingWarmup(pendingWarmupSnap);
+  }
+});
+
 export function applySession(snap) {
   const prevId = S.session && S.session.current && S.session.current.id;
   const prevRoot = S.session && S.session.root;
@@ -495,32 +542,20 @@ export function applySession(snap) {
   if (window.Drawers && window.Drawers.onSession) window.Drawers.onSession();
   if (window.Listen && window.Listen.active) return;
   const cur = snap && snap.current;
-  if (!cur) return;
+  if (!cur) {
+    clearTimeout(warmupFallbackTimer);
+    pendingWarmupSnap = null;
+    return;
+  }
+  const nxt = snap.upcoming && snap.upcoming[0];
   if (cur.id !== prevId || cur.id !== Player.curId) {
+    Player.cancelStalePreloads([nxt && nxt.id, snap.next_in_promo_track_id]);
     Wave.reset(cur.id);
     Player.load(cur.id);
     renderCard();
     bus.emit("track:selected", { track: cur });
   }
-  const nxt = snap.upcoming && snap.upcoming[0];
-  if (nxt) {
-    Player.preload(nxt.id);
-  }
-  if (snap.next_in_promo_track_id) {
-    Player.preloadAlt(snap.next_in_promo_track_id);
-  }
-  if (snap.upcoming) {
-    for (const u of snap.upcoming.slice(0, 4)) {
-      getMeta(u.id)
-        .then((m) => {
-          if (m && m.has_cover) {
-            const preImg = new Image();
-            preImg.src = coverUrl(u.id);
-          }
-        })
-        .catch(() => {});
-    }
-  }
+  scheduleUpcomingWarmup(snap);
 }
 
 export async function refreshState() {
@@ -752,7 +787,10 @@ window.goHome = goHome;
 // Boot application
 boot().catch((e) => {
   console.error("Boot failure:", e);
-  document.body.innerHTML = `<pre style="padding:24px;color:#ff7a7f">Failed to start: ${String(
-    e.message || e
-  )}</pre>`;
+  const pre = document.createElement("pre");
+  pre.style.padding = "24px";
+  pre.style.color = "#ff7a7f";
+  pre.textContent = `Failed to start: ${String((e && e.message) || e)}`;
+  document.body.textContent = "";
+  document.body.appendChild(pre);
 });

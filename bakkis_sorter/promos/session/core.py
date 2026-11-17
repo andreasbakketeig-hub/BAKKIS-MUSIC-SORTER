@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import queue
 import random
 import threading
 import time
@@ -15,6 +16,7 @@ from typing import Any, Callable, Optional
 
 from ...duplicates import track_signature
 from ...logger import get_logger
+from ...platform import set_background_thread_qos
 from ...ratelimit import RateLimitError
 from ...session import HISTORY_PREVIEW, MAX_NOTICES, SessionError, Worker
 from ...storage import EncryptedStorage, get_storage
@@ -23,6 +25,10 @@ from ..inflyte import INFLYTE_PROMOS_URL, cache_dir
 from ..models import InflyteAction, InflytePromo, InflyteTrack
 
 logger = get_logger("inflyte")
+
+
+def _dsp_worker_init() -> None:
+    set_background_thread_qos()
 
 
 class SessionCoreMixin:
@@ -73,8 +79,31 @@ class SessionCoreMixin:
         self.session_id = f"promos-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         self._audio_locks: dict[str, threading.Lock] = {}
         self._played_sent: set[int] = set()
-        self._prefetched_ids: set[str] = set()
-        self._prefetch_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="promo-prefetch")
+        self._prefetch_queue: queue.PriorityQueue[tuple[tuple[int, int, int, int], Optional[str]]] = (
+            queue.PriorityQueue()
+        )
+        self._prefetch_gen: int = 0
+        self._prefetch_seq = itertools.count(1)
+        self._prefetch_queued_gen: dict[str, int] = {}
+        self._prefetch_running: set[str] = set()
+        self._cur_ready_event = threading.Event()
+        self._prefetch_closed: bool = False
+        self._prefetch_threads: list[threading.Thread] = [
+            threading.Thread(
+                target=self._prefetch_worker_loop,  # type: ignore[attr-defined]
+                daemon=True,
+                name=f"promo-dl-{idx}",
+            )
+            for idx in range(4)
+        ]
+        for t in self._prefetch_threads:
+            t.start()
+        self._dsp_submitted: set[str] = set()
+        self._dsp_pool = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="promo-dsp",
+            initializer=_dsp_worker_init,
+        )
         self._worker = Worker(on_error=lambda e: self.notify("error", f"Promo API error: {e}"))
 
         self.offline_mode: bool = False
@@ -146,8 +175,19 @@ class SessionCoreMixin:
         self._worker.flush()
 
     def close(self, timeout: Optional[float] = 15.0) -> bool:
+        with self.lock:
+            self._prefetch_closed = True
+            self._prefetch_queued_gen.clear()
+        self._cur_ready_event.set()
+        while True:
+            try:
+                self._prefetch_queue.get_nowait()
+            except queue.Empty:
+                break
+        for _ in self._prefetch_threads:
+            self._prefetch_queue.put(((999999, 999999, 999999, next(self._prefetch_seq)), None))
         try:
-            self._prefetch_pool.shutdown(wait=False, cancel_futures=True)
+            self._dsp_pool.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
         done = self._worker.flush(timeout)
@@ -200,13 +240,14 @@ class SessionCoreMixin:
                 return p.cached_cover_path.read_bytes()
             except OSError:
                 pass
-        url = p.full_image_url or p.thumbnail_url
+        url = p.thumbnail_url or p.full_image_url
         if not url:
             return None
         dest = cache_dir() / f"cover_{p.source}_{p.release_id}.jpg"
         downloaded = self._download_file(url, dest)  # type: ignore[attr-defined]
         if downloaded:
-            p.cached_cover_path = downloaded
+            with self.lock:
+                p.cached_cover_path = downloaded
             try:
                 return downloaded.read_bytes()
             except OSError:
@@ -235,7 +276,7 @@ class SessionCoreMixin:
             try:
                 from ...metadata import read_meta
 
-                m = read_meta(t.cached_audio_path)
+                m = read_meta(t.cached_audio_path, storage=self.storage)
                 if m.bpm:
                     bpm = float(m.bpm)
                 if m.camelot:
@@ -346,7 +387,7 @@ class SessionCoreMixin:
                         up_list.append(self._track_public(t))
 
             return {
-                "root": "Inflyte Promo Box",
+                "root": "Promos",
                 "is_inflyte": True,
                 "total": self.total,
                 "position": min(done + 1, self.total),

@@ -279,3 +279,73 @@ def test_inflyte_bridge_auth_persistence(tmp_path: Path) -> None:
     store.close()
 
 
+def test_promo_priority_prefetch_skips_dismissed_and_avoids_sync_dsp(tmp_path: Path, monkeypatch) -> None:
+    import time
+    import bakkis_sorter.analyzer as analyzer
+
+    dsp_threads: list[str] = []
+
+    def spy_dsp(_path: Path):
+        import threading as _th
+
+        dsp_threads.append(_th.current_thread().name)
+        from bakkis_sorter.analyzer import TrackAnalysis
+
+        return TrackAnalysis(bpm=126.0)
+
+    monkeypatch.setattr(analyzer, "analyze_audio_file", spy_dsp)
+
+    sample_mp3 = tmp_path / "sample.mp3"
+    sample_mp3.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\xff\xfb\x90\x00" * 16)
+
+    class _PrefetchBridge(FakeInflyteBridge):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fetched_tracks: list[int] = []
+
+        def fetch_preview_audio_url(self, release_id: int, track_id: int, *, priority: bool = False) -> str:
+            self.fetched_tracks.append(track_id)
+            return sample_mp3.as_uri()
+
+    p = tmp_path / "promo_comments.txt"
+    p.write_text("[5/5]\nBanger\n[4/5]\nSolid\n", encoding="utf-8")
+    pool = CommentPool(p)
+    bridge = _PrefetchBridge()
+    presets = PresetStore(tmp_path / "presets.json")
+    store = EncryptedStorage(db_path=tmp_path / "bakkis.db", master_key=secrets.token_bytes(32))
+
+    # Avoid polluting user's real ~/Library cache
+    monkeypatch.setattr("bakkis_sorter.promos.session.stash.cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr("bakkis_sorter.promos.session.core.cache_dir", lambda: tmp_path / "cache")
+
+    promo1 = _make_promo(201, "First EP", 2)
+    promo2 = _make_promo(202, "Second EP (Will Dismiss)", 3)
+    promo3 = _make_promo(203, "Third EP", 1)
+
+    sess = InflyteSession(
+        [promo1, promo2, promo3],
+        bridge=bridge,
+        storage=store,
+        presets=presets,
+        settings=default_settings,
+        comment_pool=pool,
+    )
+    try:
+        # Immediately dismiss promo2 right after promo1 so promo2 is popped from queue
+        sess.sort(promo1.tracks[0].id, "swipe", 1)
+        sess.sort(promo2.tracks[0].id, "swipe", 1)
+        assert sess.current is not None and sess.current.release_id == 203
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline and 20301 not in bridge.fetched_tracks:
+            time.sleep(0.02)
+        sess.flush()
+
+        assert 20301 in bridge.fetched_tracks
+        # Download threads ("promo-dl-*") must never execute libsonare DSP synchronously
+        assert all(not name.startswith("promo-dl") for name in dsp_threads)
+    finally:
+        sess.close()
+        store.close()
+
+

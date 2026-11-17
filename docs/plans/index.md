@@ -18,6 +18,7 @@ This registry tracks architectural specifications and feature plans. Each plan i
 | **PLN-12** | Frontend Architecture & Style Modularization (Phase 2, v2.1.4) | Completed | `web/drawers/`, `web/css/` | [12_frontend_architecture_and_css_modularization.md](./archive/12_frontend_architecture_and_css_modularization.md) |
 | **PLN-13** | Metadata, Config & Test Suite Segmentation (Phase 3, v2.1.5) | Completed | `metadata/`, `config/`, `tests/` | [13_metadata_config_and_test_segmentation.md](./archive/13_metadata_config_and_test_segmentation.md) |
 | **PLN-14** | Dual-Workflow Onboarding & Getting Started Architecture | Completed | `README.md`, `web/`, `docs/plans/` | [14_workflow_onboarding_split.md](./archive/14_workflow_onboarding_split.md) |
+| **PLN-15** | Track Loading & Prefetch Performance Overhaul (v3.0.3) | Completed | `metadata/`, `pipeline.py`, `promos/`, `bridge.py`, `web/` | [15_track_loading_performance_overhaul.md](./archive/15_track_loading_performance_overhaul.md) |
 
 ---
 

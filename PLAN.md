@@ -1,6 +1,6 @@
 # BAKKIS MUSIC SORTER v2 — rebuild plan
 
-Status: v3.0.2 patch update implemented on `manhof-3.x-update` (README Getting Started Shortcuts Multi-line Formatting and SemVer Increment).
+Status: v3.0.4 patch update implemented on `manhof-3.x-update` (Unified `"Promos"` card breadcrumb root & settings folder guard on top of v3.0.3 performance overhaul).
 
 ## Goal
 
@@ -37,6 +37,8 @@ Rebuild and evolve the app with a modern UI (pywebview + HTML/CSS/JS) that is **
 | Version 3.0.0 | Major Milestone (`__version__ = "3.0.0"`). Unified Promo Reviewer across Inflyte + Trackstack, offline stash travel mode, native Apple Silicon `libsonare` BPM/key/drop detection, waveform BLOB storage, 50-track lookahead pipeline, virtual scrolling queue, domain modular stylesheets (`web/css/`) and drawers (`web/drawers/`), and complete subsystem modularization. |
 | Version 3.0.1 | Patch Update (`__version__ = "3.0.1"`). Dual-workflow onboarding split (Workflow 1: Local Sorter primary / Workflow 2: Promo Reviewer), completion screen action button isolation between local and promo modes, and explicit Semantic Versioning enforcement (`docs/VERSIONING.md`). |
 | Version 3.0.2 | Patch Update (`__version__ = "3.0.2"`). README Getting Started shortcuts formatted onto distinct lines with bullets for improved scannability across both workflows. |
+| Version 3.0.3 | Patch Update (`__version__ = "3.0.3"`). Decoupled `libsonare` DSP from synchronous `read_meta()`, split `WarmupEngine` into Fast I/O + windowed DSP worker, converted promo prefetch to priority queue with current-track head-start, added non-blocking WKWebView async `fetch()`, parallelized Inflyte/Trackstack boot, and gated frontend upcoming preloads until `playback:playing`. |
+| Version 3.0.4 | Patch Update (`__version__ = "3.0.4"`). Unified promo card breadcrumb root label from `"Inflyte Promo Box"` to `"Promos"` across Inflyte and Trackstack releases, updated done-screen fallback checks, and disabled saving `"Promos"` as a local default folder in Settings. |
 | Contact | `bakkis@bakkis.com` in README, at the bottom of Settings (version + Contact), and a "Report a problem" button (prefilled e-mail with app + macOS version). |
 
 ## Problems found in v1 (fix or avoid in v2)

@@ -199,11 +199,15 @@ class PromoApiMixin:
 
         def worker() -> None:
             if old is not None:
+                with self.lock:
+                    if self.session is old:
+                        self.session = None
                 try:
                     old.close()
                 except Exception:
                     pass
             try:
+                active_lock = threading.Lock()
                 active_session: Optional[inflyte.InflyteSession] = None
                 inf_status = self.inflyte_bridge.check_auth_status()
                 ts_status = self.trackstack_bridge.check_auth_status()
@@ -217,25 +221,32 @@ class PromoApiMixin:
                     want_inflyte = bool(inf_status.get("connected") or inf_status.get("window_open") or both_disconnected)
                     want_trackstack = bool(ts_status.get("connected") or ts_status.get("window_open"))
 
-                # 1. Load Trackstack promos first if requested (single fast API call!)
-                if want_trackstack:
+                def add_promos(items: list[inflyte.InflytePromo]) -> None:
+                    nonlocal active_session
+                    with active_lock:
+                        active_session = ensure_session_started(items, active_session)
+
+                ts_error: Optional[Exception] = None
+                inf_error: Optional[Exception] = None
+
+                def load_trackstack_source() -> None:
+                    nonlocal ts_error
                     try:
                         ts_promos = self.trackstack_bridge.fetch_pending_promos(on_status=on_status)
                         if ts_promos and not self._closed:
-                            active_session = ensure_session_started(ts_promos, active_session)
-                    except Exception as ts_exc:
-                        if src_mode == "trackstack":
-                            raise ts_exc
+                            add_promos(ts_promos)
+                    except Exception as exc:
+                        ts_error = exc
 
-                # 2. Load Inflyte promos if requested
-                if want_inflyte and not self._closed:
+                def load_inflyte_source() -> None:
+                    nonlocal inf_error
                     try:
                         hydrated_promos, release_ids = self.inflyte_bridge.fetch_initial_promos(on_status=on_status)
                         seen_ids: set[int] = {p.release_id for p in hydrated_promos} | set(release_ids)
                         queue_ids: list[int] = list(release_ids)
 
                         if hydrated_promos and not self._closed:
-                            active_session = ensure_session_started(hydrated_promos, active_session)
+                            add_promos(hydrated_promos)
 
                         while queue_ids:
                             if self._closed:
@@ -251,18 +262,35 @@ class PromoApiMixin:
                                     queue_ids.append(ex_id)
                             if p is None or not p.tracks:
                                 continue
-                            active_session = ensure_session_started([p], active_session)
-                    except Exception as inf_exc:
-                        if src_mode == "inflyte" or active_session is None:
-                            stashed_raw = self.storage.get_all_stashed_promos() if self.storage else []
-                            if stashed_raw:
-                                stashed_promos = [inflyte.InflytePromo.from_dict(d) for d in stashed_raw]
-                                active_session = ensure_session_started(stashed_promos, active_session)
-                                if active_session is not None:
-                                    active_session.offline_mode = True
-                                    active_session.notify("info", f"✈️ Loaded {len(stashed_promos)} stashed promo(s) in offline mode")
-                                    return
-                            raise inf_exc
+                            add_promos([p])
+                    except Exception as exc:
+                        inf_error = exc
+
+                source_threads: list[threading.Thread] = []
+                if want_trackstack:
+                    source_threads.append(threading.Thread(target=load_trackstack_source, daemon=True, name="ts-loader"))
+                if want_inflyte and not self._closed:
+                    source_threads.append(threading.Thread(target=load_inflyte_source, daemon=True, name="inf-loader"))
+                for t in source_threads:
+                    t.start()
+                for t in source_threads:
+                    t.join()
+
+                if ts_error is not None and src_mode == "trackstack":
+                    raise ts_error
+
+                if inf_error is not None:
+                    if src_mode == "inflyte" or active_session is None:
+                        stashed_raw = self.storage.get_all_stashed_promos() if self.storage else []
+                        if stashed_raw:
+                            stashed_promos = [inflyte.InflytePromo.from_dict(d) for d in stashed_raw]
+                            add_promos(stashed_promos)
+                            if active_session is not None:
+                                active_session.offline_mode = True
+                                active_session.notify("info", f"✈️ Loaded {len(stashed_promos)} stashed promo(s) in offline mode")
+                                return
+                        raise inf_error
+                    active_session.notify("warning", f"Inflyte load error: {inf_error}")
 
                 if active_session is None and not self._closed:
                     ensure_session_started([], None)

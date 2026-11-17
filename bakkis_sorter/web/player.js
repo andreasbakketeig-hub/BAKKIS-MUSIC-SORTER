@@ -60,6 +60,7 @@ export const Player = {
   userPaused: false,
   vol: 0.8,
   fadingUntil: 0,
+  _fadeTimer: 0,
 
   init() {
     for (const a of [this.cur, this.next, this.altNext]) {
@@ -86,6 +87,8 @@ export const Player = {
 
   /** Listen mode: fade the preloaded track in while the current one fades out. */
   crossfadeTo(id, ms) {
+    clearInterval(this._fadeTimer);
+    this._fadeTimer = 0;
     const to = this.next,
       from = this.cur;
     if (this.nextId !== id || to.readyState < 2) {
@@ -104,12 +107,13 @@ export const Player = {
     if (window.Wave && window.Wave.markersDirty) window.Wave.markersDirty();
     const t0 = performance.now();
     this.fadingUntil = t0 + ms;
-    const timer = setInterval(() => {
+    this._fadeTimer = setInterval(() => {
       const k = Math.min(1, (performance.now() - t0) / ms);
       to.volume = this.vol * k;
       from.volume = this.vol * (1 - k);
       if (k >= 1) {
-        clearInterval(timer);
+        clearInterval(this._fadeTimer);
+        this._fadeTimer = 0;
         this.fadingUntil = 0;
         from.pause();
         from.removeAttribute("src");
@@ -132,7 +136,10 @@ export const Player = {
   /** Make `id` the playing track. Uses the preloaded element when it holds this track. */
   load(id, autoplay = true) {
     if (id === this.curId) return;
+    clearInterval(this._fadeTimer);
+    this._fadeTimer = 0;
     this.fadingUntil = 0;
+    this.cur.volume = this.vol;
     const old = this.cur;
     if (id === this.nextId) {
       this.cur = this.next;
@@ -216,6 +223,9 @@ export const Player = {
   },
 
   clear() {
+    clearInterval(this._fadeTimer);
+    this._fadeTimer = 0;
+    this.fadingUntil = 0;
     for (const a of [this.cur, this.next, this.altNext]) {
       a.pause();
       a.removeAttribute("src");
@@ -223,6 +233,22 @@ export const Player = {
     }
     this.curId = this.nextId = this.altNextId = null;
     body.classList.remove("playing");
+  },
+
+  cancelStalePreloads(keepIds = []) {
+    const keep = new Set(keepIds.filter(Boolean));
+    if (this.nextId && !keep.has(this.nextId)) {
+      this.next.pause();
+      this.next.removeAttribute("src");
+      this.next.load();
+      this.nextId = null;
+    }
+    if (this.altNextId && !keep.has(this.altNextId)) {
+      this.altNext.pause();
+      this.altNext.removeAttribute("src");
+      this.altNext.load();
+      this.altNextId = null;
+    }
   },
 
   play() {
