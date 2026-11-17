@@ -26,6 +26,7 @@ VERSION="$("$PY" -c 'import bakkis_sorter; print(bakkis_sorter.__version__)')"
 ZIP="dist/BAKKIS-MUSIC-SORTER-${VERSION}.zip"
 DMG="dist/BAKKIS-MUSIC-SORTER-${VERSION}.dmg"
 
+"$PY" tools/make_third_party_licenses.py  # licenses of everything bundled, from the installed packages
 echo "Building ${APP_NAME} ${VERSION}…"
 rm -rf build "dist/${APP_NAME}" "dist/${APP_NAME}.app" "$ZIP" "$DMG"
 "$PY" -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging/bakkis_music_sorter.spec

@@ -14,7 +14,8 @@ IDENTITY = os.environ.get("CODESIGN_IDENTITY") or None
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "bakkis_sorter" / "web"), "bakkis_sorter/web")],
+    datas=[(str(ROOT / "bakkis_sorter" / "web"), "bakkis_sorter/web"),
+           (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_LICENSES.txt"), ".")],
     hiddenimports=["webview.platforms.cocoa"],
     excludes=["tkinter", "PIL", "pytest", "PyInstaller", "setuptools"],
     noarchive=False,

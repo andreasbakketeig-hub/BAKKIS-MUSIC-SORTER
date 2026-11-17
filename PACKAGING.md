@@ -29,33 +29,34 @@ The script:
 
 To change the icon: edit and run `tools/make_icon.py`, then rebuild.
 
-## Unsigned builds (default)
+## Signed and notarized builds (releases)
 
-Without a Developer ID the app is ad-hoc signed. On first launch macOS asks people to confirm; the steps are in the README ("First launch of an unsigned app"):
+Releases are signed with a Developer ID and notarized, so they open with a double-click and no warning.
 
-- macOS 15 and later: open it once, click **Done**, then **System Settings → Privacy & Security → Open Anyway**.
-- macOS 13–14: right-click the app → **Open** → **Open**.
+One-time setup on the build Mac (already done on Andreas's Mac Studio, Team ID `Z4R857FVS8`):
 
-## Signed and notarized builds (needs an Apple Developer account)
-
-One-time setup:
-
-1. Join the Apple Developer Program (Individual is simplest; it shows your own name).
-2. In **Xcode → Settings → Accounts → Manage Certificates**, create a **Developer ID Application** certificate.
-3. Create an app-specific password at appleid.apple.com, then store notarization credentials in your keychain:
+1. Apple Developer Program, Individual.
+2. A **Developer ID Application** certificate in the login keychain (without Xcode: Keychain Access → Certificate Assistant → Request a Certificate…, upload the CSR at developer.apple.com, double-click the `.cer`). Apple's **Developer ID G2** intermediate (`apple.com/certificateauthority/DeveloperIDG2CA.cer`) must be in the keychain too. Check with `security find-identity -v -p codesigning`.
+3. An app-specific password (account.apple.com) stored once in the keychain:
    ```bash
-   xcrun notarytool store-credentials bakkis-notary --apple-id you@example.com --team-id YOURTEAMID
+   xcrun notarytool store-credentials bakkis-notary --apple-id <Apple ID> --team-id Z4R857FVS8
    ```
 
 Each release:
 
 ```bash
-CODESIGN_IDENTITY="Developer ID Application: Your Name (YOURTEAMID)" \
+CODESIGN_IDENTITY="Developer ID Application: Andreas Bakketeig (Z4R857FVS8)" \
 NOTARY_PROFILE="bakkis-notary" \
 ./build_mac_app.sh
 ```
 
-The app is signed with the hardened runtime (`packaging/entitlements.plist` allows what a bundled Python needs), sent to Apple for notarization (a few minutes), stapled, and zipped. It then opens with a double-click on any Mac, no warning.
+The app is signed with the hardened runtime (`packaging/entitlements.plist` allows what a bundled Python needs), notarized (a few minutes) and stapled; the DMG is signed, notarized and stapled too. Check with `spctl -a -vv "dist/BAKKIS MUSIC SORTER.app"` (should say *Notarized Developer ID*).
+
+The updater trusts this: once the running app is signed, it only installs an update signed by the same Team ID. **Never publish an unsigned build again**, or signed installs will refuse it.
+
+## Unsigned builds (local testing only)
+
+`./build_mac_app.sh` without the two variables gives an ad-hoc signed app. Fine for testing on this Mac; don't release it.
 
 ## Releasing
 
@@ -68,7 +69,7 @@ The app's update check looks at the latest GitHub release, so people get a notic
 
 ## Troubleshooting
 
-- **"App is damaged and can't be opened"**: the download was quarantined. `xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"`, or sign and notarize the build.
+- **"App is damaged and can't be opened"**: an unsigned build was downloaded. Release only signed + notarized builds; for an old one, `xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"`.
 - **Blank window**: run the app's executable from Terminal to see errors:
   `"/Applications/BAKKIS MUSIC SORTER.app/Contents/MacOS/BAKKIS MUSIC SORTER"`. Set `BAKKIS_DEBUG=1` for the Web Inspector.
 - **Build fails on a missing module**: add it to `hiddenimports` in `packaging/bakkis_music_sorter.spec`.

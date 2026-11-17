@@ -131,3 +131,34 @@ def test_where_the_app_runs_from(tmp_path):
     assert not updater.runs_from_outside_applications(None)
     assert updater.in_applications(Path("/Applications/BAKKIS MUSIC SORTER.app"))
     assert updater.install_problem(Path("/Volumes/BAKKIS MUSIC SORTER/BAKKIS MUSIC SORTER.app")) == updater.MOVE_HINT
+
+
+def _team_by_version(teams):
+    return lambda app: teams.get(updater.bundle_version(app)[1])
+
+
+def test_signed_app_refuses_download_from_another_developer(installed, new_zip):
+    inst = updater.Installer(installed, opener=lambda req, timeout: FakeResponse(new_zip), unzip=unzip,
+                             team_of=_team_by_version({"2.0.5": "Z4R857FVS8", "9.9.9": "OTHERTEAM1"}))
+    inst.start(release_for(new_zip), "9.9.9")
+    st = wait_for(inst)
+    assert st["status"] == "error" and "same developer" in st["error"]
+    assert [p.name for p in installed.parent.iterdir()] == ["BAKKIS MUSIC SORTER.app"]
+
+
+def test_signed_app_refuses_unsigned_download(installed, new_zip):
+    inst = updater.Installer(installed, opener=lambda req, timeout: FakeResponse(new_zip), unzip=unzip,
+                             team_of=_team_by_version({"2.0.5": "Z4R857FVS8"}))
+    inst.start(release_for(new_zip), "9.9.9")
+    assert wait_for(inst)["status"] == "error"
+
+
+def test_signed_app_accepts_same_developer(installed, new_zip):
+    inst = updater.Installer(installed, opener=lambda req, timeout: FakeResponse(new_zip), unzip=unzip,
+                             team_of=_team_by_version({"2.0.5": "Z4R857FVS8", "9.9.9": "Z4R857FVS8"}))
+    inst.start(release_for(new_zip), "9.9.9")
+    assert wait_for(inst)["status"] == "ready"
+
+
+def test_unsigned_folder_has_no_team(installed):
+    assert updater.signing_team(installed) is None

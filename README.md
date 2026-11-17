@@ -24,33 +24,11 @@ Made by [BAKKIS](https://bakkis.com), DJ and producer from Norway.
 
 1. Download `BAKKIS-MUSIC-SORTER-x.y.z.dmg` from [bakkis.com/tools](https://bakkis.com/tools) or the [Releases page](https://github.com/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/releases).
 2. Open the DMG and drag **BAKKIS MUSIC SORTER** onto the **Applications** folder in the window. (Open it from Applications, not from the DMG: only then can it update itself.)
-3. Open it once as described below. You only need to do this the first time. You can then eject the DMG and delete it.
+3. Open it from Applications. You can then eject the DMG and delete it.
 
-### First launch of an unsigned app
+The app is signed with an Apple Developer ID and notarized by Apple, so it opens with a normal double-click.
 
-The app is not signed with an Apple Developer ID yet, so macOS asks you to confirm that you trust it.
-
-**macOS 15 Sequoia and later**
-
-1. Double-click **BAKKIS MUSIC SORTER** in Applications. macOS says it could not verify the app. Click **Done**.
-2. Open **System Settings → Privacy & Security**.
-3. Scroll down to **Security**. Next to *"BAKKIS MUSIC SORTER" was blocked to protect your Mac*, click **Open Anyway**.
-4. Enter your Mac password, then click **Open Anyway** once more.
-
-**macOS 13 Ventura and macOS 14 Sonoma**
-
-1. In Applications, **right-click** (or Control-click) **BAKKIS MUSIC SORTER** and choose **Open**.
-2. Click **Open** in the dialog.
-
-After that the app opens normally with a double-click.
-
-**If macOS says the app "is damaged and can't be opened"**, the download was quarantined. Open Terminal and run:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"
-```
-
-Then open the app again.
+**Upgrading from 2.1.2 or earlier:** use **Update now** in the app, or install the DMG over the old app. Those versions were not signed yet, so if a *downloaded* older copy refuses to open, see [Older unsigned versions](#older-unsigned-versions).
 
 ### Updating
 
@@ -234,7 +212,9 @@ These are on by default. Switch them off under **Settings → Advanced → Featu
 
 - The app works entirely on your Mac. It never uploads your music, file names or listening data.
 - The only network request is an optional check for a new version on GitHub at startup (Settings → Advanced → Startup → *Check for new versions*). Nothing is downloaded unless you click **Update now**.
+- That request goes to GitHub, which, like any website, sees your IP address; it carries nothing about you or your music. See [GitHub's privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - Links (Follow BAKKIS, Support, Report a problem) open in your browser or mail app.
+- The app keeps its settings, presets, history and caches in `~/Library/Application Support/BAKKIS MUSIC SORTER/` on your Mac. Deleting that folder removes them.
 
 ## Settings and uninstalling
 
@@ -250,7 +230,7 @@ To uninstall, delete the app from Applications and, if you like, that folder. Yo
 
 ## Troubleshooting
 
-- **The app won't open**: see [First launch of an unsigned app](#first-launch-of-an-unsigned-app).
+- **The app won't open**: download the latest version (signed and notarized). For 2.1.2 and earlier, see [Older unsigned versions](#older-unsigned-versions).
 - **A track won't play**: it is skipped automatically. Press **Z** to bring it back if you want to sort it anyway.
 - **Music on an external disk**: works, but moving files between disks takes longer. The app stays responsive while files are moved in the background.
 - **Anything else**: use **Settings → About → Report a problem**. It opens an e-mail with your app and macOS version filled in.
@@ -274,9 +254,13 @@ To uninstall, delete the app from Applications and, if you like, that folder. Yo
 
 BAKKIS MUSIC SORTER moves or copies the files you tell it to. It is careful by design: no track is ever deleted (only source folders that became empty), existing files are never overwritten, and every action can be undone. Still, it is free software provided **as is, without warranty of any kind** (see the [license](LICENSE)). You use it at your own risk; keep a backup of music you care about.
 
+Rekordbox, Serato, Apple, macOS, PlayStation, Xbox, Nintendo Switch, 8BitDo, GitHub, Ko-fi and other product names are trademarks of their respective owners. They are mentioned only to describe what the app works with; BAKKIS MUSIC SORTER is not affiliated with or endorsed by any of them.
+
 ## License
 
 The code is free and open source under the [MIT License](LICENSE).
+
+The app includes open-source software by others, each under its own license: mutagen (GNU GPL v2 or later), pywebview (BSD), PyObjC, bottle and proxy_tools (MIT) and Python (PSF). The full texts are in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt), inside the app (`Contents/Resources/`) and under **Settings → About → Open-source licenses**.
 
 The **BAKKIS** name and logo are not covered by the license and may not be used in other projects or derived apps without permission.
 
@@ -341,3 +325,13 @@ The original v1 (Tkinter) is kept for reference in `legacy/`; run it with `legac
 The app icon is drawn by `tools/make_icon.py` (writes `assets/icon/icon-1024.png` and `AppIcon.icns`).
 
 Building the `.app` is described in [PACKAGING.md](PACKAGING.md).
+
+---
+
+### Older unsigned versions
+
+Versions up to 2.1.2 were not signed. macOS asks you to confirm them once:
+
+- **macOS 15 Sequoia and later:** double-click the app, click **Done**, then **System Settings → Privacy & Security → Open Anyway**, enter your Mac password and click **Open Anyway** again.
+- **macOS 13–14:** right-click the app → **Open** → **Open**.
+- **"Is damaged and can't be opened":** run `xattr -dr com.apple.quarantine "/Applications/BAKKIS MUSIC SORTER.app"` in Terminal.

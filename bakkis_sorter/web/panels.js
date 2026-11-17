@@ -16,6 +16,7 @@ const START_CHOICES = [[0, "0:00"], [30, "0:30"], [60, "1:00"], [90, "1:30"], [1
 // Promo / contact. Links open in the default browser via the backend (never inside the app window).
 const CONTACT_EMAIL = "bakkis@bakkis.com";
 const SUPPORT_URL = "https://ko-fi.com/bakkis";
+const LICENSES_URL = "https://github.com/andreasbakketeig-hub/BAKKIS-MUSIC-SORTER/blob/main/THIRD_PARTY_LICENSES.txt";
 const FOLLOW_LINKS = [
   ["Spotify", "https://open.spotify.com/artist/4gKuT9rOlvCpHJUkWp4JFv"],
   ["SoundCloud", "https://soundcloud.com/bakkismusic"],
@@ -565,6 +566,11 @@ const SettingsDrawer = {
     logo.setAttribute("aria-label", "BAKKIS");
     box.appendChild(logo);
     box.appendChild(el("div", "muted small", `BAKKIS MUSIC SORTER ${S.version || ""} · Free and open source (MIT)`));
+    const lic = el("button", "link-btn small", "Open-source licenses");
+    lic.type = "button";
+    lic.title = LICENSES_URL;
+    lic.addEventListener("click", () => openExternal(LICENSES_URL));
+    box.appendChild(lic);
     if (S.update && S.update.newer) {
       const up = el("button", "link-btn", `Version ${S.update.latest} is available: ${S.update.can_install ? "update now" : "download"}`);
       up.type = "button";

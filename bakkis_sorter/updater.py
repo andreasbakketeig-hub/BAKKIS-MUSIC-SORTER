@@ -2,7 +2,8 @@
 
 Flow: ``Installer.start(release)`` downloads the release zip on a background thread, checks its SHA-256
 against the digest GitHub publishes for the asset, unpacks it next to the installed app (same volume, so
-the swap is a rename) and checks the bundle id and version. ``Installer.restart()`` then starts a small
+the swap is a rename) and checks the bundle id and version, and, when the running app is signed, that the
+new one is signed by the same developer (Team ID). ``Installer.restart()`` then starts a small
 helper script that waits for this process to exit, swaps the bundles (keeping the old one until the new one
 is in place) and opens the new app. Settings, presets and history live outside the app and are untouched.
 
@@ -91,6 +92,20 @@ def bundle_version(app: Path) -> tuple[str, str]:
     return str(info.get("CFBundleIdentifier", "")), str(info.get("CFBundleShortVersionString", ""))
 
 
+TEAM_RE = re.compile(r"^TeamIdentifier=(\S+)$", re.M)
+
+
+def signing_team(app: Path) -> Optional[str]:
+    """Team ID of a validly signed .app (Developer ID), or None if unsigned, ad-hoc signed or invalid."""
+    try:
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True, capture_output=True, timeout=120)
+        out = subprocess.run(["codesign", "-dv", "--verbose=2", str(app)], capture_output=True, text=True, timeout=60).stderr
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = TEAM_RE.search(out)
+    return m.group(1) if m and m.group(1) != "not set" else None
+
+
 def helper_script(old: Path, new: Path, backup: Path, staging: Path, pid: int, open_cmd: str = "open") -> str:
     """Bash that waits for ``pid`` to exit, swaps ``new`` into ``old`` (rolling back on failure) and opens it.
     If the app is still running after two minutes it changes nothing (the leftovers are cleaned up later)."""
@@ -135,10 +150,12 @@ class Installer:
     """Background download + verify; one at a time. ``state`` is what the UI polls."""
 
     def __init__(self, bundle: Optional[Path], opener: Callable = urllib.request.urlopen,
-                 unzip: Optional[Callable[[Path, Path], None]] = None) -> None:
+                 unzip: Optional[Callable[[Path, Path], None]] = None,
+                 team_of: Callable[[Path], Optional[str]] = signing_team) -> None:
         self.bundle = bundle
         self._opener = opener
         self._unzip = unzip or (lambda z, d: subprocess.run(["ditto", "-x", "-k", str(z), str(d)], check=True, capture_output=True))
+        self._team_of = team_of
         self._lock = threading.Lock()
         self.state: dict = {"status": "idle", "progress": 0.0, "error": None, "version": None}
         self._staging: Optional[Path] = None
@@ -216,6 +233,10 @@ class Installer:
             bid, ver = bundle_version(apps[0])
             if bid != BUNDLE_ID or ver != version:
                 raise UpdateError(f"Unexpected app in the download ({bid} {ver}).")
+            # A signed app only ever replaces itself with an app signed by the same developer.
+            team = self._team_of(self.bundle)
+            if team and self._team_of(apps[0]) != team:
+                raise UpdateError("The download is not signed by the same developer; nothing was changed.")
             zpath.unlink()
             self._new_app = apps[0]
             self._set(status="ready", progress=1.0)
